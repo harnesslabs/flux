@@ -1,14 +1,15 @@
 repository:
   name: flux
-  description: "High-performance FEEC/DEC simulation framework in Zig"
+  description: "Composable, type-safe PDE solver framework in Zig"
   topics:
     - zig
     - mathematics
     - simulation
+    - pde
+    - numerical-methods
+    - scientific-computing
     - finite-element-exterior-calculus
     - discrete-exterior-calculus
-    - electromagnetics
-    - fluid-dynamics
     - computational-mathematics
   has_issues: true
   has_projects: true

@@ -16,6 +16,80 @@ zig build run      # run executable
 
 ---
 
+## Vision Alignment
+
+`project/vision.md` is the north star. Every design decision — discretization
+choice, abstraction boundary, API shape — must be checked against it before
+committing. If a decision deviates from the vision, it is not automatically
+wrong, but it must be:
+
+1. **Logged** in the epoch's `decision_log.md` as a deliberate, temporary move.
+2. **Named**: state what vision principle it trades against and why the tradeoff
+   is acceptable right now.
+3. **Bounded**: note the condition under which it should be revisited.
+
+A decision that conflicts with the vision and is not logged is a bug in the
+project, not just the code.
+
+---
+
+## Work Structure
+
+Development has three levels of granularity. Each level has a definition of done.
+
+### Sub-atomics: Commits
+
+Commits are save states. Commit early, commit often. A commit should represent
+a coherent, describable unit of progress — a passing test, a compiling refactor,
+a new invariant — not a finished feature. They are local history: branchable,
+cherry-pickable, revertable. Use them liberally.
+
+Commit messages follow conventional commits (`feat:`, `fix:`, `test:`,
+`refactor:`, `chore:`, `docs:`). The subject line says what changed; the body,
+when needed, says why.
+
+### Atoms: Issues
+
+An issue is the smallest unit of releasable work. It is done when:
+
+1. **The implementation exists** and compiles cleanly.
+2. **Tests exist** that verify the invariant, not just the happy path. The
+   testing hierarchy, in ascending order of proof strength:
+   - Example-based unit tests (necessary but not sufficient)
+   - Property-based / fuzz tests on random inputs (required for all operators)
+   - `comptime` / type-level guarantees (promoted here whenever possible — a
+     compile error is stronger than any runtime test)
+3. **CI passes**: build, test, fmt, lint all green.
+4. **The PR description is honest**: what was done, what was not done, what the
+   known limitations are.
+
+Open a draft PR when the branch is created, not when the work is done. This
+keeps CI running continuously and creates a living dialogue thread for the work.
+
+### Molecules: Pull Requests
+
+Before moving a draft PR to ready-for-review, ask the downstream questions:
+
+- Does any existing documentation need updating (including `project/vision.md`)?
+- Does `README.md` need updating to stay consistent with the vision?
+- Does `.github/settings.yml` (repo description, topics) need updating?
+- Is there a new capability that warrants a new example demonstrating it
+  end-to-end?
+- Does this change the public API in a way that affects other modules?
+- Does this introduce or resolve a decision that should be logged?
+- Are there follow-on issues that should be opened now, while the context is
+  fresh?
+
+`README.md` and `.github/settings.yml` are public-facing artifacts that must
+stay consistent with `project/vision.md`. When the vision evolves, they drift
+unless explicitly checked.
+
+A PR that introduces new atoms without answering these questions is incomplete,
+even if CI is green. The molecule is not just the code — it is the code plus its
+consequences in the broader system.
+
+---
+
 ## Project Workflow
 
 ### Epochs → Milestones → Issues
@@ -77,6 +151,11 @@ Property-based tests on random meshes and random cochain inputs are the primary 
 
 - Full words, no abbreviations: `exterior_derivative`, not `ext_deriv`; `boundary_operator`, not `bop`
 - Units and qualifiers appended in descending significance: `volume_dual_meters3`, `count_cells_max`
+
+### Diagrams
+
+- Use Mermaid (` ```mermaid ` code blocks) for all graphs, flowcharts, and dependency diagrams
+- Never use ASCII box-drawing art — it breaks across fonts and renderers
 
 ### Comments
 

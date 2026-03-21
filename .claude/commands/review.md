@@ -48,6 +48,17 @@ Work through each lens in order. Be specific — name the file and line number w
 - Were any non-obvious architectural decisions made? If yes, are they in `project/epoch_N/decision_log.md`?
 - Labels correct: `type/`, `phase/`, `domain/`, `priority/` all set?
 
+### 6. Molecule checklist
+Before approving, verify the PR author answered all downstream questions:
+- Does existing documentation need updating (including `project/vision.md`)?
+- Does `README.md` need updating to stay consistent with the vision?
+- Does `.github/settings.yml` (repo description, topics) need updating?
+- Is there a new capability that warrants an end-to-end example?
+- Does this change the public API in a way that affects other modules?
+- Are there follow-on issues that should be opened before this merges?
+
+A PR that adds new capability without answering these is incomplete, even if CI is green.
+
 ## Output format
 
 Write a structured review with a clear verdict at the top:

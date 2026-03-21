@@ -3,3 +3,6 @@
 
 # MacOS
 .DS_Store
+
+# Project: initial spec is a read-only reference, not a tracked artifact
+project/initial.md

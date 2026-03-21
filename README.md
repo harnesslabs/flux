@@ -1,8 +1,10 @@
 # flux
 
-A high-performance Finite Element Exterior Calculus (FEEC) and Discrete Exterior Calculus (DEC) simulation framework in Zig.
+A composable, type-safe PDE solver framework in Zig.
 
-The target is accurate, structure-preserving simulation of linear electromagnetics (Maxwell's equations) and incompressible fluid dynamics (Euler equations) with exact discrete conservation laws — ∇·B = 0 enforced structurally, Kelvin's circulation theorem preserved algebraically.
+The central abstraction is the **operator on a function space**: a map between two spaces of discrete fields defined on a mesh. A PDE solver is a directed acyclic graph of such operators. flux provides the nodes (function spaces), the edges (operators), and the composition rules. The user provides the graph.
+
+See [`project/vision.md`](project/vision.md) for the full design philosophy.
 
 ## Status
 
@@ -22,17 +24,11 @@ zig build run       # run the CLI
 
 ---
 
-## Architecture
+## Design
 
-flux is organized around the five phases of the [FEEC/DEC roadmap](project/initial.md):
+### Abstraction hierarchy
 
-| Phase | Scope |
-|-------|-------|
-| 1 | Topological & geometric foundations — CW complexes, discrete k-forms, exterior derivative d, Hodge star ★ |
-| 2 | Data-oriented architecture & VTK visualization pipeline |
-| 3 | Linear FEEC — Maxwell's equations via the FDTD/leapfrog integrator |
-| 4 | Nonlinear FEEC — incompressible Euler equations in vorticity-velocity form |
-| 5 | HPC scaling — matrix-free operators, multithreading |
+Function spaces and operators compose into solver graphs. Each level is independently swappable — changing a discretization or time integrator touches one node, nothing else.
 
 ### Core invariants
 
@@ -42,9 +38,11 @@ These hold exactly (to machine precision) and are verified by property-based tes
 - **∇·B = 0** — discrete magnetic divergence is identically zero, enforced by construction
 - **Circulation conservation** — total circulation over macroscopic loops is preserved for incompressible Euler flows
 
+An operator is not implemented until a property-based test for its invariant exists and passes.
+
 ### Design principles
 
-- `comptime` k-form type safety: a function accepting a 1-form rejects a 2-form at compile time
+- `comptime` type safety: incompatible operator compositions are compile errors, not runtime failures
 - Struct-of-Arrays layout (`std.MultiArrayList`) for all mesh entities
 - Explicit allocators everywhere — no hidden heap allocations
 - TigerStyle: assert liberally, bound all loops, `const` by default
