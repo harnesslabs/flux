@@ -1,0 +1,5 @@
+# Zig
+.zig-cache
+
+# MacOS
+.DS_Store
