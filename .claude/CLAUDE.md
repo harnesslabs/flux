@@ -135,6 +135,28 @@ All four must pass. Branch protection is configured in `.github/settings.yml`.
 
 ---
 
+## Skills
+
+Six slash commands drive the development workflow. Suggest the appropriate one proactively when the context calls for it — don't wait to be asked.
+
+| Skill | When to suggest |
+|-------|----------------|
+| `/epoch` | User wants to plan upcoming work, discusses what to build next, or asks about direction |
+| `/milestone` | Epoch is planned and user is ready to create GitHub artifacts for a specific milestone |
+| `/tackle` | User wants to start coding, asks "what should I work on", or is ready to close an issue |
+| `/review` | A PR is open, user asks about code quality, or a branch has been pushed |
+| `/status` | User asks about progress, what's done, what's next, or what's blocking |
+| `/decide` | A non-obvious architectural choice is made during any session |
+
+**Proactive suggestions:**
+- After any planning discussion → suggest `/epoch` if no epoch doc exists yet
+- After epoch doc exists and user asks about a milestone → suggest `/milestone`
+- At the start of a coding session → suggest `/tackle` with a preview of the top issue
+- After implementation work completes → suggest `/review` before merging
+- When an architectural choice comes up mid-session → suggest `/decide` immediately, don't let it slide
+
+---
+
 ## Target Directory Layout
 
 ```
