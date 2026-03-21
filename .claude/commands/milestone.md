@@ -33,8 +33,13 @@ Steps:
         --milestone "<milestone name>" \
         --label "type/feature,phase/1,domain/topology,priority/high"
       ```
-   c. Append the milestone to `project/epoch_N/roadmap.md` with its acceptance criterion and milestone URL.
-8. Report: milestone URL, issue count, and acceptance criterion.
+   c. Add each issue to the epoch's GitHub Project board:
+      ```sh
+      gh project item-add <project-number> --owner harnesslabs --url <issue-url>
+      ```
+      Find the project number with: `gh project list --owner harnesslabs`
+   d. Append the milestone to `project/epoch_N/roadmap.md` with its acceptance criterion and milestone URL.
+8. Report: milestone URL, issue count, acceptance criterion, and a link to the GitHub Project board.
 
 Label taxonomy (for reference when assigning):
 - type: bug | feature | invariant | perf | docs | refactor | test | ci
