@@ -1,0 +1,125 @@
+repository:
+  name: flux
+  description: "High-performance FEEC/DEC simulation framework in Zig"
+  topics:
+    - zig
+    - mathematics
+    - simulation
+    - finite-element-exterior-calculus
+    - discrete-exterior-calculus
+    - electromagnetics
+    - fluid-dynamics
+    - computational-mathematics
+  has_issues: true
+  has_projects: true
+  has_wiki: false
+  has_discussions: false
+  default_branch: main
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: false
+  allow_auto_merge: false
+  delete_branch_on_merge: true
+
+labels:
+  # ── Type ─────────────────────────────────────────────────────────────────
+  - name: "type/bug"
+    color: "d73a4a"
+    description: "Something is broken or producing incorrect results"
+  - name: "type/feature"
+    color: "0075ca"
+    description: "New functionality from the roadmap"
+  - name: "type/invariant"
+    color: "7057ff"
+    description: "Mathematical invariant — implementation or verification"
+  - name: "type/perf"
+    color: "e4e669"
+    description: "Performance improvement or benchmarking"
+  - name: "type/docs"
+    color: "fef2c0"
+    description: "Documentation, comments, or references"
+  - name: "type/refactor"
+    color: "cfd3d7"
+    description: "Code restructuring without behavior change"
+  - name: "type/test"
+    color: "0e8a16"
+    description: "Test-only changes"
+  - name: "type/ci"
+    color: "f9d0c4"
+    description: "CI/CD, build system, or tooling"
+
+  # ── Phase ─────────────────────────────────────────────────────────────────
+  - name: "phase/1"
+    color: "dbeafe"
+    description: "Phase 1 — Topological & Geometric Foundations"
+  - name: "phase/2"
+    color: "bfdbfe"
+    description: "Phase 2 — Data-Oriented Architecture & Visualization"
+  - name: "phase/3"
+    color: "93c5fd"
+    description: "Phase 3 — Linear FEEC & Electromagnetics"
+  - name: "phase/4"
+    color: "60a5fa"
+    description: "Phase 4 — Nonlinear FEEC & Incompressible Fluids"
+  - name: "phase/5"
+    color: "3b82f6"
+    description: "Phase 5 — HPC Scaling"
+
+  # ── Domain ────────────────────────────────────────────────────────────────
+  - name: "domain/topology"
+    color: "dcfce7"
+    description: "CW complexes, incidence matrices, mesh structure"
+  - name: "domain/forms"
+    color: "bbf7d0"
+    description: "Discrete k-forms and cochains"
+  - name: "domain/operators"
+    color: "86efac"
+    description: "Discrete exterior derivative, Hodge star, and compositions"
+  - name: "domain/io"
+    color: "4ade80"
+    description: "VTK export and I/O serialization"
+  - name: "domain/em"
+    color: "22c55e"
+    description: "Electromagnetics integrators (Phase 3)"
+  - name: "domain/fluid"
+    color: "16a34a"
+    description: "Fluid dynamics integrators (Phase 4)"
+  - name: "domain/build"
+    color: "a7f3d0"
+    description: "Build system, build.zig, dependencies"
+
+  # ── Priority ──────────────────────────────────────────────────────────────
+  - name: "priority/high"
+    color: "b91c1c"
+    description: "Blocking or critical path for current milestone"
+  - name: "priority/medium"
+    color: "d97706"
+    description: "Important but not blocking"
+  - name: "priority/low"
+    color: "fbbf24"
+    description: "Nice to have, can be deferred"
+
+  # ── Status ────────────────────────────────────────────────────────────────
+  - name: "status/blocked"
+    color: "e11d48"
+    description: "Cannot proceed — waiting on a dependency or decision"
+  - name: "status/needs-decision"
+    color: "f59e0b"
+    description: "Requires an architectural or design decision before work begins"
+  - name: "status/good-first-issue"
+    color: "7c3aed"
+    description: "Well-scoped and self-contained — good entry point"
+
+branches:
+  - name: main
+    protection:
+      required_pull_request_reviews: null
+      required_status_checks:
+        strict: true
+        contexts:
+          - "CI / build"
+          - "CI / test"
+          - "CI / fmt"
+          - "CI / lint"
+      enforce_admins: false
+      restrictions: null

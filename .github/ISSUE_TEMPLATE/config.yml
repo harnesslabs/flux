@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project Roadmap
+    url: https://github.com/harnesslabs/flux/projects
+    about: See the current epoch roadmap and milestone status.

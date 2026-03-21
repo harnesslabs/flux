@@ -92,6 +92,49 @@ Property-based tests on random meshes and random cochain inputs are the primary 
 
 ---
 
+## GitHub Labels
+
+Labels are defined in `.github/settings.yml` (managed by Probot) and auto-applied to PRs via `.github/labeler.yml` based on changed file paths.
+
+| Prefix | Purpose | Values |
+|--------|---------|--------|
+| `type/` | Kind of work | `bug`, `feature`, `invariant`, `perf`, `docs`, `refactor`, `test`, `ci` |
+| `phase/` | Roadmap phase | `1` through `5` |
+| `domain/` | Codebase area | `topology`, `forms`, `operators`, `io`, `em`, `fluid`, `build` |
+| `priority/` | Urgency | `high`, `medium`, `low` |
+| `status/` | Workflow state | `blocked`, `needs-decision`, `good-first-issue` |
+
+When creating issues, always set `type/`, `phase/`, `domain/`, and `priority/`. Use labels for filtering:
+```sh
+gh issue list --label "phase/1,type/feature"   # current phase features
+gh issue list --label "type/invariant"          # all math property work
+gh issue list --label "status/blocked"          # what's stuck
+```
+
+## Issue Templates
+
+Three templates in `.github/ISSUE_TEMPLATE/`:
+- **implementation** — new functionality; requires a concrete acceptance criterion
+- **bug** — broken/incorrect behavior; asks for the violated invariant
+- **invariant** — mathematical property to implement or verify; requires a test plan
+
+Blank issues are disabled. Every issue must use a template.
+
+## CI
+
+Four jobs run in parallel on every push and PR (`.github/workflows/ci.yml`):
+
+| Job | Command | What it catches |
+|-----|---------|-----------------|
+| `build` | `zig build` | Type errors, comptime failures |
+| `test` | `zig build test` | All `test` blocks |
+| `fmt` | `zig fmt --check src/ build.zig` | Formatting |
+| `lint` | `zig ast-check` on all `.zig` files | Parse/AST errors without full codegen |
+
+All four must pass. Branch protection is configured in `.github/settings.yml`.
+
+---
+
 ## Target Directory Layout
 
 ```

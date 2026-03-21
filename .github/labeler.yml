@@ -1,0 +1,43 @@
+# Auto-label PRs based on changed file paths.
+# Labels are defined in .github/settings.yml and managed by Probot.
+
+"domain/topology":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/topology/**"
+
+"domain/forms":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/forms/**"
+
+"domain/operators":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/operators/**"
+
+"domain/io":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/io/**"
+
+"domain/em":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/em/**"
+
+"domain/fluid":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "src/fluid/**"
+
+"domain/build":
+  - changed-files:
+    - any-glob-to-any-file:
+      - "build.zig"
+      - "build.zig.zon"
+
+"type/ci":
+  - changed-files:
+    - any-glob-to-any-file:
+      - ".github/**"

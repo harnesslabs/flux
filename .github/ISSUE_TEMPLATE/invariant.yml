@@ -1,0 +1,72 @@
+name: Mathematical Invariant
+description: Track implementation or verification of a discrete mathematical property.
+labels: ["type/invariant"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for tracking a discrete mathematical property that must hold in the framework —
+        either one that needs to be implemented (no test exists yet) or one that is currently
+        failing and needs to be restored.
+
+  - type: textarea
+    id: statement
+    attributes:
+      label: Invariant Statement
+      description: |
+        State the property precisely. Use Unicode math symbols where helpful (∂, ∇, ∈, ★, ∧, Ω, ⟨⟩).
+        Example: "The discrete exterior derivative satisfies dd = 0 exactly: for any k-cochain c,
+        d_{k+1}(d_k c) = 0 to machine precision."
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why This Matters
+      description: What physical or geometric principle does this express? What breaks if it fails?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      options:
+        - "Phase 1 — Topology & Geometry"
+        - "Phase 2 — Data-Oriented Architecture"
+        - "Phase 3 — Electromagnetics"
+        - "Phase 4 — Fluid Dynamics"
+        - "Phase 5 — HPC Scaling"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: status
+    attributes:
+      label: Current Status
+      options:
+        - "Not yet implemented — no test exists"
+        - "Test exists but failing"
+        - "Passing — tracking for regression"
+    validations:
+      required: true
+
+  - type: textarea
+    id: test_plan
+    attributes:
+      label: Test Plan
+      description: |
+        How should this invariant be verified?
+        Example: "Generate random k-cochains on a 2D triangular mesh with N=100 vertices,
+        apply d twice, assert the result is exactly zero."
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Textbook citations (author, title, section/equation number).
+    validations:
+      required: false

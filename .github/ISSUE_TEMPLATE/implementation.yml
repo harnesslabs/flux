@@ -1,0 +1,70 @@
+name: Implementation
+description: Implement a planned feature or structure from the roadmap.
+labels: ["type/feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for implementing planned capabilities from `project/initial.md` or the active epoch roadmap.
+        Each issue should be completable in a focused session (2–6 hours).
+
+  - type: dropdown
+    id: phase
+    attributes:
+      label: Phase
+      description: Which roadmap phase does this belong to?
+      options:
+        - "Phase 1 — Topology & Geometry"
+        - "Phase 2 — Data-Oriented Architecture"
+        - "Phase 3 — Electromagnetics"
+        - "Phase 4 — Fluid Dynamics"
+        - "Phase 5 — HPC Scaling"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      description: Which part of the codebase is affected?
+      multiple: true
+      options:
+        - topology
+        - forms
+        - operators
+        - io
+        - em
+        - fluid
+        - build
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What needs to be implemented? Be precise — name the mathematical object, the data structure, or the algorithm.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance Criterion
+      description: |
+        The mathematical invariant or behavioral property that must hold when this is done.
+        This should be directly testable. Examples:
+        - "dd = 0 for all k on a 2D triangular mesh with random cochain inputs"
+        - "The CSR incidence matrix for 2-simplices reproduces boundary orientations from Munkres §2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: |
+        Textbook citations (author, title, edition, equation/section), related issues, or prior decisions.
+        Do not include unverified URLs — cite by author/title if uncertain.
+    validations:
+      required: false

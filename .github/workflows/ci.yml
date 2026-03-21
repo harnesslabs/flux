@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Build
+        run: zig build
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Test
+        run: zig build test
+
+  fmt:
+    name: fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Check formatting
+        run: zig fmt --check src/ build.zig
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: AST check
+        # zig ast-check gives fast syntax/parse feedback without full compilation.
+        # zig build already provides type-level correctness; this catches malformed
+        # source early in the pipeline without waiting for codegen.
+        run: |
+          find src -name '*.zig' -print0 | xargs -0 zig ast-check
+          zig ast-check build.zig

@@ -1,0 +1,59 @@
+name: Bug
+description: Something is broken or producing incorrect results.
+labels: ["type/bug"]
+body:
+  - type: dropdown
+    id: domain
+    attributes:
+      label: Domain
+      multiple: true
+      options:
+        - topology
+        - forms
+        - operators
+        - io
+        - em
+        - fluid
+        - build
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is wrong? Be specific — include the function, type, or test that demonstrates the failure.
+    validations:
+      required: true
+
+  - type: textarea
+    id: invariant
+    attributes:
+      label: Violated Invariant
+      description: |
+        If this is a mathematical correctness bug, state which invariant is violated.
+        Example: "dd ≠ 0 for a specific cochain input on a mesh with a boundary"
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Minimal test case, input mesh, or `zig build test` output.
+    validations:
+      required: true
