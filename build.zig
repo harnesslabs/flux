@@ -142,6 +142,25 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
+    // -- docs step --
+    // Generates HTML documentation from doc comments: `zig build docs`
+    // Output goes to zig-out/docs/ as a static HTML site.
+    const lib = b.addLibrary(.{
+        .name = "flux",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate API documentation");
+    docs_step.dependOn(&install_docs.step);
+
     // -- fmt step --
     // Runs zig fmt --check on all source files. Fails if anything is unformatted.
     const fmt_step = b.step("fmt", "Check source formatting");

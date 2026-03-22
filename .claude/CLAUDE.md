@@ -23,6 +23,7 @@ zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run executable
+zig build docs                  # generate API docs to zig-out/docs/
 ```
 
 ---
