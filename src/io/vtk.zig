@@ -10,14 +10,6 @@ const topology = @import("../topology/mesh.zig");
 const vtk_triangle: u8 = 5;
 
 /// Named field to attach to VTK output as PointData or CellData.
-pub fn DataArray(comptime name_len: usize) type {
-    return struct {
-        name: *const [name_len:0]u8,
-        values: []const f64,
-    };
-}
-
-/// Type-erased data array for runtime-length names.
 pub const DataArraySlice = struct {
     name: []const u8,
     values: []const f64,
@@ -396,12 +388,18 @@ test "vtu all cell types are triangle (type 5)" {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// Test helpers
+// Parsing
 // ───────────────────────────────────────────────────────────────────────────
 
 /// Parse a named `<DataArray>` from VTK XML and return its f64 values.
+///
+/// Searches the XML for a `<DataArray ... Name="name" ...>` element and
+/// parses its whitespace-separated body as Float64 values. Useful for
+/// reading back .vtu files for verification or as a building block for
+/// a full VTK reader.
+///
 /// Caller owns the returned slice.
-fn parseDataArray(allocator: std.mem.Allocator, xml: []const u8, name: []const u8) ![]f64 {
+pub fn parseDataArray(allocator: std.mem.Allocator, xml: []const u8, name: []const u8) ![]f64 {
     // Find the DataArray with this name
     var search_pos: usize = 0;
     while (std.mem.indexOfPos(u8, xml, search_pos, "<DataArray")) |tag_start| {
