@@ -83,6 +83,30 @@ A discrete operator is not implemented until a property-based test exists that
 verifies its mathematical invariant on random inputs. `dd = 0` is not a feature
 — it is a contract, and the test is the contract's enforcement mechanism.
 
+**Geometric generality as a design horizon.**
+The initial implementation assumes a fixed mesh with a flat (Euclidean) metric.
+This is a specialization, not a limitation. The architecture must remain
+compatible with:
+
+- **General Riemannian metrics**, where the Hodge star `★_g` depends on a metric
+  tensor `g` rather than Euclidean volume ratios
+- **Semi-Riemannian (Lorentzian) metrics**, where inner products are indefinite
+  and `★★` picks up signature-dependent signs
+- **Intrinsic PDEs** (moving meshes, geometric flows, elasticity), where the mesh
+  geometry is a dynamical variable and metric-dependent operators must be
+  recomputed as the configuration evolves
+
+The exterior derivative `d` is purely topological and unaffected by these
+generalizations — this is a core strength of the FEEC/DEC approach. Metric
+dependence is isolated in the Hodge star and inner product operators. The design
+strategy is to make the metric an explicit parameter at the type level (e.g.,
+`Metric(.flat)` as the current default) so that generalization is an extension,
+not a refactor.
+
+This is a horizon, not a roadmap item. No code should be written for general
+metrics until a concrete problem demands it. But no interface should be designed
+in a way that assumes flatness implicitly.
+
 ---
 
 ## The abstraction hierarchy
