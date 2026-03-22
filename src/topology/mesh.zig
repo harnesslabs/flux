@@ -1,3 +1,9 @@
+//! Simplicial mesh topology and geometry.
+//!
+//! Provides `Mesh(n)`, a 2D triangulation embedded in ℝⁿ with SoA entity
+//! storage, oriented boundary operators ∂₁ and ∂₂ in CSR format, and
+//! circumcentric dual geometry (dual edge lengths, dual vertex areas).
+
 const std = @import("std");
 const testing = std.testing;
 const sparse = @import("../math/sparse.zig");
@@ -44,6 +50,7 @@ pub fn Mesh(comptime n: usize) type {
             dual_length: f64,
         };
 
+        /// A triangular face with CCW-oriented vertex indices and geometric data.
         pub const Face = struct {
             /// Vertex indices `[v0, v1, v2]` in counter-clockwise orientation.
             vertices: [3]u32,
@@ -66,6 +73,7 @@ pub fn Mesh(comptime n: usize) type {
 
         // -- Lifetime --
 
+        /// Free all entity storage and boundary matrices.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             self.vertices.deinit(allocator);
             self.edges.deinit(allocator);
@@ -76,14 +84,17 @@ pub fn Mesh(comptime n: usize) type {
 
         // -- Accessors --
 
+        /// Number of vertices in the mesh.
         pub fn num_vertices(self: Self) u32 {
             return @intCast(self.vertices.len);
         }
 
+        /// Number of edges in the mesh.
         pub fn num_edges(self: Self) u32 {
             return @intCast(self.edges.len);
         }
 
+        /// Number of faces in the mesh.
         pub fn num_faces(self: Self) u32 {
             return @intCast(self.faces.len);
         }

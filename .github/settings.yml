@@ -121,6 +121,7 @@ branches:
           - "CI / build"
           - "CI / test"
           - "CI / fmt"
+          - "CI / docs"
           - "CI / lint"
       enforce_admins: false
       restrictions: null

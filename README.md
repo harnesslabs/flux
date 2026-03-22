@@ -20,6 +20,7 @@ Requires Zig 0.15.2+.
 zig build           # compile
 zig build test      # run all tests
 zig build run       # run the CLI
+zig build docs      # generate API docs to zig-out/docs/
 ```
 
 ---
@@ -43,6 +44,7 @@ An operator is not implemented until a property-based test for its invariant exi
 ### Design principles
 
 - `comptime` type safety: incompatible operator compositions are compile errors, not runtime failures
+- Usability is a correctness property: the type system makes correct code easy, not just incorrect code impossible
 - Struct-of-Arrays layout (`std.MultiArrayList`) for all mesh entities
 - Explicit allocators everywhere — no hidden heap allocations
 - TigerStyle: assert liberally, bound all loops, `const` by default
@@ -56,6 +58,9 @@ Development is organized into **epochs** (∼1 month), **milestones** (∼1 week
 ### Workflow
 
 ```
+/ideate     Pressure-test raw ideas against the vision and architecture;
+            produces ideation records and horizon entries
+
 /epoch      Plan a new epoch — back-and-forth conversation producing
             project/epoch_N/roadmap.md and a GitHub Project
 
@@ -66,7 +71,7 @@ Development is organized into **epochs** (∼1 month), **milestones** (∼1 week
             branch → test-first implementation → PR → CI → squash-merge
 
 /review     Math-aware PR review: checks invariants, comptime type safety,
-            SoA layout, TigerStyle, and process before merge
+            SoA layout, TigerStyle, horizons, and process before merge
 
 /status     Live snapshot of current milestone progress — open/closed issues,
             acceptance criterion status, and recommended next action
@@ -91,16 +96,19 @@ Issues are organized by a five-prefix taxonomy applied automatically on PRs and 
 
 ### CI
 
-Four jobs run in parallel on every PR:
+Five jobs run in parallel on every PR:
 
 | Job | Command |
 |-----|---------|
 | build | `zig build` |
 | test | `zig build test` |
 | fmt | `zig fmt --check src/ build.zig` |
+| docs | `zig build docs` |
 | lint | `zig ast-check` on all source files |
 
-All four must pass before merge. Branch protection is enforced on `main`.
+All five must pass before merge. Branch protection is enforced on `main`.
+
+API documentation is deployed to GitHub Pages on every push to `main`.
 
 ---
 
