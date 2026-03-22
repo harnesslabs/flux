@@ -3,6 +3,7 @@ Find and work the highest-priority open issue to completion — one issue, one b
 ## Find the issue
 
 1. Read `project/epoch_*/roadmap.md` for the current epoch to understand milestone priorities and acceptance criteria.
+2. Read `project/horizons.md` — before writing any interface, check that it does not preclude a known future direction.
 2. Get live state:
    ```sh
    gh milestone list --state open

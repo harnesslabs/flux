@@ -5,6 +5,7 @@ Plan a new epoch for the flux project. This is a back-and-forth planning convers
 Before saying anything else:
 1. Read all existing `project/epoch_*/roadmap.md` files to understand where we are and what has been done.
 2. Read `project/initial.md` as the reference architecture.
+3. Read `project/horizons.md` to know which future directions must not be precluded by this epoch's work.
 3. Run `gh api "repos/harnesslabs/flux/milestones?state=all"` and `gh issue list --state open --repo harnesslabs/flux` to see live GitHub state.
 4. Present a brief, direct summary of current state (what epoch we're on, what's done, what's open).
 5. Ask the user: what should this epoch accomplish? What is the north star?

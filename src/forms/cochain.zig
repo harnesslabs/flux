@@ -1,3 +1,9 @@
+//! Discrete k-forms (cochains) on simplicial meshes.
+//!
+//! A k-cochain assigns a real value to every k-cell of a mesh. The degree `k`
+//! and mesh type are comptime parameters, so the exterior derivative and other
+//! operators can enforce dimensional compatibility as compile errors.
+
 const std = @import("std");
 const testing = std.testing;
 const topology = @import("../topology/mesh.zig");
@@ -52,6 +58,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int) type {
             return .{ .values = values, .mesh = mesh };
         }
 
+        /// Free the coefficient storage.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.values);
         }

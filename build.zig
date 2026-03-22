@@ -142,6 +142,41 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
+    // -- docs step --
+    // Generates HTML documentation from doc comments: `zig build docs`
+    // Output goes to zig-out/docs/ as a static HTML site.
+    const lib = b.addLibrary(.{
+        .name = "flux",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/root.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const install_docs = b.addInstallDirectory(.{
+        .source_dir = lib.getEmittedDocs(),
+        .install_dir = .prefix,
+        .install_subdir = "docs",
+    });
+    const docs_step = b.step("docs", "Generate API documentation");
+    docs_step.dependOn(&install_docs.step);
+
+    // -- serve-docs step --
+    // Builds docs, then launches a local HTTP server and opens the browser.
+    // Zig autodoc is Wasm-based and requires HTTP (browsers block Wasm from file://).
+    const serve_docs_exe = b.addExecutable(.{
+        .name = "serve-docs",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/serve-docs.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    const serve_docs_run = b.addRunArtifact(serve_docs_exe);
+    serve_docs_run.step.dependOn(&install_docs.step);
+    const serve_docs_step = b.step("serve-docs", "Build docs and serve locally at http://127.0.0.1:8080");
+    serve_docs_step.dependOn(&serve_docs_run.step);
+
     // -- fmt step --
     // Runs zig fmt --check on all source files. Fails if anything is unformatted.
     const fmt_step = b.step("fmt", "Check source formatting");

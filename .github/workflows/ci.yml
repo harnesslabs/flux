@@ -40,6 +40,17 @@ jobs:
       - name: Check formatting
         run: zig build fmt --summary all
 
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Generate docs
+        run: zig build docs
+
   lint:
     name: lint
     runs-on: ubuntu-latest

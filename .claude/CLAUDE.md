@@ -23,6 +23,8 @@ zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run executable
+zig build docs                  # generate API docs to zig-out/docs/
+zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 ```
 
 ---
@@ -41,6 +43,11 @@ wrong, but it must be:
 
 A decision that conflicts with the vision and is not logged is a bug in the
 project, not just the code.
+
+`project/horizons.md` tracks validated but unscheduled architectural ideas.
+Before finalizing any interface, check horizons to ensure the design does not
+preclude a known future direction. When ideation produces a horizon-level
+insight, add it there — not in the epoch roadmap.
 
 ---
 
@@ -125,6 +132,8 @@ This is a first-class artifact. Before refactoring something that seems wrong, c
 ```
 project/
   initial.md          # original architectural specification (read-only reference)
+  vision.md           # north star — design commitments and philosophy
+  horizons.md         # validated but unscheduled architectural ideas
   epoch_1/
     roadmap.md        # milestones, goals, acceptance criteria
     decision_log.md   # architectural decisions + rationale
@@ -231,6 +240,7 @@ Six slash commands drive the development workflow. Suggest the appropriate one p
 
 | Skill | When to suggest |
 |-------|----------------|
+| `/ideate` | User shares raw ideas, brainstorms features, or thinks aloud about project direction |
 | `/epoch` | User wants to plan upcoming work, discusses what to build next, or asks about direction |
 | `/milestone` | Epoch is planned and user is ready to create GitHub artifacts for a specific milestone |
 | `/tackle` | User wants to start coding, asks "what should I work on", or is ready to close an issue |
@@ -239,6 +249,7 @@ Six slash commands drive the development workflow. Suggest the appropriate one p
 | `/decide` | A non-obvious architectural choice is made during any session |
 
 **Proactive suggestions:**
+- When the user shares loose ideas or "what if" thoughts → suggest `/ideate` before they calcify into plans
 - After any planning discussion → suggest `/epoch` if no epoch doc exists yet
 - After epoch doc exists and user asks about a milestone → suggest `/milestone`
 - At the start of a coding session → suggest `/tackle` with a preview of the top issue

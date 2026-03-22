@@ -50,6 +50,7 @@ Work through each lens in order. Be specific — name the file and line number w
 
 ### 6. Molecule checklist
 Before approving, verify the PR author answered all downstream questions:
+- Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
 - Does existing documentation need updating (including `project/vision.md`)?
 - Does `README.md` need updating to stay consistent with the vision?
 - Does `.github/settings.yml` (repo description, topics) need updating?

@@ -1,3 +1,9 @@
+//! Sparse linear algebra primitives.
+//!
+//! Provides `CsrMatrix(T)`, a compressed sparse row matrix parameterized on
+//! value type. Used for boundary/incidence operators (`CsrMatrix(i8)` with
+//! entries in {−1, 0, +1}) and real-valued operators (`CsrMatrix(f64)`).
+
 const std = @import("std");
 
 /// Compressed sparse row matrix parameterized on value type.
@@ -19,6 +25,8 @@ pub fn CsrMatrix(comptime T: type) type {
         n_rows: u32,
         n_cols: u32,
 
+        /// Allocate a CSR matrix with the given dimensions and nonzero capacity.
+        /// Caller must populate `row_ptr`, `col_idx`, and `values` after init.
         pub fn init(allocator: std.mem.Allocator, n_rows: u32, n_cols: u32, nonzero_count: u32) !Self {
             return .{
                 .row_ptr = try allocator.alloc(u32, @as(usize, n_rows) + 1),
@@ -29,6 +37,7 @@ pub fn CsrMatrix(comptime T: type) type {
             };
         }
 
+        /// Free all allocated storage.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.row_ptr);
             allocator.free(self.col_idx);

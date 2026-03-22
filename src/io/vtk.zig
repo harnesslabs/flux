@@ -1,10 +1,15 @@
+//! VTK Unstructured Grid (`.vtu`) serializer.
+//!
+//! Writes mesh geometry and attached field data (0-forms as PointData, higher
+//! forms as CellData) to the VTK XML format for inspection in ParaView. All
+//! numeric data is ASCII — portable and human-readable, not optimized for size.
+//!
+//! Reference: VTK File Formats specification, §19.3 "XML File Formats"
+//! (Kitware, The VTK User's Guide, 11th Edition).
+
 const std = @import("std");
 const testing = std.testing;
 const topology = @import("../topology/mesh.zig");
-
-// ───────────────────────────────────────────────────────────────────────────
-// VTK Unstructured Grid (.vtu) Serializer
-// ───────────────────────────────────────────────────────────────────────────
 
 /// VTK cell type for triangles (linear triangle, type 5 in the VTK spec).
 const vtk_triangle: u8 = 5;
