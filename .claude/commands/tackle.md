@@ -33,26 +33,18 @@ On confirmation:
 
 3. Read all relevant source files before writing any code. Understand the existing shape before changing it.
 
-4. Implement — test first:
-   - Write the property test that verifies the acceptance criterion before the implementation
-   - Test name must state the invariant: `test "dd = 0 for random 1-forms on triangular mesh"`
-   - Fill in the implementation until the test passes
+4. Implement incrementally — test first, commit often:
+   - Write the property test that verifies the acceptance criterion **before** the implementation. Commit: `test(domain): add failing test for <invariant>`.
+   - Fill in the implementation in small steps. Each step must compile and pass all existing tests before moving on.
+   - **Commit after every coherent unit of progress** — a new type definition, a working constructor, a helper function with its test. A commit is a save state, not a finished feature. Target roughly 50–150 lines per commit; if you are approaching 200+ lines uncommitted, stop and commit what you have.
+   - `zig build test && zig fmt src/ build.zig` between every commit. No exceptions.
+   - When the acceptance criterion test passes, that is the final commit for the implementation.
 
-5. Validate locally:
-   ```sh
-   zig build test   # all tests must pass
-   zig fmt src/ build.zig
-   zig build        # clean compile
-   ```
-
-6. Commit (conventional message, imperative mood):
-   ```sh
-   git commit -m "feat(topology): implement CSR incidence matrix for 2-simplices"
-   ```
+   The rhythm is: **write → test → commit → repeat**. Not: plan everything → write everything → commit once.
 
 ## Open the PR
 
-7. Push and open a PR using the project template. Fill every section:
+5. Push and open a PR using the project template. Fill every section:
    ```sh
    git push -u origin <branch>
    gh pr create \
@@ -62,21 +54,22 @@ On confirmation:
    ```
    The PR body **must** contain `Closes #<number>` so the issue auto-closes on merge.
 
-8. Report the PR URL. Wait — do not merge until CI passes.
+6. Report the PR URL. Wait — do not merge until CI passes.
 
 ## Merge
 
-9. Check CI: `gh pr checks <number>`
-10. When all checks pass:
+7. Check CI: `gh pr checks <number>`
+8. When all checks pass:
     ```sh
     gh pr merge <number> --squash --delete-branch
     ```
-11. Confirm the issue was auto-closed: `gh issue view <number>`
-12. Report: what was merged, what the next recommended issue is.
+9. Confirm the issue was auto-closed: `gh issue view <number>`
+10. Report: what was merged, what the next recommended issue is.
 
 ## Constraints
 
 - Never skip `zig build test` before pushing.
 - Never merge with failing CI.
 - Never put more than one issue's work in a single PR.
+- Never write more than ~200 lines without compiling, testing, and committing. Commits are cheap; debugging a 500-line uncommitted diff is not.
 - If during implementation a non-obvious architectural choice is made, run `/decide` before committing.
