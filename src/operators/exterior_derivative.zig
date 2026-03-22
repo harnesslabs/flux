@@ -15,24 +15,25 @@ const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 
-/// Apply the exterior derivative dₖ to a k-cochain, producing a (k+1)-cochain.
+/// The result type of applying d to a given cochain type.
+fn Result(comptime InputType: type) type {
+    return cochain.Cochain(InputType.MeshT, InputType.degree + 1);
+}
+
+/// Apply the exterior derivative dₖ to a k-cochain, returning a (k+1)-cochain.
+///
+/// The degree and mesh type are extracted from the input cochain at comptime.
+/// Passing a cochain of the wrong degree to a downstream operator is a compile
+/// error because the returned type encodes the degree.
 ///
 /// For a 2D mesh:
 ///   - d₀: 0-form → 1-form (discrete gradient). For each edge e,
 ///     (d₀ω)(e) = ω(head(e)) − ω(tail(e)).
 ///   - d₁: 1-form → 2-form (discrete curl). For each face f,
 ///     (d₁ω)(f) = Σ over boundary edges of f, with orientation signs.
-///
-/// The output cochain must be pre-allocated with the correct number of
-/// (k+1)-cells. The caller owns both input and output memory.
-pub fn exterior_derivative(
-    comptime MeshType: type,
-    comptime k: comptime_int,
-    input: cochain.Cochain(MeshType, k),
-    output: *cochain.Cochain(MeshType, k + 1),
-) void {
-    // Degree bounds are enforced at comptime by Cochain — if k+1 > dimension,
-    // the Cochain(MeshType, k+1) parameter itself will not compile.
+pub fn exterior_derivative(allocator: std.mem.Allocator, input: anytype) !Result(@TypeOf(input)) {
+    const InputType = @TypeOf(input);
+    const k = InputType.degree;
 
     const boundary = switch (k) {
         0 => input.mesh.boundary_1,
@@ -43,8 +44,10 @@ pub fn exterior_derivative(
         )),
     };
 
-    std.debug.assert(output.values.len == boundary.n_rows);
     std.debug.assert(input.values.len == boundary.n_cols);
+
+    var output = try Result(InputType).init(allocator, input.mesh);
+    errdefer output.deinit(allocator);
 
     // dₖ(ω) = boundary_{k+1} · ω  (sparse matrix–vector product)
     for (0..boundary.n_rows) |row_idx| {
@@ -55,19 +58,8 @@ pub fn exterior_derivative(
         }
         output.values[row_idx] = sum;
     }
-}
 
-/// Comptime check: returns true iff CochainType is a valid input for dₖ.
-/// Use this to gate operator composition at compile time.
-pub fn is_valid_input(comptime MeshType: type, comptime k: comptime_int, comptime InputType: type) bool {
-    return InputType == cochain.Cochain(MeshType, k);
-}
-
-/// Comptime check: returns true iff applying d to InputType produces OutputType.
-pub fn d_maps(comptime MeshType: type, comptime InputType: type, comptime OutputType: type) bool {
-    return InputType.MeshT == MeshType and
-        OutputType.MeshT == MeshType and
-        OutputType.degree == InputType.degree + 1;
+    return output;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -89,10 +81,8 @@ test "d₀ of constant function is zero" {
     defer omega.deinit(allocator);
     for (omega.values) |*v| v.* = 7.0; // constant function
 
-    var result = try C1.init(allocator, &mesh);
+    var result = try exterior_derivative(allocator, omega);
     defer result.deinit(allocator);
-
-    exterior_derivative(Mesh2D, 0, omega, &result);
 
     for (result.values) |v| {
         try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-15);
@@ -117,10 +107,8 @@ test "d₀ on linear function f(x,y) = x" {
         val.* = c[0];
     }
 
-    var result = try C1.init(allocator, &mesh);
+    var result = try exterior_derivative(allocator, omega);
     defer result.deinit(allocator);
-
-    exterior_derivative(Mesh2D, 0, omega, &result);
 
     // Verify: (d₀ω)(e) = x(head) − x(tail) for each edge
     const edge_verts = mesh.edges.slice().items(.vertices);
@@ -145,13 +133,11 @@ test "d₁ of d₀ is zero on a specific function" {
         val.* = c[0] * c[0] + 3.0 * c[0] * c[1] - c[1];
     }
 
-    var d_omega = try C1.init(allocator, &mesh);
+    var d_omega = try exterior_derivative(allocator, omega);
     defer d_omega.deinit(allocator);
-    exterior_derivative(Mesh2D, 0, omega, &d_omega);
 
-    var dd_omega = try C2.init(allocator, &mesh);
+    var dd_omega = try exterior_derivative(allocator, d_omega);
     defer dd_omega.deinit(allocator);
-    exterior_derivative(Mesh2D, 1, d_omega, &dd_omega);
 
     for (dd_omega.values) |v| {
         try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-13);
@@ -166,24 +152,22 @@ test "dd = 0 for random 0-forms on triangular mesh (1000 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var omega = try C0.init(allocator, &mesh);
-    defer omega.deinit(allocator);
-    var d_omega = try C1.init(allocator, &mesh);
-    defer d_omega.deinit(allocator);
-    var dd_omega = try C2.init(allocator, &mesh);
-    defer dd_omega.deinit(allocator);
-
-    // Deterministic PRNG seeded for reproducibility.
     var rng = std.Random.DefaultPrng.init(0xDEC_DD_00);
 
     for (0..1000) |_| {
+        var omega = try C0.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+
         // Fill ω with random values in [−100, 100].
         for (omega.values) |*v| {
             v.* = rng.random().float(f64) * 200.0 - 100.0;
         }
 
-        exterior_derivative(Mesh2D, 0, omega, &d_omega);
-        exterior_derivative(Mesh2D, 1, d_omega, &dd_omega);
+        var d_omega = try exterior_derivative(allocator, omega);
+        defer d_omega.deinit(allocator);
+
+        var dd_omega = try exterior_derivative(allocator, d_omega);
+        defer dd_omega.deinit(allocator);
 
         for (dd_omega.values) |v| {
             try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-11);
@@ -202,24 +186,23 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 6, 5, 3.0, 2.0);
     defer mesh.deinit(allocator);
 
-    var phi = try C0.init(allocator, &mesh);
-    defer phi.deinit(allocator);
-    var exact_1form = try C1.init(allocator, &mesh);
-    defer exact_1form.deinit(allocator);
-    var result = try C2.init(allocator, &mesh);
-    defer result.deinit(allocator);
-
     var rng = std.Random.DefaultPrng.init(0xDEC_DD_01);
 
     for (0..1000) |_| {
+        var phi = try C0.init(allocator, &mesh);
+        defer phi.deinit(allocator);
+
         // Generate a random 0-form, apply d₀ to get an exact 1-form,
         // then verify d₁ of that exact 1-form is zero.
         for (phi.values) |*v| {
             v.* = rng.random().float(f64) * 200.0 - 100.0;
         }
 
-        exterior_derivative(Mesh2D, 0, phi, &exact_1form);
-        exterior_derivative(Mesh2D, 1, exact_1form, &result);
+        var exact_1form = try exterior_derivative(allocator, phi);
+        defer exact_1form.deinit(allocator);
+
+        var result = try exterior_derivative(allocator, exact_1form);
+        defer result.deinit(allocator);
 
         for (result.values) |v| {
             try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-11);
@@ -231,12 +214,24 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
 // Compile-time degree enforcement tests
 // ═══════════════════════════════════════════════════════════════════════════
 
+test "compile-time: d returns the correct output type" {
+    // The return type of exterior_derivative encodes the degree — passing
+    // its output to a function expecting a different degree is a compile error.
+    comptime {
+        // d₀: Ω⁰ → Ω¹
+        try testing.expect(Result(C0) == C1);
+        // d₁: Ω¹ → Ω²
+        try testing.expect(Result(C1) == C2);
+
+        // The output type is never the same as the input type
+        try testing.expect(Result(C0) != C0);
+        try testing.expect(Result(C1) != C1);
+    }
+}
+
 test "compile-time: Cochain types of different degree are distinct" {
-    // The type system enforces that a 0-form cannot be used where a 1-form
-    // is expected. This is the foundation of compile-time degree checking:
-    // exterior_derivative(Mesh2D, 0, ...) accepts Cochain(Mesh2D, 0) and
-    // rejects Cochain(Mesh2D, 1) or Cochain(Mesh2D, 2) at compile time
-    // because they are structurally different types.
+    // exterior_derivative returns a typed cochain — passing a 0-form where
+    // a 1-form is expected is a type mismatch at compile time.
     comptime {
         try testing.expect(C0 != C1);
         try testing.expect(C1 != C2);
@@ -244,49 +239,12 @@ test "compile-time: Cochain types of different degree are distinct" {
     }
 }
 
-test "compile-time: d₀ input validation" {
-    comptime {
-        // d₀ accepts 0-forms
-        try testing.expect(is_valid_input(Mesh2D, 0, C0));
-        // d₀ rejects 1-forms and 2-forms
-        try testing.expect(!is_valid_input(Mesh2D, 0, C1));
-        try testing.expect(!is_valid_input(Mesh2D, 0, C2));
-    }
-}
-
-test "compile-time: d₁ input validation" {
-    comptime {
-        // d₁ accepts 1-forms
-        try testing.expect(is_valid_input(Mesh2D, 1, C1));
-        // d₁ rejects 0-forms and 2-forms
-        try testing.expect(!is_valid_input(Mesh2D, 1, C0));
-        try testing.expect(!is_valid_input(Mesh2D, 1, C2));
-    }
-}
-
-test "compile-time: d maps k-forms to (k+1)-forms" {
-    comptime {
-        // d₀: Ω⁰ → Ω¹
-        try testing.expect(d_maps(Mesh2D, C0, C1));
-        // d₁: Ω¹ → Ω²
-        try testing.expect(d_maps(Mesh2D, C1, C2));
-
-        // Reject wrong output degrees
-        try testing.expect(!d_maps(Mesh2D, C0, C0)); // d₀ cannot produce a 0-form
-        try testing.expect(!d_maps(Mesh2D, C0, C2)); // d₀ cannot produce a 2-form
-        try testing.expect(!d_maps(Mesh2D, C1, C0)); // d₁ cannot produce a 0-form
-        try testing.expect(!d_maps(Mesh2D, C1, C1)); // d₁ cannot produce a 1-form
-    }
-}
-
-test "compile-time: degree accessible as comptime constant" {
-    // Operators can branch on degree at comptime without runtime overhead.
+test "compile-time: degree and mesh type recoverable from cochain" {
     comptime {
         try testing.expectEqual(0, C0.degree);
         try testing.expectEqual(1, C1.degree);
         try testing.expectEqual(2, C2.degree);
 
-        // Mesh type is recoverable from the cochain type
         try testing.expect(C0.MeshT == Mesh2D);
         try testing.expect(C1.MeshT == Mesh2D);
         try testing.expect(C2.MeshT == Mesh2D);
