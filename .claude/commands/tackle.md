@@ -54,12 +54,14 @@ On confirmation:
    ```
    The PR body **must** contain `Closes #<number>` so the issue auto-closes on merge.
 
-6. Report the PR URL. Wait — do not merge until CI passes.
+6. Report the PR URL and **STOP**. Do not merge. The user must review the PR first.
 
-## Merge
+## After review
 
-7. Check CI: `gh pr checks <number>`
-8. When all checks pass:
+Merging is the user's decision. Only merge when the user explicitly says to (e.g., "merge it", "LGTM", "ship it"). Then:
+
+7. Check CI: `gh pr checks <number>` — all checks must pass.
+8. Merge:
     ```sh
     gh pr merge <number> --squash --delete-branch
     ```
@@ -68,6 +70,7 @@ On confirmation:
 
 ## Constraints
 
+- **Never merge without explicit user approval.** CI green is necessary but not sufficient. The user reviews every PR.
 - Never skip `zig build test` before pushing.
 - Never merge with failing CI.
 - Never put more than one issue's work in a single PR.

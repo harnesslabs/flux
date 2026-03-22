@@ -6,6 +6,15 @@ See `project/initial.md` for the full architectural specification.
 
 ---
 
+## Hard Rules
+
+- **Never merge a PR without explicit user approval.** After opening a PR,
+  report the URL and stop. CI green is necessary but not sufficient — the user
+  reviews every PR. Only run `gh pr merge` when the user explicitly says to
+  (e.g., "merge it", "LGTM", "ship it"). This is non-negotiable.
+
+---
+
 ## Build & Test
 
 ```sh
