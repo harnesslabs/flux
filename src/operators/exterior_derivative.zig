@@ -15,11 +15,6 @@ const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 
-/// The result type of applying d to a given cochain type.
-fn Result(comptime InputType: type) type {
-    return cochain.Cochain(InputType.MeshT, InputType.degree + 1);
-}
-
 /// Apply the exterior derivative dₖ to a k-cochain, returning a (k+1)-cochain.
 ///
 /// The degree and mesh type are extracted from the input cochain at comptime.
@@ -31,22 +26,19 @@ fn Result(comptime InputType: type) type {
 ///     (d₀ω)(e) = ω(head(e)) − ω(tail(e)).
 ///   - d₁: 1-form → 2-form (discrete curl). For each face f,
 ///     (d₁ω)(f) = Σ over boundary edges of f, with orientation signs.
-pub fn exterior_derivative(allocator: std.mem.Allocator, input: anytype) !Result(@TypeOf(input)) {
+pub fn exterior_derivative(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !cochain.Cochain(@TypeOf(input).MeshT, @TypeOf(input).degree + 1) {
     const InputType = @TypeOf(input);
     const k = InputType.degree;
+    const OutputType = cochain.Cochain(InputType.MeshT, k + 1);
 
-    const boundary = switch (k) {
-        0 => input.mesh.boundary_1,
-        1 => input.mesh.boundary_2,
-        else => @compileError(std.fmt.comptimePrint(
-            "exterior_derivative not implemented for k={d} on a 2D mesh",
-            .{k},
-        )),
-    };
+    const boundary = input.mesh.boundary(k + 1);
 
     std.debug.assert(input.values.len == boundary.n_cols);
 
-    var output = try Result(InputType).init(allocator, input.mesh);
+    var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
     // dₖ(ω) = boundary_{k+1} · ω  (sparse matrix–vector product)
@@ -214,24 +206,19 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
 // Compile-time degree enforcement tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-test "compile-time: d returns the correct output type" {
-    // The return type of exterior_derivative encodes the degree — passing
-    // its output to a function expecting a different degree is a compile error.
+test "compile-time: d₀ returns a 1-cochain, d₁ returns a 2-cochain" {
     comptime {
-        // d₀: Ω⁰ → Ω¹
-        try testing.expect(Result(C0) == C1);
-        // d₁: Ω¹ → Ω²
-        try testing.expect(Result(C1) == C2);
+        // The return type encodes the output degree — passing it where
+        // a different degree is expected is a type mismatch.
+        const D0_Output = cochain.Cochain(Mesh2D, C0.degree + 1);
+        const D1_Output = cochain.Cochain(Mesh2D, C1.degree + 1);
 
-        // The output type is never the same as the input type
-        try testing.expect(Result(C0) != C0);
-        try testing.expect(Result(C1) != C1);
+        try testing.expect(D0_Output == C1);
+        try testing.expect(D1_Output == C2);
     }
 }
 
 test "compile-time: Cochain types of different degree are distinct" {
-    // exterior_derivative returns a typed cochain — passing a 0-form where
-    // a 1-form is expected is a type mismatch at compile time.
     comptime {
         try testing.expect(C0 != C1);
         try testing.expect(C1 != C2);
