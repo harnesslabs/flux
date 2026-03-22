@@ -37,7 +37,7 @@ On confirmation:
    - Write the property test that verifies the acceptance criterion **before** the implementation. Commit: `test(domain): add failing test for <invariant>`.
    - Fill in the implementation in small steps. Each step must compile and pass all existing tests before moving on.
    - **Commit after every coherent unit of progress** — a new type definition, a working constructor, a helper function with its test. A commit is a save state, not a finished feature. Target roughly 50–150 lines per commit; if you are approaching 200+ lines uncommitted, stop and commit what you have.
-   - `zig build test && zig fmt src/ build.zig` between every commit. No exceptions.
+   - `zig build ci --summary all` between every commit. No exceptions.
    - When the acceptance criterion test passes, that is the final commit for the implementation.
 
    The rhythm is: **write → test → commit → repeat**. Not: plan everything → write everything → commit once.

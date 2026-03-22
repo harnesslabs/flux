@@ -1,5 +1,6 @@
 # Zig
 .zig-cache
+zig-out/
 
 # MacOS
 .DS_Store
