@@ -84,6 +84,25 @@ pub fn Mesh(comptime n: usize) type {
 
         // -- Accessors --
 
+        /// The topological dimension of this mesh (always 2 for now).
+        pub const topological_dimension = 2;
+
+        /// Return the boundary operator ∂ₖ for the given degree.
+        ///
+        /// ∂₁ maps edges → vertices, ∂₂ maps faces → edges. Stored in
+        /// coboundary orientation (rows indexed by higher-dimensional cells),
+        /// so ∂ₖ also serves as the exterior derivative dₖ₋₁.
+        pub fn boundary(self: Self, comptime k: comptime_int) BoundaryMatrix {
+            return switch (k) {
+                1 => self.boundary_1,
+                2 => self.boundary_2,
+                else => @compileError(std.fmt.comptimePrint(
+                    "no boundary operator ∂_{d} on a {d}-dimensional mesh",
+                    .{ k, topological_dimension },
+                )),
+            };
+        }
+
         /// Number of vertices in the mesh.
         pub fn num_vertices(self: Self) u32 {
             return @intCast(self.vertices.len);

@@ -62,6 +62,55 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int) type {
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.values);
         }
+
+        // ── Arithmetic ──────────────────────────────────────────────────
+
+        /// Pointwise addition: self += other.
+        pub fn add(self: *Self, other: Self) void {
+            std.debug.assert(self.values.len == other.values.len);
+            for (self.values, other.values) |*a, b| {
+                a.* += b;
+            }
+        }
+
+        /// Pointwise subtraction: self -= other.
+        pub fn sub(self: *Self, other: Self) void {
+            std.debug.assert(self.values.len == other.values.len);
+            for (self.values, other.values) |*a, b| {
+                a.* -= b;
+            }
+        }
+
+        /// Scalar multiplication: self *= scalar.
+        pub fn scale(self: *Self, scalar: f64) void {
+            for (self.values) |*v| {
+                v.* *= scalar;
+            }
+        }
+
+        /// Negate all coefficients in place: self = -self.
+        pub fn negate(self: *Self) void {
+            for (self.values) |*v| {
+                v.* = -v.*;
+            }
+        }
+
+        /// L² inner product: ⟨self, other⟩ = Σᵢ selfᵢ · otherᵢ.
+        /// This is the flat (unweighted) inner product — the Hodge-weighted
+        /// version will come with the Hodge star in M2.
+        pub fn inner_product(self: Self, other: Self) f64 {
+            std.debug.assert(self.values.len == other.values.len);
+            var sum: f64 = 0;
+            for (self.values, other.values) |a, b| {
+                sum += a * b;
+            }
+            return sum;
+        }
+
+        /// Squared L² norm: ‖self‖² = ⟨self, self⟩.
+        pub fn norm_squared(self: Self) f64 {
+            return self.inner_product(self);
+        }
     };
 }
 
@@ -142,4 +191,111 @@ test "Cochain degree bounded by mesh dimension" {
     const C3 = Cochain(Mesh3D, 3);
     try testing.expectEqual(@as(comptime_int, 0), C0.degree);
     try testing.expectEqual(@as(comptime_int, 3), C3.degree);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Arithmetic tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "add two 0-cochains" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var a = try Cochain(Mesh2D, 0).init(allocator, &mesh);
+    defer a.deinit(allocator);
+    var b = try Cochain(Mesh2D, 0).init(allocator, &mesh);
+    defer b.deinit(allocator);
+
+    for (a.values, 0..) |*v, i| v.* = @floatFromInt(i);
+    for (b.values, 0..) |*v, i| v.* = @as(f64, @floatFromInt(i)) * 10.0;
+
+    a.add(b);
+
+    for (a.values, 0..) |v, i| {
+        const fi: f64 = @floatFromInt(i);
+        try testing.expectApproxEqAbs(fi + fi * 10.0, v, 1e-15);
+    }
+}
+
+test "sub two 1-cochains" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var a = try Cochain(Mesh2D, 1).init(allocator, &mesh);
+    defer a.deinit(allocator);
+    var b = try Cochain(Mesh2D, 1).init(allocator, &mesh);
+    defer b.deinit(allocator);
+
+    for (a.values, 0..) |*v, i| v.* = @floatFromInt(i);
+    for (b.values) |*v| v.* = 3.0;
+
+    a.sub(b);
+
+    for (a.values, 0..) |v, i| {
+        const fi: f64 = @floatFromInt(i);
+        try testing.expectApproxEqAbs(fi - 3.0, v, 1e-15);
+    }
+}
+
+test "scale a cochain" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var c = try Cochain(Mesh2D, 0).init(allocator, &mesh);
+    defer c.deinit(allocator);
+
+    for (c.values, 0..) |*v, i| v.* = @floatFromInt(i);
+    c.scale(2.5);
+
+    for (c.values, 0..) |v, i| {
+        const fi: f64 = @floatFromInt(i);
+        try testing.expectApproxEqAbs(fi * 2.5, v, 1e-15);
+    }
+}
+
+test "negate a cochain" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var c = try Cochain(Mesh2D, 1).init(allocator, &mesh);
+    defer c.deinit(allocator);
+
+    for (c.values, 0..) |*v, i| v.* = @floatFromInt(i);
+    c.negate();
+
+    for (c.values, 0..) |v, i| {
+        const fi: f64 = @floatFromInt(i);
+        try testing.expectApproxEqAbs(-fi, v, 1e-15);
+    }
+}
+
+test "inner product and norm" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    // 1×1 grid has 4 vertices
+    var a = try Cochain(Mesh2D, 0).init(allocator, &mesh);
+    defer a.deinit(allocator);
+    var b = try Cochain(Mesh2D, 0).init(allocator, &mesh);
+    defer b.deinit(allocator);
+
+    a.values[0] = 1.0;
+    a.values[1] = 2.0;
+    a.values[2] = 3.0;
+    a.values[3] = 4.0;
+    b.values[0] = 2.0;
+    b.values[1] = 0.0;
+    b.values[2] = -1.0;
+    b.values[3] = 3.0;
+
+    // ⟨a, b⟩ = 1·2 + 2·0 + 3·(−1) + 4·3 = 2 + 0 − 3 + 12 = 11
+    try testing.expectApproxEqAbs(@as(f64, 11.0), a.inner_product(b), 1e-15);
+
+    // ‖a‖² = 1 + 4 + 9 + 16 = 30
+    try testing.expectApproxEqAbs(@as(f64, 30.0), a.norm_squared(), 1e-15);
 }
