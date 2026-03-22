@@ -57,6 +57,19 @@ pub fn exterior_derivative(
     }
 }
 
+/// Comptime check: returns true iff CochainType is a valid input for dₖ.
+/// Use this to gate operator composition at compile time.
+pub fn is_valid_input(comptime MeshType: type, comptime k: comptime_int, comptime InputType: type) bool {
+    return InputType == cochain.Cochain(MeshType, k);
+}
+
+/// Comptime check: returns true iff applying d to InputType produces OutputType.
+pub fn d_maps(comptime MeshType: type, comptime InputType: type, comptime OutputType: type) bool {
+    return InputType.MeshT == MeshType and
+        OutputType.MeshT == MeshType and
+        OutputType.degree == InputType.degree + 1;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -211,5 +224,71 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
         for (result.values) |v| {
             try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-11);
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Compile-time degree enforcement tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "compile-time: Cochain types of different degree are distinct" {
+    // The type system enforces that a 0-form cannot be used where a 1-form
+    // is expected. This is the foundation of compile-time degree checking:
+    // exterior_derivative(Mesh2D, 0, ...) accepts Cochain(Mesh2D, 0) and
+    // rejects Cochain(Mesh2D, 1) or Cochain(Mesh2D, 2) at compile time
+    // because they are structurally different types.
+    comptime {
+        try testing.expect(C0 != C1);
+        try testing.expect(C1 != C2);
+        try testing.expect(C0 != C2);
+    }
+}
+
+test "compile-time: d₀ input validation" {
+    comptime {
+        // d₀ accepts 0-forms
+        try testing.expect(is_valid_input(Mesh2D, 0, C0));
+        // d₀ rejects 1-forms and 2-forms
+        try testing.expect(!is_valid_input(Mesh2D, 0, C1));
+        try testing.expect(!is_valid_input(Mesh2D, 0, C2));
+    }
+}
+
+test "compile-time: d₁ input validation" {
+    comptime {
+        // d₁ accepts 1-forms
+        try testing.expect(is_valid_input(Mesh2D, 1, C1));
+        // d₁ rejects 0-forms and 2-forms
+        try testing.expect(!is_valid_input(Mesh2D, 1, C0));
+        try testing.expect(!is_valid_input(Mesh2D, 1, C2));
+    }
+}
+
+test "compile-time: d maps k-forms to (k+1)-forms" {
+    comptime {
+        // d₀: Ω⁰ → Ω¹
+        try testing.expect(d_maps(Mesh2D, C0, C1));
+        // d₁: Ω¹ → Ω²
+        try testing.expect(d_maps(Mesh2D, C1, C2));
+
+        // Reject wrong output degrees
+        try testing.expect(!d_maps(Mesh2D, C0, C0)); // d₀ cannot produce a 0-form
+        try testing.expect(!d_maps(Mesh2D, C0, C2)); // d₀ cannot produce a 2-form
+        try testing.expect(!d_maps(Mesh2D, C1, C0)); // d₁ cannot produce a 0-form
+        try testing.expect(!d_maps(Mesh2D, C1, C1)); // d₁ cannot produce a 1-form
+    }
+}
+
+test "compile-time: degree accessible as comptime constant" {
+    // Operators can branch on degree at comptime without runtime overhead.
+    comptime {
+        try testing.expectEqual(0, C0.degree);
+        try testing.expectEqual(1, C1.degree);
+        try testing.expectEqual(2, C2.degree);
+
+        // Mesh type is recoverable from the cochain type
+        try testing.expect(C0.MeshT == Mesh2D);
+        try testing.expect(C1.MeshT == Mesh2D);
+        try testing.expect(C2.MeshT == Mesh2D);
     }
 }
