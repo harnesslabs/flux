@@ -1,3 +1,4 @@
+pub const io = @import("io/vtk.zig");
 pub const math = @import("math/sparse.zig");
 pub const topology = @import("topology/mesh.zig");
 
