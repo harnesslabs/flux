@@ -43,6 +43,21 @@ interface (analogous to a Rust trait) that the integrator checks.
 
 ---
 
+## Operator splitting (Strang and beyond)
+
+**Layer:** feature
+**Constraint on current work:** Integrators must be composable — a
+meta-integrator like Strang splitting takes two sub-integrators and interleaves
+their steps (`A(dt/2), B(dt), A(dt/2)`). This means the integrator interface
+cannot assume it owns the full timestep or the full state. Sub-integrators must
+be callable with arbitrary dt and must not hardcode step-size logic.
+**Enablers:** Pluggable time integrators with a generic interface. First real
+use case is likely multi-physics (advection/diffusion split, field/particle
+split).
+**Source:** Ideation 2026-03-22
+
+---
+
 ## Mesh views and submesh references
 
 **Layer:** architecture
