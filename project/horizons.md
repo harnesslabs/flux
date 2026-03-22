@@ -89,3 +89,38 @@ graph abstraction — don't assume acyclicity structurally.
 **Enablers:** Interface operators (trace, projection, interpolation) as
 first-class nodes. Mesh views.
 **Source:** Ideation 2026-03-22
+
+---
+
+## Adaptive methods via comptime strategy selection
+
+**Layer:** constraint
+**Constraint on current work:** Design meshes, integrators, and operators so that
+a comptime parameter selects the adaptation strategy — and with it, the storage
+layout, allocator choice, and recomputation policy.
+
+Concrete constraints on current code:
+- **Meshes:** Do not assume topology is fixed forever. Don't store operator
+  matrices as persistent state that is never rebuilt. Use entity indices rather
+  than raw array positions where cost is acceptable.
+- **Integrators:** Step functions should return what happened (actual dt, error
+  estimate, accepted/rejected), not just the new state. A `TimeStepper(.fixed)`
+  returns only state; `TimeStepper(.adaptive)` returns the full diagnostic. The
+  comptime parameter determines which fields exist.
+- **Cochains:** Do not assume cochain length equals mesh entity count for all
+  time. Adaptive mesh refinement requires prolongation (mapping cochain values
+  onto a refined mesh), which is degree-dependent.
+- **Allocators:** `Mesh(.static)` can use a fixed-buffer allocator (one
+  allocation, cache-perfect layout). `Mesh(.adaptive)` needs a growth-capable
+  allocator. The comptime mesh parameter should influence which allocator
+  strategy is appropriate — Zig's explicit allocators make this a natural
+  extension rather than a fight against defaults.
+
+The goal: changing `Simulation(f32, Mesh(.static), TimeStepper(.fixed), ...)` to
+`Simulation(f64, Mesh(.adaptive), TimeStepper(.adaptive), ...)` is a one-line
+change that selects a coherent, optimized implementation strategy. The user
+declares intent; the compiler assembles the machinery.
+
+**Enablers:** Generic scalar cochains, pluggable integrators, stable mesh
+abstraction.
+**Source:** Ideation 2026-03-22
