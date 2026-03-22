@@ -9,9 +9,11 @@ See `project/initial.md` for the full architectural specification.
 ## Build & Test
 
 ```sh
-zig build          # build
-zig build test     # run all tests
-zig build run      # run executable
+zig build                       # build
+zig build test --summary all    # run all tests (with output)
+zig build fmt                   # check formatting
+zig build ci --summary all      # all CI checks: build + test + fmt
+zig build run                   # run executable
 ```
 
 ---

@@ -16,7 +16,7 @@ jobs:
         with:
           version: "0.15.2"
       - name: Build
-        run: zig build
+        run: zig build --summary all
 
   test:
     name: test
@@ -27,7 +27,7 @@ jobs:
         with:
           version: "0.15.2"
       - name: Test
-        run: zig build test
+        run: zig build test --summary all
 
   fmt:
     name: fmt
@@ -38,7 +38,7 @@ jobs:
         with:
           version: "0.15.2"
       - name: Check formatting
-        run: zig fmt --check src/ build.zig
+        run: zig build fmt --summary all
 
   lint:
     name: lint

@@ -142,15 +142,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
 
-    // Just like flags, top level steps are also listed in the `--help` menu.
-    //
-    // The Zig build system is entirely implemented in userland, which means
-    // that it cannot hook into private compiler APIs. All compilation work
-    // orchestrated by the build system will result in other Zig compiler
-    // subcommands being invoked with the right flags defined. You can observe
-    // these invocations when one fails (or you pass a flag to increase
-    // verbosity) to validate assumptions and diagnose problems.
-    //
-    // Lastly, the Zig build system is relatively simple and self-contained,
-    // and reading its source code will allow you to master it.
+    // -- fmt step --
+    // Runs zig fmt --check on all source files. Fails if anything is unformatted.
+    const fmt_step = b.step("fmt", "Check source formatting");
+    const fmt_cmd = b.addFmt(.{
+        .paths = &.{ "src", "build.zig" },
+        .check = true,
+    });
+    fmt_step.dependOn(&fmt_cmd.step);
+
+    // -- ci step --
+    // Runs build + test + fmt in one command: `zig build ci`
+    const ci_step = b.step("ci", "Run all CI checks (build + test + fmt)");
+    ci_step.dependOn(b.getInstallStep());
+    ci_step.dependOn(&run_mod_tests.step);
+    ci_step.dependOn(&run_exe_tests.step);
+    ci_step.dependOn(&fmt_cmd.step);
 }
