@@ -83,6 +83,14 @@ A discrete operator is not implemented until a property-based test exists that
 verifies its mathematical invariant on random inputs. `dd = 0` is not a feature
 — it is a contract, and the test is the contract's enforcement mechanism.
 
+**Usability is a correctness property.**
+The comptime type system exists to make correct code easy to write and incorrect
+code impossible to compile. If a type-level abstraction makes the framework
+harder to use without a proportional safety gain, it is over-engineering. The
+test: a domain expert who knows the mathematics should be able to read a
+simulation setup and recognize the physics without reading the framework
+internals.
+
 **Geometric generality as a design horizon.**
 The initial implementation assumes a fixed mesh with a flat (Euclidean) metric.
 This is a specialization, not a limitation. The architecture must remain

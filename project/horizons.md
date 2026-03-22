@@ -124,3 +124,55 @@ declares intent; the compiler assembles the machinery.
 **Enablers:** Generic scalar cochains, pluggable integrators, stable mesh
 abstraction.
 **Source:** Ideation 2026-03-22
+
+---
+
+## Compositional API and declarative system specification
+
+**Layer:** ux
+**Constraint on current work:** Operators (`d`, `★`, compositions) should be
+designed as composable units from day one — this is already in the vision. The
+further horizon is a declarative `System` struct that describes a PDE system at
+comptime (fields, equations, coupling) and compiles down to the compositional
+API. The declarative form enables inspection, consistency checking, and
+formatted display of the system in mathematical notation.
+
+Well-formedness invariants (all comptime-checkable):
+- Every field referenced in an equation exists in the system
+- Every operator is dimensionally compatible with its input
+- The system is not underdetermined
+
+The compositional API is the implementation layer; the declarative spec is a
+convenience that compiles down to it. Power users compose directly; standard
+setups use the declarative form.
+
+**Enablers:** Typed cochains, operator composition (M2), at least one working
+simulation (M3) to validate the API shape against real physics code.
+**Source:** Ideation 2026-03-22
+
+---
+
+## Structured simulation inputs (JSON + Zig)
+
+**Layer:** ux
+**Constraint on current work:** None immediately — this is a frontend concern
+that sits above the operator/solver layer. But do not bake parameter handling
+into simulation code in ways that would be hard to externalize later.
+
+Design intent: a JSON manifest describes the simulation configuration (mesh
+file path, timestep, output settings, named boundary conditions and sources).
+Boundary conditions and source terms that require expressions are Zig functions
+registered by name — the JSON references them, not inlines them. The JSON is
+configuration; the Zig code is behavior. No string-based expression parsers.
+
+```json
+{
+  "mesh": "cavity.obj",
+  "time": { "dt": 1e-3, "steps": 1000 },
+  "boundary_conditions": { "walls": { "type": "pec" } },
+  "sources": { "dipole": { "function": "dipole_source" } }
+}
+```
+
+**Enablers:** A working simulation (M3), stable public API.
+**Source:** Ideation 2026-03-22
