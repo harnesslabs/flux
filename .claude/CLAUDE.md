@@ -24,6 +24,7 @@ zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run executable
 zig build docs                  # generate API docs to zig-out/docs/
+zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 ```
 
 ---
