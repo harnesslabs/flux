@@ -14,6 +14,22 @@ not implement these, but should not design in ways that preclude them.
 type (`Cochain(mesh, k, Scalar)` with `Scalar = f64` as default) rather than
 hardcoding `f64`. This enables `f32` for performance, and later dimensionful
 quantities.
+
+```zig
+// Current: hardcoded f64
+pub fn Cochain(comptime mesh: MeshType, comptime k: u8) type { ... }
+
+// Horizon: generic scalar with default
+pub fn Cochain(comptime mesh: MeshType, comptime k: u8, comptime Scalar: type) type {
+    // Scalar = f64 for standard use, f32 for fast prototyping,
+    // Quantity(.tesla) for dimensionful simulations
+    return struct {
+        values: []Scalar,
+        // ...
+    };
+}
+```
+
 **Enablers:** None — this can be done now.
 **Source:** Ideation 2026-03-22
 
@@ -26,6 +42,26 @@ quantities.
 hardcode `f64` in operator signatures. The eventual design would allow
 `Equation(.dimensionful)` vs `Equation(.dimensionless)` so unit checking is
 opt-in.
+
+```zig
+// Compile-time dimensional analysis via SI exponents (M, L, T, I, ...)
+pub fn Quantity(comptime dim: Dimensions) type {
+    return struct {
+        value: f64,
+        // arithmetic checks dimensional compatibility at comptime
+        pub fn mul(self: @This(), other: anytype) Quantity(dim.add(@TypeOf(other).dim)) { ... }
+    };
+}
+
+const Length = Quantity(.{ .length = 1 });
+const Time = Quantity(.{ .time = 1 });
+const Velocity = Quantity(.{ .length = 1, .time = -1 });
+
+// Opt-in: dimensionless just uses raw f64
+const maxwell_fast = System(.dimensionless, ...); // scalars are f64
+const maxwell_safe = System(.dimensionful, ...);  // scalars are Quantity(...)
+```
+
 **Enablers:** Generic scalar cochains. Possibly a standalone Zig units library.
 **Source:** Ideation 2026-03-22
 
@@ -38,6 +74,33 @@ opt-in.
 integration logic into the physics module. Separate the staging/stepping
 concerns from the operator evaluation. State types should satisfy a comptime
 interface (analogous to a Rust trait) that the integrator checks.
+
+```zig
+// The integrator is parameterized on method and state type
+pub fn Integrator(comptime method: IntegrationMethod, comptime State: type) type {
+    // Verify State satisfies the required interface at comptime
+    comptime {
+        if (!@hasDecl(State, "evaluateOperator"))
+            @compileError("State must declare evaluateOperator");
+        if (method == .leapfrog and !@hasDecl(State, "staggeredFields"))
+            @compileError("Leapfrog requires State to declare staggeredFields");
+    }
+    return struct {
+        pub fn step(state: *State, dt: f64) StepResult(method) { ... }
+    };
+}
+
+// Users build their state struct, declare the required functions
+const MaxwellState = struct {
+    E: Cochain(mesh, 1, f64),
+    B: Cochain(mesh, 2, f64),
+    pub fn evaluateOperator(self: *@This(), ...) void { ... }
+    pub fn staggeredFields(self: *@This()) ... { ... }
+};
+
+const stepper = Integrator(.leapfrog, MaxwellState);
+```
+
 **Enablers:** M2 operators, M3 Maxwell simulation (first concrete integrator).
 **Source:** Ideation 2026-03-22
 
@@ -51,6 +114,28 @@ meta-integrator like Strang splitting takes two sub-integrators and interleaves
 their steps (`A(dt/2), B(dt), A(dt/2)`). This means the integrator interface
 cannot assume it owns the full timestep or the full state. Sub-integrators must
 be callable with arbitrary dt and must not hardcode step-size logic.
+
+```zig
+// Strang splitting is a meta-integrator: it composes two sub-integrators
+pub fn StrangSplit(comptime IntA: type, comptime IntB: type) type {
+    return struct {
+        a: IntA,
+        b: IntB,
+        pub fn step(self: *@This(), state: *IntA.State, dt: f64) void {
+            self.a.step(state, dt / 2.0);
+            self.b.step(state, dt);
+            self.a.step(state, dt / 2.0);
+        }
+    };
+}
+
+// Usage: split advection from diffusion
+const split = StrangSplit(
+    Integrator(.explicit, AdvectionOp),
+    Integrator(.implicit, DiffusionOp),
+);
+```
+
 **Enablers:** Pluggable time integrators with a generic interface. First real
 use case is likely multi-physics (advection/diffusion split, field/particle
 split).
@@ -145,6 +230,28 @@ Well-formedness invariants (all comptime-checkable):
 The compositional API is the implementation layer; the declarative spec is a
 convenience that compiles down to it. Power users compose directly; standard
 setups use the declarative form.
+
+```zig
+// Compositional API (implementation layer) — direct operator chaining
+const curl_E = d(1).apply(E);
+const dB_dt = curl_E.negate();
+const J_curl_H = star_inv(1).compose(d(0)).compose(star(2)).apply(B);
+
+// Declarative spec (convenience layer) — compiles to the above at comptime
+const maxwell = System{
+    .fields = .{
+        Field("E", .{ .mesh = mesh, .degree = 1, .duality = .primal }),
+        Field("B", .{ .mesh = mesh, .degree = 2, .duality = .primal }),
+    },
+    .equations = .{
+        .{ .ddt = "B", .rhs = .{ .negate, .{ .d, "E" } } },
+        .{ .ddt = "E", .rhs = .{ .sub, .{ .star_inv, .{ .d, .{ .star, "B" } } }, "J" } },
+    },
+};
+
+// Declarative form supports inspection and display
+maxwell.printSystem(); // prints: ∂B/∂t = −dE,  ∂E/∂t = ★⁻¹d★B − J
+```
 
 **Enablers:** Typed cochains, operator composition (M2), at least one working
 simulation (M3) to validate the API shape against real physics code.
