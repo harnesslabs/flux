@@ -1,54 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
+const sparse = @import("../math/sparse.zig");
 
-// ───────────────────────────────────────────────────────────────────────────
-// Compressed Sparse Row matrix
-// ───────────────────────────────────────────────────────────────────────────
-
-/// Compressed sparse row matrix with i8 values.
-/// Used for boundary/incidence operators with entries in {−1, 0, +1}.
-pub const CsrMatrix = struct {
-    /// `row_ptr[i]..row_ptr[i+1]` indexes into `col_idx`/`values` for row i.
-    /// Length: `n_rows + 1`.
-    row_ptr: []u32,
-    /// Column indices for each nonzero entry. Length: nnz.
-    col_idx: []u32,
-    /// Values for each nonzero entry. Length: nnz.
-    values: []i8,
-    n_rows: u32,
-    n_cols: u32,
-
-    pub fn init(allocator: std.mem.Allocator, n_rows: u32, n_cols: u32, nonzero_count: u32) !CsrMatrix {
-        return .{
-            .row_ptr = try allocator.alloc(u32, @as(usize, n_rows) + 1),
-            .col_idx = try allocator.alloc(u32, nonzero_count),
-            .values = try allocator.alloc(i8, nonzero_count),
-            .n_rows = n_rows,
-            .n_cols = n_cols,
-        };
-    }
-
-    pub fn deinit(self: *CsrMatrix, allocator: std.mem.Allocator) void {
-        allocator.free(self.row_ptr);
-        allocator.free(self.col_idx);
-        allocator.free(self.values);
-    }
-
-    /// Number of nonzero entries.
-    pub fn nnz(self: CsrMatrix) u32 {
-        return @intCast(self.col_idx.len);
-    }
-
-    /// Column indices and values for a given row.
-    pub fn row(self: CsrMatrix, r: u32) struct { cols: []const u32, vals: []const i8 } {
-        const start = self.row_ptr[r];
-        const end = self.row_ptr[r + 1];
-        return .{
-            .cols = self.col_idx[start..end],
-            .vals = self.values[start..end],
-        };
-    }
-};
+/// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
+pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 
 // ───────────────────────────────────────────────────────────────────────────
 // Mesh
@@ -61,7 +16,7 @@ pub const CsrMatrix = struct {
 /// layout. Boundary operators ∂₁ and ∂₂ are stored in CSR format.
 pub fn Mesh(comptime n: usize) type {
     comptime {
-        if (n < 2) @compileError("Mesh dimension must be at least 2");
+        if (n < 1) @compileError("Mesh dimension must be at least 1");
     }
 
     return struct {
@@ -105,9 +60,9 @@ pub fn Mesh(comptime n: usize) type {
         faces: std.MultiArrayList(Face),
 
         /// ∂₁: `n_edges × n_vertices`. Row `e` has nonzeros at tail (−1) and head (+1).
-        boundary_1: CsrMatrix,
+        boundary_1: BoundaryMatrix,
         /// ∂₂: `n_faces × n_edges`. Row `f` has 3 nonzeros for the oriented boundary edges.
-        boundary_2: CsrMatrix,
+        boundary_2: BoundaryMatrix,
 
         // -- Lifetime --
 
@@ -259,7 +214,7 @@ pub fn Mesh(comptime n: usize) type {
 
             // -- Build ∂₁ (n_edges × n_vertices) --
             // Each edge row has exactly 2 nonzeros: tail = −1, head = +1.
-            var boundary_1 = try CsrMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
+            var boundary_1 = try BoundaryMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
             errdefer boundary_1.deinit(allocator);
             {
                 const edge_verts = edges_list.slice().items(.vertices);
@@ -281,7 +236,7 @@ pub fn Mesh(comptime n: usize) type {
             // Upper-left  (SW,NE,NW): −h(i,j+1), −vert(i,j), +diag(i,j)
             //
             // Column ordering: horizontal < vertical < diagonal (always sorted).
-            var boundary_2 = try CsrMatrix.init(allocator, face_count, edge_count, 3 * face_count);
+            var boundary_2 = try BoundaryMatrix.init(allocator, face_count, edge_count, 3 * face_count);
             errdefer boundary_2.deinit(allocator);
             {
                 var f_idx: u32 = 0;
