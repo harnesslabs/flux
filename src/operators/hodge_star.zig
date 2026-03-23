@@ -109,7 +109,7 @@ fn validateHodgeStarInverseInput(comptime T: type) void {
 ///
 /// When `invert` is false: output[i] = ratio[i] * input[i]
 /// When `invert` is true:  output[i] = input[i] / ratio[i]  (asserts ratio ≠ 0)
-fn applyDiagonal(
+pub fn applyDiagonal(
     comptime MeshType: type,
     comptime primal_degree: comptime_int,
     mesh: *const MeshType,

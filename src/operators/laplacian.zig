@@ -70,10 +70,10 @@ pub fn laplacian(
         const temp = try allocator.alloc(f64, bk1.n_cols);
         defer allocator.free(temp);
         @memset(temp, 0);
-        transposeMultiply(bk1, star_d.values, temp);
+        bk1.transpose_multiply(star_d.values, temp);
 
         // ★⁻¹_k · temp → result
-        hodgeDiagonalInverse(MeshType, k, input.mesh, temp, result.values);
+        hs.applyDiagonal(MeshType, k, input.mesh, temp, result.values, true);
     }
 
     // ── Term 2 (dδ): D_{k-1} · ★⁻¹_{k-1} · D_{k-1}ᵀ · ★_k · ω ────
@@ -88,12 +88,12 @@ pub fn laplacian(
         const temp_km1 = try allocator.alloc(f64, bk.n_cols);
         defer allocator.free(temp_km1);
         @memset(temp_km1, 0);
-        transposeMultiply(bk, star_omega.values, temp_km1);
+        bk.transpose_multiply(star_omega.values, temp_km1);
 
         // ★⁻¹_{k-1} · temp
         const codiff_vals = try allocator.alloc(f64, bk.n_cols);
         defer allocator.free(codiff_vals);
-        hodgeDiagonalInverse(MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
+        hs.applyDiagonal(MeshType, k - 1, input.mesh, temp_km1, codiff_vals, true);
 
         // D_{k-1} · codiff_vals → accumulate into result
         for (0..bk.n_rows) |row_idx| {
@@ -107,63 +107,6 @@ pub fn laplacian(
     }
 
     return result;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Compute y += Aᵀ x (transpose sparse matrix–vector product).
-///
-/// Iterates over rows of A, scattering each row's contribution into the
-/// output vector. Caller must zero-initialize `output` before calling.
-fn transposeMultiply(matrix: anytype, input_vals: []const f64, output: []f64) void {
-    for (0..matrix.n_rows) |row_idx| {
-        const r = matrix.row(@intCast(row_idx));
-        for (r.cols, r.vals) |col, sign| {
-            output[col] += @as(f64, @floatFromInt(sign)) * input_vals[row_idx];
-        }
-    }
-}
-
-/// Apply the inverse Hodge star diagonal ★⁻¹_k to raw value arrays.
-///
-/// Replicates the Hodge inverse logic from hodge_star.zig for raw f64
-/// slices, so the Laplacian can chain ★, dᵀ, ★⁻¹ without constructing
-/// intermediate dual cochain types.
-fn hodgeDiagonalInverse(
-    comptime MeshType: type,
-    comptime primal_degree: comptime_int,
-    mesh: *const MeshType,
-    input: []const f64,
-    output: []f64,
-) void {
-    switch (primal_degree) {
-        // ★⁻¹₀: divide by dual_area
-        0 => {
-            const dual_areas = mesh.vertices.slice().items(.dual_area);
-            for (output, input, dual_areas) |*out, in_val, area| {
-                std.debug.assert(area != 0.0);
-                out.* = in_val / area;
-            }
-        },
-        // ★⁻¹₁: multiply by length / dual_length
-        1 => {
-            const edge_slice = mesh.edges.slice();
-            const lengths = edge_slice.items(.length);
-            const dual_lengths = edge_slice.items(.dual_length);
-            for (output, input, lengths, dual_lengths) |*out, in_val, len, dual_len| {
-                std.debug.assert(dual_len != 0.0);
-                out.* = (len / dual_len) * in_val;
-            }
-        },
-        // ★⁻¹₂: multiply by area
-        2 => {
-            const areas = mesh.faces.slice().items(.area);
-            for (output, input, areas) |*out, in_val, area| {
-                out.* = area * in_val;
-            }
-        },
-        else => @compileError("unsupported degree for Hodge diagonal inverse"),
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

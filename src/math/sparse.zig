@@ -58,5 +58,21 @@ pub fn CsrMatrix(comptime T: type) type {
                 .vals = self.values[start..end],
             };
         }
+
+        /// Compute y += Aᵀ x (transpose sparse matrix–vector product).
+        ///
+        /// Iterates over rows of A, scattering each row's contribution into
+        /// the output vector. Caller must zero-initialize `output` before
+        /// calling. `input` has length `n_rows`, `output` has length `n_cols`.
+        pub fn transpose_multiply(self: Self, input_vals: []const f64, output: []f64) void {
+            std.debug.assert(input_vals.len == self.n_rows);
+            std.debug.assert(output.len == self.n_cols);
+            for (0..self.n_rows) |row_idx| {
+                const r = self.row(@intCast(row_idx));
+                for (r.cols, r.vals) |col, val| {
+                    output[col] += @as(f64, @floatFromInt(val)) * input_vals[row_idx];
+                }
+            }
+        }
     };
 }
