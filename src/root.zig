@@ -15,7 +15,10 @@
 pub const forms = @import("forms/cochain.zig");
 pub const io = @import("io/vtk.zig");
 pub const math = @import("math/sparse.zig");
-pub const operators = @import("operators/exterior_derivative.zig");
+pub const operators = struct {
+    pub const exterior_derivative = @import("operators/exterior_derivative.zig");
+    pub const hodge_star = @import("operators/hodge_star.zig");
+};
 pub const topology = @import("topology/mesh.zig");
 
 test {
