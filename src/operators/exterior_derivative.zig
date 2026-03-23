@@ -26,13 +26,18 @@ const topology = @import("../topology/mesh.zig");
 ///     (d₀ω)(e) = ω(head(e)) − ω(tail(e)).
 ///   - d₁: 1-form → 2-form (discrete curl). For each face f,
 ///     (d₁ω)(f) = Σ over boundary edges of f, with orientation signs.
+/// Return type of the exterior derivative: a (k+1)-cochain with the same duality.
+fn ExteriorDerivativeResult(comptime InputType: type) type {
+    return cochain.Cochain(InputType.MeshT, InputType.degree + 1, InputType.duality);
+}
+
 pub fn exterior_derivative(
     allocator: std.mem.Allocator,
     input: anytype,
-) !cochain.Cochain(@TypeOf(input).MeshT, @TypeOf(input).degree + 1, @TypeOf(input).dual) {
+) !ExteriorDerivativeResult(@TypeOf(input)) {
     const InputType = @TypeOf(input);
     const k = InputType.degree;
-    const OutputType = cochain.Cochain(InputType.MeshT, k + 1, InputType.dual);
+    const OutputType = ExteriorDerivativeResult(InputType);
 
     const boundary = input.mesh.boundary(k + 1);
 
@@ -59,9 +64,9 @@ pub fn exterior_derivative(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Mesh2D = topology.Mesh(2);
-const C0 = cochain.Cochain(Mesh2D, 0, .primal);
-const C1 = cochain.Cochain(Mesh2D, 1, .primal);
-const C2 = cochain.Cochain(Mesh2D, 2, .primal);
+const C0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
+const C1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
+const C2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
 
 test "d₀ of constant function is zero" {
     // A constant 0-form has zero gradient everywhere.
@@ -210,8 +215,8 @@ test "compile-time: d₀ returns a 1-cochain, d₁ returns a 2-cochain" {
     comptime {
         // The return type encodes the output degree — passing it where
         // a different degree is expected is a type mismatch.
-        const D0_Output = cochain.Cochain(Mesh2D, C0.degree + 1, .primal);
-        const D1_Output = cochain.Cochain(Mesh2D, C1.degree + 1, .primal);
+        const D0_Output = cochain.Cochain(Mesh2D, C0.degree + 1, cochain.Primal);
+        const D1_Output = cochain.Cochain(Mesh2D, C1.degree + 1, cochain.Primal);
 
         try testing.expect(D0_Output == C1);
         try testing.expect(D1_Output == C2);

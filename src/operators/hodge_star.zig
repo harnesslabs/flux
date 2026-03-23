@@ -34,7 +34,7 @@ pub fn hodge_star(
 
     const k = InputType.degree;
     const n = InputType.MeshT.topological_dimension;
-    const OutputType = cochain.Cochain(InputType.MeshT, n - k, .dual);
+    const OutputType = cochain.Cochain(InputType.MeshT, n - k, cochain.Dual);
 
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
@@ -61,7 +61,7 @@ pub fn hodge_star_inverse(
     const dual_degree = InputType.degree;
     const n = InputType.MeshT.topological_dimension;
     const primal_degree = n - dual_degree;
-    const OutputType = cochain.Cochain(InputType.MeshT, primal_degree, .primal);
+    const OutputType = cochain.Cochain(InputType.MeshT, primal_degree, cochain.Primal);
 
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
@@ -75,30 +75,30 @@ pub fn hodge_star_inverse(
 
 fn HodgeStarResult(comptime InputType: type) type {
     const n = InputType.MeshT.topological_dimension;
-    return cochain.Cochain(InputType.MeshT, n - InputType.degree, .dual);
+    return cochain.Cochain(InputType.MeshT, n - InputType.degree, cochain.Dual);
 }
 
 fn HodgeStarInverseResult(comptime InputType: type) type {
     const n = InputType.MeshT.topological_dimension;
-    return cochain.Cochain(InputType.MeshT, n - InputType.degree, .primal);
+    return cochain.Cochain(InputType.MeshT, n - InputType.degree, cochain.Primal);
 }
 
 // ── Comptime validation ──────────────────────────────────────────────────
 
 fn validateHodgeStarInput(comptime T: type) void {
-    if (!@hasDecl(T, "dual")) {
+    if (!@hasDecl(T, "duality")) {
         @compileError("hodge_star requires a Cochain type");
     }
-    if (T.dual != .primal) {
+    if (T.duality != cochain.Primal) {
         @compileError("hodge_star expects a primal cochain (use hodge_star_inverse for dual → primal)");
     }
 }
 
 fn validateHodgeStarInverseInput(comptime T: type) void {
-    if (!@hasDecl(T, "dual")) {
+    if (!@hasDecl(T, "duality")) {
         @compileError("hodge_star_inverse requires a Cochain type");
     }
-    if (T.dual != .dual) {
+    if (T.duality != cochain.Dual) {
         @compileError("hodge_star_inverse expects a dual cochain (use hodge_star for primal → dual)");
     }
 }
@@ -165,12 +165,12 @@ fn applyDiagonal(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Mesh2D = topology.Mesh(2);
-const PrimalC0 = cochain.Cochain(Mesh2D, 0, .primal);
-const PrimalC1 = cochain.Cochain(Mesh2D, 1, .primal);
-const PrimalC2 = cochain.Cochain(Mesh2D, 2, .primal);
-const DualC0 = cochain.Cochain(Mesh2D, 0, .dual);
-const DualC1 = cochain.Cochain(Mesh2D, 1, .dual);
-const DualC2 = cochain.Cochain(Mesh2D, 2, .dual);
+const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
+const PrimalC1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
+const PrimalC2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
+const DualC0 = cochain.Cochain(Mesh2D, 0, cochain.Dual);
+const DualC1 = cochain.Cochain(Mesh2D, 1, cochain.Dual);
+const DualC2 = cochain.Cochain(Mesh2D, 2, cochain.Dual);
 
 // ── Compile-time type checks ─────────────────────────────────────────────
 
