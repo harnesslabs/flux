@@ -29,10 +29,10 @@ const topology = @import("../topology/mesh.zig");
 pub fn exterior_derivative(
     allocator: std.mem.Allocator,
     input: anytype,
-) !cochain.Cochain(@TypeOf(input).MeshT, @TypeOf(input).degree + 1) {
+) !cochain.Cochain(@TypeOf(input).MeshT, @TypeOf(input).degree + 1, @TypeOf(input).dual) {
     const InputType = @TypeOf(input);
     const k = InputType.degree;
-    const OutputType = cochain.Cochain(InputType.MeshT, k + 1);
+    const OutputType = cochain.Cochain(InputType.MeshT, k + 1, InputType.dual);
 
     const boundary = input.mesh.boundary(k + 1);
 
@@ -59,9 +59,9 @@ pub fn exterior_derivative(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Mesh2D = topology.Mesh(2);
-const C0 = cochain.Cochain(Mesh2D, 0);
-const C1 = cochain.Cochain(Mesh2D, 1);
-const C2 = cochain.Cochain(Mesh2D, 2);
+const C0 = cochain.Cochain(Mesh2D, 0, .primal);
+const C1 = cochain.Cochain(Mesh2D, 1, .primal);
+const C2 = cochain.Cochain(Mesh2D, 2, .primal);
 
 test "d₀ of constant function is zero" {
     // A constant 0-form has zero gradient everywhere.
@@ -210,8 +210,8 @@ test "compile-time: d₀ returns a 1-cochain, d₁ returns a 2-cochain" {
     comptime {
         // The return type encodes the output degree — passing it where
         // a different degree is expected is a type mismatch.
-        const D0_Output = cochain.Cochain(Mesh2D, C0.degree + 1);
-        const D1_Output = cochain.Cochain(Mesh2D, C1.degree + 1);
+        const D0_Output = cochain.Cochain(Mesh2D, C0.degree + 1, .primal);
+        const D1_Output = cochain.Cochain(Mesh2D, C1.degree + 1, .primal);
 
         try testing.expect(D0_Output == C1);
         try testing.expect(D1_Output == C2);
