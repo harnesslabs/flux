@@ -18,6 +18,7 @@ pub const math = @import("math/sparse.zig");
 pub const operators = struct {
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
+    pub const laplacian = @import("operators/laplacian.zig");
 };
 pub const topology = @import("topology/mesh.zig");
 
