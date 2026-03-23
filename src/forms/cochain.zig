@@ -54,15 +54,29 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime duali
         /// The mesh this cochain is defined on.
         mesh: *const MeshType,
 
-        /// Allocate a zero-initialized cochain on the given mesh.
-        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
-            const num_cells: u32 = switch (k) {
+        /// Number of cells this cochain has one value for.
+        ///
+        /// Primal k-cells map directly: 0 → vertices, 1 → edges, 2 → faces.
+        /// Dual k-cells correspond to primal (n−k)-cells: dual 0-cells are
+        /// primal faces, dual 1-cells are primal edges, dual 2-cells are
+        /// primal vertices.
+        pub fn num_cells(mesh: *const MeshType) u32 {
+            const effective_degree = if (duality == .dual)
+                MeshType.topological_dimension - k
+            else
+                k;
+            return switch (effective_degree) {
                 0 => mesh.num_vertices(),
                 1 => mesh.num_edges(),
                 2 => mesh.num_faces(),
                 else => @compileError("unsupported degree for num_cells lookup"),
             };
-            const values = try allocator.alloc(f64, num_cells);
+        }
+
+        /// Allocate a zero-initialized cochain on the given mesh.
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
+            const count = num_cells(mesh);
+            const values = try allocator.alloc(f64, count);
             @memset(values, 0);
             return .{ .values = values, .mesh = mesh };
         }
