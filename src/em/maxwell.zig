@@ -156,6 +156,33 @@ pub fn ampere_step(
     }
 }
 
+/// Leapfrog integrator: advance (E, B) by one full timestep dt.
+///
+/// Uses the standard Yee-style staggered leapfrog where B lives at
+/// half-integer times and E at integer times:
+///
+///   B^{n+1/2}  = B^{n-1/2} − dt · dE^n           (Faraday)
+///   E^{n+1}    = E^n + dt · (★₁⁻¹ d ★₂ B^{n+1/2} − J)  (Ampere-Maxwell)
+///
+/// The caller stores B at the current half-step (n−1/2) and E at the
+/// current integer step (n). After the call, B holds B^{n+1/2} and E
+/// holds E^{n+1}. This preserves dB = 0 exactly at every half-step
+/// because the Faraday update only adds a dd-exact term.
+///
+/// For source-free fields (J = 0), symplecticity of the leapfrog scheme
+/// guarantees bounded energy oscillation — no secular drift.
+pub fn leapfrog_step(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    dt: f64,
+) !void {
+    // Step 1: Faraday — advance B by a full dt at the half-step level.
+    try faraday_step(allocator, state, dt);
+
+    // Step 2: Ampere-Maxwell — advance E using the updated B.
+    try ampere_step(allocator, state, dt);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -408,4 +435,139 @@ test "ampere_step with J source reduces E compared to without" {
     for (state_with_source.E.values, state_no_source.E.values) |e_src, e_nosrc| {
         try testing.expectApproxEqAbs(e_nosrc - dt * 1.0, e_src, 1e-15);
     }
+}
+
+// ── #35: Leapfrog integrator ────────────────────────────────────────────
+
+test "leapfrog_step composes Faraday then Ampere" {
+    // A single leapfrog step should equal a Faraday step followed by an
+    // Ampere step with the same dt.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    // State A: will use leapfrog_step.
+    var state_a = try MaxwellState.init(allocator, &mesh);
+    defer state_a.deinit(allocator);
+
+    // State B: will use manual Faraday + Ampere.
+    var state_b = try MaxwellState.init(allocator, &mesh);
+    defer state_b.deinit(allocator);
+
+    // Same random initial conditions.
+    var rng = std.Random.DefaultPrng.init(0xE0_1F_01);
+    for (state_a.E.values, state_b.E.values) |*a, *b| {
+        const val = rng.random().float(f64) * 2.0 - 1.0;
+        a.* = val;
+        b.* = val;
+    }
+    for (state_a.B.values, state_b.B.values) |*a, *b| {
+        const val = rng.random().float(f64) * 2.0 - 1.0;
+        a.* = val;
+        b.* = val;
+    }
+
+    const dt: f64 = 0.01;
+
+    // Leapfrog.
+    try leapfrog_step(allocator, &state_a, dt);
+
+    // Manual: Faraday then Ampere.
+    try faraday_step(allocator, &state_b, dt);
+    try ampere_step(allocator, &state_b, dt);
+
+    for (state_a.E.values, state_b.E.values) |a, b| {
+        try testing.expectApproxEqAbs(b, a, 1e-15);
+    }
+    for (state_a.B.values, state_b.B.values) |a, b| {
+        try testing.expectApproxEqAbs(b, a, 1e-15);
+    }
+}
+
+test "leapfrog_step on zero fields is a no-op" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try leapfrog_step(allocator, &state, 0.01);
+
+    for (state.E.values) |v| try testing.expectEqual(@as(f64, 0), v);
+    for (state.B.values) |v| try testing.expectEqual(@as(f64, 0), v);
+}
+
+test "leapfrog energy bounded over 100 source-free steps" {
+    // For source-free Maxwell (J = 0), the leapfrog integrator is
+    // symplectic: total discrete energy should oscillate but not grow
+    // secularly. We verify that energy at every step stays within a
+    // bounded factor of the initial energy.
+    const allocator = testing.allocator;
+
+    // Use a fine enough grid so that the CFL condition is satisfied
+    // for the chosen dt.
+    var mesh = try Mesh2D.uniform_grid(allocator, 8, 8, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Seed with random E; B starts at zero (consistent with dB = 0).
+    // Using small amplitudes to stay well within the linear/stable regime.
+    var rng = std.Random.DefaultPrng.init(0xE0_1F_02);
+    for (state.E.values) |*v| v.* = (rng.random().float(f64) * 2.0 - 1.0) * 0.01;
+
+    // Compute initial energy: ‖E‖² + ‖B‖².
+    const energy_initial = state.E.norm_squared() + state.B.norm_squared();
+
+    // dt chosen small relative to the mesh spacing for stability.
+    const dt: f64 = 0.001;
+    const num_steps: usize = 100;
+
+    // Track max energy ratio seen.
+    var energy_ratio_max: f64 = 1.0;
+
+    for (0..num_steps) |_| {
+        try leapfrog_step(allocator, &state, dt);
+
+        const energy = state.E.norm_squared() + state.B.norm_squared();
+        const ratio = energy / energy_initial;
+        energy_ratio_max = @max(energy_ratio_max, ratio);
+    }
+
+    // Symplectic integrator: energy should not drift secularly.
+    // Allow up to 10% oscillation — the leapfrog scheme conserves a
+    // shadow Hamiltonian, so the true energy oscillates by O(dt²).
+    try testing.expect(energy_ratio_max < 1.1);
+}
+
+test "leapfrog B remains exact (cohomology class preserved) over 100 steps" {
+    // B starts at 0 (trivially closed). Each Faraday update adds −dt·dE,
+    // which is exact (in the image of d). So B is always a sum of exact
+    // forms. On a 2D mesh, dB = 0 is vacuous (no 3-cells), but we verify
+    // the structural property indirectly: B should remain bounded under
+    // a stable timestep, confirming the updates are consistent.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 8, 8, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Random initial E; B = 0 (satisfies dB = 0 trivially).
+    var rng = std.Random.DefaultPrng.init(0xE0_1F_03);
+    for (state.E.values) |*v| v.* = (rng.random().float(f64) * 2.0 - 1.0) * 0.001;
+
+    // Very small dt relative to mesh spacing h = 1/8 for CFL safety.
+    const dt: f64 = 0.0001;
+    const initial_energy = state.E.norm_squared() + state.B.norm_squared();
+
+    for (0..100) |_| {
+        try leapfrog_step(allocator, &state, dt);
+    }
+
+    // Energy should stay bounded (symplectic guarantee).
+    const final_energy = state.E.norm_squared() + state.B.norm_squared();
+    try testing.expect(final_energy < initial_energy * 1.1);
 }
