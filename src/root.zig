@@ -41,6 +41,7 @@ pub const operators = struct {
     pub const laplacian = @import("operators/laplacian.zig");
 };
 pub const topology = @import("topology/mesh.zig");
+pub const em = @import("em/maxwell.zig");
 
 // ── Top-level convenience re-exports ────────────────────────────────────
 // These allow `const flux = @import("flux"); flux.Cochain(...)` without
