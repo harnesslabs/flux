@@ -9,9 +9,16 @@
 //!   ∂B/∂t = −dE          (Faraday)
 //!   ∂E/∂t = ★₁⁻¹ d ★₂ B − J   (Ampere-Maxwell)
 //!
-//! The Faraday update preserves d₂B = 0 exactly because d(dE) = 0
+//! The remaining Maxwell equations are constraints, not evolution equations:
+//!   d★E = ρ/ε₀           (Gauss's law — divergence of E)
+//!   dB  = 0              (no magnetic monopoles)
+//!   ∂ρ/∂t + d★J = 0     (charge conservation)
+//!
+//! The Faraday update preserves dB = 0 exactly because d(dE) = 0
 //! algebraically — the divergence-free constraint is structural, not
-//! numerical.
+//! numerical. Gauss's law and charge conservation are satisfied if
+//! the initial conditions and source J are consistent; they are not
+//! actively enforced per timestep.
 //!
 //! Update functions are standalone (not methods on `State`) to keep
 //! integration logic separate from state representation, per the
@@ -39,27 +46,27 @@ pub fn State(comptime MeshType: type) type {
     return struct {
         const Self = @This();
 
-        pub const E_Form = cochain.Cochain(MeshType, 1, cochain.Primal);
-        pub const B_Form = cochain.Cochain(MeshType, 2, cochain.Primal);
+        pub const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
+        pub const TwoForm = cochain.Cochain(MeshType, 2, cochain.Primal);
 
         /// Electric field — primal 1-form (circulation along edges).
-        E: E_Form,
+        E: OneForm,
         /// Magnetic flux — primal 2-form (flux through faces).
-        B: B_Form,
+        B: TwoForm,
         /// Current density source — primal 1-form (same space as E).
-        J: E_Form,
+        J: OneForm,
         /// The mesh this state is defined on.
         mesh: *const MeshType,
 
         /// Allocate a zero-initialized Maxwell state on the given mesh.
         pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
-            var E = try E_Form.init(allocator, mesh);
+            var E = try OneForm.init(allocator, mesh);
             errdefer E.deinit(allocator);
 
-            var B = try B_Form.init(allocator, mesh);
+            var B = try TwoForm.init(allocator, mesh);
             errdefer B.deinit(allocator);
 
-            var J = try E_Form.init(allocator, mesh);
+            var J = try OneForm.init(allocator, mesh);
             errdefer J.deinit(allocator);
 
             return .{ .E = E, .B = B, .J = J, .mesh = mesh };
@@ -160,10 +167,10 @@ const MaxwellState = State(Mesh2D);
 
 test "MaxwellState fields have correct degrees" {
     comptime {
-        try testing.expectEqual(1, MaxwellState.E_Form.degree);
-        try testing.expectEqual(2, MaxwellState.B_Form.degree);
-        try testing.expect(MaxwellState.E_Form.duality == cochain.Primal);
-        try testing.expect(MaxwellState.B_Form.duality == cochain.Primal);
+        try testing.expectEqual(1, MaxwellState.OneForm.degree);
+        try testing.expectEqual(2, MaxwellState.TwoForm.degree);
+        try testing.expect(MaxwellState.OneForm.duality == cochain.Primal);
+        try testing.expect(MaxwellState.TwoForm.duality == cochain.Primal);
     }
 }
 
