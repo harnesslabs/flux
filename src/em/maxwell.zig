@@ -542,32 +542,7 @@ test "leapfrog energy bounded over 100 source-free steps" {
     try testing.expect(energy_ratio_max < 1.1);
 }
 
-test "leapfrog B remains exact (cohomology class preserved) over 100 steps" {
-    // B starts at 0 (trivially closed). Each Faraday update adds −dt·dE,
-    // which is exact (in the image of d). So B is always a sum of exact
-    // forms. On a 2D mesh, dB = 0 is vacuous (no 3-cells), but we verify
-    // the structural property indirectly: B should remain bounded under
-    // a stable timestep, confirming the updates are consistent.
-    const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 8, 8, 1.0, 1.0);
-    defer mesh.deinit(allocator);
-
-    var state = try MaxwellState.init(allocator, &mesh);
-    defer state.deinit(allocator);
-
-    // Random initial E; B = 0 (satisfies dB = 0 trivially).
-    var rng = std.Random.DefaultPrng.init(0xE0_1F_03);
-    for (state.E.values) |*v| v.* = (rng.random().float(f64) * 2.0 - 1.0) * 0.001;
-
-    // Very small dt relative to mesh spacing h = 1/8 for CFL safety.
-    const dt: f64 = 0.0001;
-    const initial_energy = state.E.norm_squared() + state.B.norm_squared();
-
-    for (0..100) |_| {
-        try leapfrog_step(allocator, &state, dt);
-    }
-
-    // Energy should stay bounded (symplectic guarantee).
-    const final_energy = state.E.norm_squared() + state.B.norm_squared();
-    try testing.expect(final_energy < initial_energy * 1.1);
-}
+// Note: the real dB = 0 structural invariant test is #39. On a 2D mesh,
+// d₂ maps into a zero-dimensional space (no 3-cells), so dB = 0 is
+// vacuously true and cannot be tested meaningfully here. The energy
+// boundedness test above already covers leapfrog stability.
