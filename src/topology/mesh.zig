@@ -71,10 +71,15 @@ pub fn Mesh(comptime n: usize) type {
         /// ∂₂: `n_faces × n_edges`. Row `f` has 3 nonzeros for the oriented boundary edges.
         boundary_2: BoundaryMatrix,
 
+        /// Indices of edges on the mesh boundary (adjacent to exactly one face).
+        /// Precomputed during construction for use by boundary condition routines.
+        boundary_edges: []u32,
+
         // -- Lifetime --
 
         /// Free all entity storage and boundary matrices.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.boundary_edges);
             self.vertices.deinit(allocator);
             self.edges.deinit(allocator);
             self.faces.deinit(allocator);
@@ -335,6 +340,7 @@ pub fn Mesh(comptime n: usize) type {
 
             // Dual edge lengths require edge→face adjacency.
             // Each edge borders at most 2 faces; boundary edges border exactly 1.
+            var boundary_edge_buf: []u32 = &.{};
             {
                 var edge_face_count = try allocator.alloc(u8, edge_count);
                 defer allocator.free(edge_face_count);
@@ -360,6 +366,10 @@ pub fn Mesh(comptime n: usize) type {
                 const circumcenters = faces_list.slice().items(.circumcenter);
                 const edge_verts = edges_list.slice().items(.vertices);
                 const dual_lengths = edges_list.slice().items(.dual_length);
+
+                // Count boundary edges (adjacent to exactly one face) and
+                // compute dual lengths in one pass.
+                var boundary_count: u32 = 0;
                 for (0..edge_count) |e| {
                     if (edge_face_count[e] == 2) {
                         dual_lengths[e] = euclidean_distance(
@@ -369,9 +379,21 @@ pub fn Mesh(comptime n: usize) type {
                     } else if (edge_face_count[e] == 1) {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
                         dual_lengths[e] = euclidean_distance(circumcenters[edge_face_0[e]], mid);
+                        boundary_count += 1;
                     }
                     // edge_face_count == 0 should not occur in a valid mesh; dual_length stays 0
                 }
+
+                // Collect boundary edge indices.
+                boundary_edge_buf = try allocator.alloc(u32, boundary_count);
+                var bi: u32 = 0;
+                for (0..edge_count) |e| {
+                    if (edge_face_count[e] == 1) {
+                        boundary_edge_buf[bi] = @intCast(e);
+                        bi += 1;
+                    }
+                }
+                std.debug.assert(bi == boundary_count);
             }
 
             // Dual vertex areas via the cotangent formula.
@@ -418,6 +440,7 @@ pub fn Mesh(comptime n: usize) type {
                 .faces = faces_list,
                 .boundary_1 = boundary_1,
                 .boundary_2 = boundary_2,
+                .boundary_edges = boundary_edge_buf,
             };
         }
 

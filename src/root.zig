@@ -43,6 +43,15 @@ pub const operators = struct {
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
 
+/// Electromagnetic field state (E, B, J) on a simplicial mesh.
+pub const MaxwellState = em.State;
+
+/// Apply PEC boundary conditions — zero E on all boundary edges.
+pub const apply_pec_boundary = em.apply_pec_boundary;
+
+/// Point dipole current source — sinusoidal J on the nearest edge.
+pub const PointDipole = em.PointDipole;
+
 // ── Top-level convenience re-exports ────────────────────────────────────
 // These allow `const flux = @import("flux"); flux.Cochain(...)` without
 // navigating the module hierarchy.
