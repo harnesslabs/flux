@@ -156,6 +156,20 @@ pub fn ampere_step(
     }
 }
 
+/// Apply perfect electric conductor (PEC) boundary conditions.
+///
+/// Zeroes E on all mesh boundary edges. In the DEC formulation, E is a
+/// primal 1-form (circulation along edges). PEC enforces that the tangential
+/// electric field vanishes on the conducting boundary — equivalently, the
+/// circulation of E along every boundary edge is zero.
+///
+/// Must be called after each Ampere step to enforce the constraint.
+pub fn apply_pec_boundary(state: anytype) void {
+    for (state.mesh.boundary_edges) |edge_idx| {
+        state.E.values[edge_idx] = 0.0;
+    }
+}
+
 /// Leapfrog integrator: advance (E, B) by one full timestep dt.
 ///
 /// Uses the standard Yee-style staggered leapfrog where B lives at
@@ -181,6 +195,86 @@ pub fn leapfrog_step(
 
     // Step 2: Ampere-Maxwell — advance E using the updated B.
     try ampere_step(allocator, state, dt);
+}
+
+/// Point dipole current source.
+///
+/// Models a localized sinusoidal current density concentrated on a single
+/// edge — the edge whose midpoint is nearest to the given position. The
+/// source produces J(t) = amplitude · sin(2π · frequency · t) on that
+/// edge, with all other edges zero.
+///
+/// In 2D DEC, J is a primal 1-form with units of A/m integrated over the
+/// edge length. The amplitude is divided by the edge length so that the
+/// cochain value represents the correctly scaled line integral: the
+/// circulation of J along the edge is amplitude · sin(...) / edge_length,
+/// giving a density-like quantity consistent with the Ampere-Maxwell update.
+pub fn PointDipole(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+
+        /// Index of the edge carrying the source.
+        edge_index: u32,
+        /// Length of the source edge (cached for scaling).
+        edge_length: f64,
+        /// Oscillation frequency in Hz.
+        frequency: f64,
+        /// Peak amplitude in amperes.
+        amplitude: f64,
+
+        /// Create a point dipole at the given position.
+        ///
+        /// Finds the edge whose midpoint is nearest to `position` and
+        /// caches its index and length for repeated evaluation.
+        pub fn init(mesh: *const MeshType, frequency: f64, amplitude: f64, position: [MeshType.dimension]f64) Self {
+            const edge_slice = mesh.edges.slice();
+            const edge_verts = edge_slice.items(.vertices);
+            const lengths = edge_slice.items(.length);
+            const coords = mesh.vertices.slice().items(.coords);
+
+            var best_edge: u32 = 0;
+            var best_distance_squared: f64 = std.math.inf(f64);
+
+            for (0..mesh.num_edges()) |e| {
+                const v0 = coords[edge_verts[e][0]];
+                const v1 = coords[edge_verts[e][1]];
+
+                // Edge midpoint.
+                var midpoint: [MeshType.dimension]f64 = undefined;
+                inline for (0..MeshType.dimension) |d| {
+                    midpoint[d] = 0.5 * (v0[d] + v1[d]);
+                }
+
+                var dist_sq: f64 = 0;
+                inline for (0..MeshType.dimension) |d| {
+                    const diff = midpoint[d] - position[d];
+                    dist_sq += diff * diff;
+                }
+
+                if (dist_sq < best_distance_squared) {
+                    best_distance_squared = dist_sq;
+                    best_edge = @intCast(e);
+                }
+            }
+
+            return .{
+                .edge_index = best_edge,
+                .edge_length = lengths[best_edge],
+                .frequency = frequency,
+                .amplitude = amplitude,
+            };
+        }
+
+        /// Evaluate the source at time `t` and write it into `J`.
+        ///
+        /// Sets J to zero everywhere except at the source edge, where
+        /// J = (amplitude / edge_length) · sin(2π · frequency · t).
+        pub fn apply(self: Self, J: anytype, t: f64) void {
+            @memset(J.values, 0.0);
+            J.values[self.edge_index] = (self.amplitude / self.edge_length) *
+                @sin(2.0 * std.math.pi * self.frequency * t);
+        }
+    };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -546,3 +640,137 @@ test "leapfrog energy bounded over 100 source-free steps" {
 // d₂ maps into a zero-dimensional space (no 3-cells), so dB = 0 is
 // vacuously true and cannot be tested meaningfully here. The energy
 // boundedness test above already covers leapfrog stability.
+
+// ── #36: PEC boundary conditions ─────────────────────────────────────────
+
+test "apply_pec_boundary zeroes E on all boundary edges" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Fill E with non-zero values.
+    for (state.E.values, 0..) |*v, i| v.* = @as(f64, @floatFromInt(i)) + 1.0;
+
+    apply_pec_boundary(&state);
+
+    // Boundary edges must be zero.
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expectEqual(@as(f64, 0), state.E.values[edge_idx]);
+    }
+
+    // At least some interior edges should remain non-zero.
+    var interior_nonzero: usize = 0;
+    for (state.E.values) |v| {
+        if (v != 0.0) interior_nonzero += 1;
+    }
+    try testing.expect(interior_nonzero > 0);
+}
+
+test "apply_pec_boundary is idempotent" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xBEC_01);
+    for (state.E.values) |*v| v.* = rng.random().float(f64);
+
+    apply_pec_boundary(&state);
+
+    // Save state after first application.
+    const snapshot = try allocator.alloc(f64, state.E.values.len);
+    defer allocator.free(snapshot);
+    @memcpy(snapshot, state.E.values);
+
+    // Apply again — should be identical.
+    apply_pec_boundary(&state);
+    for (state.E.values, snapshot) |actual, expected| {
+        try testing.expectEqual(expected, actual);
+    }
+}
+
+test "boundary edge count matches expected for rectangular grid" {
+    // An nx × ny rectangular grid has 2*(nx + ny) boundary edges on the
+    // rectangle sides, plus nx*ny diagonal edges are always interior.
+    // Boundary edges: bottom nx + top nx + left ny + right ny = 2*(nx+ny).
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2 * (5 + 4)), mesh.boundary_edges.len);
+}
+
+// ── #38: Point dipole source ─────────────────────────────────────────────
+
+const Dipole = PointDipole(Mesh2D);
+
+test "PointDipole finds nearest edge to given position" {
+    const allocator = testing.allocator;
+    // 4×4 grid on [0,4]×[0,4], edge spacing = 1.
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 4.0, 4.0);
+    defer mesh.deinit(allocator);
+
+    // Place dipole at (0.5, 0.0) — midpoint of the first horizontal edge.
+    const dipole = Dipole.init(&mesh, 1.0, 1.0, .{ 0.5, 0.0 });
+
+    // The selected edge should have its midpoint very close to (0.5, 0).
+    const verts = mesh.edges.slice().items(.vertices)[dipole.edge_index];
+    const coords = mesh.vertices.slice().items(.coords);
+    const mx = 0.5 * (coords[verts[0]][0] + coords[verts[1]][0]);
+    const my = 0.5 * (coords[verts[0]][1] + coords[verts[1]][1]);
+
+    try testing.expectApproxEqAbs(@as(f64, 0.5), mx, 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), my, 1e-12);
+}
+
+test "PointDipole.apply produces sinusoidal source on one edge" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 4.0, 4.0);
+    defer mesh.deinit(allocator);
+
+    const frequency: f64 = 2.0;
+    const amplitude: f64 = 3.0;
+    const dipole = Dipole.init(&mesh, frequency, amplitude, .{ 2.0, 2.0 });
+
+    var J = try MaxwellState.OneForm.init(allocator, &mesh);
+    defer J.deinit(allocator);
+
+    // At t = 0, sin(0) = 0 → J should be zero everywhere.
+    dipole.apply(&J, 0.0);
+    for (J.values) |v| try testing.expectEqual(@as(f64, 0), v);
+
+    // At t = 1/(4·frequency), sin(π/2) = 1 → peak value on source edge.
+    const t_quarter = 1.0 / (4.0 * frequency);
+    dipole.apply(&J, t_quarter);
+
+    const expected_peak = amplitude / dipole.edge_length;
+    try testing.expectApproxEqAbs(expected_peak, J.values[dipole.edge_index], 1e-12);
+
+    // All other edges should be zero.
+    for (J.values, 0..) |v, i| {
+        if (i != dipole.edge_index) {
+            try testing.expectEqual(@as(f64, 0), v);
+        }
+    }
+}
+
+test "PointDipole.apply at half period is zero" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const dipole = Dipole.init(&mesh, 5.0, 1.0, .{ 0.5, 0.5 });
+    var J = try MaxwellState.OneForm.init(allocator, &mesh);
+    defer J.deinit(allocator);
+
+    // At t = 1/(2·frequency), sin(π) ≈ 0.
+    dipole.apply(&J, 1.0 / (2.0 * 5.0));
+    for (J.values) |v| {
+        try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-12);
+    }
+}
