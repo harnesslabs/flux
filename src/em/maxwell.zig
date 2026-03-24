@@ -57,6 +57,8 @@ pub fn State(comptime MeshType: type) type {
         J: OneForm,
         /// The mesh this state is defined on.
         mesh: *const MeshType,
+        /// Discrete timestep counter (number of completed leapfrog steps).
+        timestep: u64,
 
         /// Allocate a zero-initialized Maxwell state on the given mesh.
         pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
@@ -69,7 +71,7 @@ pub fn State(comptime MeshType: type) type {
             var J = try OneForm.init(allocator, mesh);
             errdefer J.deinit(allocator);
 
-            return .{ .E = E, .B = B, .J = J, .mesh = mesh };
+            return .{ .E = E, .B = B, .J = J, .mesh = mesh, .timestep = 0 };
         }
 
         /// Free all field storage.
@@ -195,6 +197,9 @@ pub fn leapfrog_step(
 
     // Step 2: Ampere-Maxwell — advance E using the updated B.
     try ampere_step(allocator, state, dt);
+
+    // Step 3: Advance the discrete timestep counter.
+    state.timestep += 1;
 }
 
 /// Point dipole current source.
