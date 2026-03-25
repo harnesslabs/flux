@@ -283,6 +283,46 @@ pub fn PointDipole(comptime MeshType: type) type {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Energy diagnostic
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Discrete electromagnetic energy: U = ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
+///
+/// This is the Hodge-weighted L² norm — the natural inner product on
+/// differential forms induced by the mesh metric. The leapfrog integrator
+/// conserves this quantity (up to O(dt²) oscillation) for source-free fields.
+///
+/// For degenerate edges (dual_length = 0), ★₁ maps to zero, contributing
+/// nothing to the energy — physically correct since those edges carry no
+/// field information.
+pub fn electromagnetic_energy(
+    allocator: std.mem.Allocator,
+    state: anytype,
+) !f64 {
+    // ★₁(E): primal 1-form → dual 1-form.
+    var star_E = try hs.hodge_star(allocator, state.E);
+    defer star_E.deinit(allocator);
+
+    // ★₂(B): primal 2-form → dual 0-form.
+    var star_B = try hs.hodge_star(allocator, state.B);
+    defer star_B.deinit(allocator);
+
+    // ⟨E, ★₁E⟩ = Σᵢ Eᵢ · (★₁E)ᵢ
+    var e_energy: f64 = 0.0;
+    for (state.E.values, star_E.values) |e, se| {
+        e_energy += e * se;
+    }
+
+    // ⟨B, ★₂B⟩ = Σᵢ Bᵢ · (★₂B)ᵢ
+    var b_energy: f64 = 0.0;
+    for (state.B.values, star_B.values) |b, sb| {
+        b_energy += b * sb;
+    }
+
+    return 0.5 * (e_energy + b_energy);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Simulation runner
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1093,4 +1133,119 @@ test "Runner with output_interval 0 writes no files" {
     });
 
     try testing.expectEqual(@as(u64, 5), state.timestep);
+}
+
+// ── #40: Energy tracking ─────────────────────────────────────────────────
+
+test "electromagnetic_energy is zero for zero fields" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    const energy = try electromagnetic_energy(allocator, &state);
+    try testing.expectEqual(@as(f64, 0.0), energy);
+}
+
+test "electromagnetic_energy is non-negative" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 6, 6, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Random fields — energy must still be ≥ 0 since ★ₖ diagonal entries
+    // are non-negative (ratios of geometric volumes).
+    var rng = std.Random.DefaultPrng.init(0xE0_E40_01);
+    for (state.E.values) |*v| v.* = rng.random().float(f64) * 2.0 - 1.0;
+    for (state.B.values) |*v| v.* = rng.random().float(f64) * 2.0 - 1.0;
+
+    const energy = try electromagnetic_energy(allocator, &state);
+    try testing.expect(energy >= 0.0);
+}
+
+test "electromagnetic_energy uses Hodge-weighted inner product" {
+    // Verify that energy ≠ ½(‖E‖² + ‖B‖²) in general — the Hodge star
+    // weights make a difference on non-unit meshes.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 3.0, 2.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Set a single non-zero E component.
+    state.E.values[0] = 1.0;
+
+    const energy = try electromagnetic_energy(allocator, &state);
+    const unweighted = 0.5 * state.E.norm_squared();
+
+    // On a non-unit mesh, Hodge-weighted and unweighted differ.
+    try testing.expect(energy != unweighted);
+    try testing.expect(energy > 0.0);
+}
+
+// ── #46: End-to-end integration ──────────────────────────────────────────
+
+test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
+    // M3 acceptance test. Runs a dipole simulation for 100 steps and verifies:
+    //   1. dB = 0 at every step (structurally guaranteed in 2D — B is a
+    //      top-form, so d₂B lives in the zero-dimensional 3-form space).
+    //   2. Energy is bounded — not growing without bound.
+    //
+    // The energy check is the substantive diagnostic. With a source driving
+    // the system, energy will grow (the source injects energy), but it must
+    // remain finite and bounded — no numerical blowup.
+    const allocator = testing.allocator;
+
+    var mesh = try Mesh2D.uniform_grid(allocator, 8, 8, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Place a dipole source near the center.
+    const dipole = PointDipole(Mesh2D).init(&mesh, 10.0, 0.1, .{ 0.5, 0.5 });
+
+    // dt chosen small relative to mesh spacing for CFL stability.
+    const dt: f64 = 0.001;
+    const num_steps: usize = 100;
+
+    var energy_max: f64 = 0.0;
+
+    for (0..num_steps) |step_idx| {
+        const t = @as(f64, @floatFromInt(step_idx)) * dt;
+        dipole.apply(&state.J, t);
+
+        try leapfrog_step(allocator, &state, dt);
+        apply_pec_boundary(&state);
+
+        // ── Invariant 1: dB = 0 ──
+        // In 2D, B is a 2-form (top-form). d₂ would map into 3-forms,
+        // which don't exist on a 2D mesh — the type system rejects
+        // `exterior_derivative(B)` at comptime. This is the strongest
+        // possible guarantee: dB = 0 is not checked numerically because
+        // it is structurally unrepresentable as a nonzero object.
+        comptime {
+            std.debug.assert(MaxwellState.TwoForm.degree == Mesh2D.dimension);
+        }
+
+        // ── Invariant 2: energy is finite ──
+        const energy = try electromagnetic_energy(allocator, &state);
+        try testing.expect(!std.math.isNan(energy));
+        try testing.expect(!std.math.isInf(energy));
+        energy_max = @max(energy_max, energy);
+    }
+
+    // Verify simulation actually ran and produced non-trivial fields.
+    try testing.expectEqual(@as(u64, num_steps), state.timestep);
+    try testing.expect(energy_max > 0.0);
+
+    // Energy should stay bounded. With a weak source (amplitude 0.1) over
+    // 100 steps at dt = 0.001, energy should be small. A blowup would
+    // produce energy >> 1.
+    try testing.expect(energy_max < 1.0);
 }
