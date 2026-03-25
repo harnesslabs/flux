@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Visualize flux VTK output as an animated GIF.
+
+Usage:
+    uv run tools/visualize.py /tmp/flux-cavity
+    uv run tools/visualize.py /tmp/flux-dipole --field B_flux
+    uv run tools/visualize.py /tmp/flux-cavity --output cavity.gif --fps 15
+"""
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["matplotlib", "pillow"]
+# ///
+
+import argparse
+import glob
+import io
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import matplotlib.tri as tri
+import numpy as np
+from PIL import Image
+
+
+def parse_vtu(path: str) -> dict:
+    """Parse a VTK .vtu XML file and return points, cells, and cell data."""
+    tree = ET.parse(path)
+    root = tree.getroot()
+    piece = root.find(".//Piece")
+
+    n_points = int(piece.attrib["NumberOfPoints"])
+    n_cells = int(piece.attrib["NumberOfCells"])
+
+    # Points (vertex coordinates).
+    points_el = piece.find(".//Points/DataArray")
+    coords = np.fromstring(points_el.text, sep=" ").reshape(n_points, 3)
+
+    # Cell connectivity.
+    connectivity_el = piece.find(".//Cells/DataArray[@Name='connectivity']")
+    conn = np.fromstring(connectivity_el.text, sep=" ", dtype=int)
+
+    offsets_el = piece.find(".//Cells/DataArray[@Name='offsets']")
+    offsets = np.fromstring(offsets_el.text, sep=" ", dtype=int)
+
+    # Build triangle array (assume all cells are triangles).
+    triangles = conn.reshape(n_cells, 3)
+
+    # Cell data arrays.
+    cell_data = {}
+    for da in piece.findall(".//CellData/DataArray"):
+        name = da.attrib["Name"]
+        cell_data[name] = np.fromstring(da.text, sep=" ")
+
+    return {
+        "x": coords[:, 0],
+        "y": coords[:, 1],
+        "triangles": triangles,
+        "cell_data": cell_data,
+    }
+
+
+def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
+                 frame_idx: int, n_frames: int) -> Image.Image:
+    """Render a single frame as a PIL Image."""
+    fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=100)
+
+    triang = tri.Triangulation(data["x"], data["y"], data["triangles"])
+    values = data["cell_data"][field_name]
+
+    ax.tripcolor(triang, values, shading="flat", cmap="RdBu_r",
+                 vmin=vmin, vmax=vmax)
+    ax.set_aspect("equal")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(f"{field_name}  (frame {frame_idx}/{n_frames})")
+
+    # Colorbar.
+    sm = plt.cm.ScalarMappable(cmap="RdBu_r",
+                               norm=plt.Normalize(vmin=vmin, vmax=vmax))
+    fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
+
+    fig.tight_layout()
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    buf.seek(0)
+    return Image.open(buf).copy()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Visualize flux VTK output as GIF")
+    parser.add_argument("input_dir", help="Directory containing .vtu files")
+    parser.add_argument("--field", default="B_flux",
+                        help="CellData field to plot (default: B_flux)")
+    parser.add_argument("--output", default=None,
+                        help="Output GIF path (default: <input_dir>/animation.gif)")
+    parser.add_argument("--fps", type=int, default=12, help="Frames per second")
+    args = parser.parse_args()
+
+    # Find all .vtu files sorted by name.
+    vtu_files = sorted(glob.glob(str(Path(args.input_dir) / "*.vtu")))
+    if not vtu_files:
+        print(f"No .vtu files found in {args.input_dir}")
+        return
+
+    print(f"Found {len(vtu_files)} frames in {args.input_dir}")
+
+    # First pass: determine global value range for consistent colorbar.
+    print("Scanning value range...")
+    global_min = float("inf")
+    global_max = float("-inf")
+    for f in vtu_files:
+        data = parse_vtu(f)
+        if args.field not in data["cell_data"]:
+            available = list(data["cell_data"].keys())
+            print(f"Field '{args.field}' not found. Available: {available}")
+            return
+        vals = data["cell_data"][args.field]
+        global_min = min(global_min, vals.min())
+        global_max = max(global_max, vals.max())
+
+    # Symmetric range for diverging colormap.
+    vabs = max(abs(global_min), abs(global_max))
+    if vabs == 0:
+        vabs = 1.0
+    print(f"Value range: [{-vabs:.4e}, {vabs:.4e}]")
+
+    # Render frames.
+    frames = []
+    for i, f in enumerate(vtu_files):
+        if i % 10 == 0:
+            print(f"  rendering frame {i+1}/{len(vtu_files)}...")
+        data = parse_vtu(f)
+        img = render_frame(data, args.field, -vabs, vabs, i + 1, len(vtu_files))
+        frames.append(img)
+
+    # Save GIF.
+    output_path = args.output or str(Path(args.input_dir) / "animation.gif")
+    duration_ms = int(1000 / args.fps)
+    frames[0].save(output_path, save_all=True, append_images=frames[1:],
+                   duration=duration_ms, loop=0)
+    print(f"\nSaved {output_path} ({len(frames)} frames, {args.fps} fps)")
+
+
+if __name__ == "__main__":
+    main()
