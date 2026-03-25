@@ -1377,6 +1377,87 @@ fn run_cavity_convergence(allocator: std.mem.Allocator, grid_n: u32, final_time:
     return @abs(numerical_energy - analytical_energy) / analytical_energy;
 }
 
+/// Compute the discrete TE₁₀ eigenvalue ω² via Rayleigh quotient.
+///
+/// Projects the analytical TE₁₀ E-mode onto the mesh, applies the DEC
+/// curl-curl operator (★₁⁻¹ d̃₀ ★₂ d₁), and returns the Rayleigh quotient:
+///   ω²_num = ⟨curl_curl(E), ★₁ E⟩ / ⟨E, ★₁ E⟩
+///
+/// This gives the exact discrete eigenvalue without time-stepping.
+fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_length: f64) !f64 {
+    var mesh = try Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
+    defer mesh.deinit(allocator);
+
+    // Project the TE₁₀ E-mode at t = π/(2ω) where sin(ωt) = 1,
+    // so E(edge) = sin(πx/L) · dy (maximum amplitude snapshot).
+    const e_values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(e_values);
+    project_te10_e(&mesh, e_values, domain_length / 2.0, domain_length);
+
+    // Build a cochain wrapper around e_values for operator calls.
+    var E = try MaxwellState.OneForm.init(allocator, &mesh);
+    defer E.deinit(allocator);
+    @memcpy(E.values, e_values);
+
+    // Apply the curl-curl operator: ★₁⁻¹ d̃₀ ★₂ d₁(E).
+    // Step 1: d₁(E) → primal 2-form.
+    var dE = try ext.exterior_derivative(allocator, E);
+    defer dE.deinit(allocator);
+
+    // Energy-based Rayleigh quotient:
+    //   ω² = ⟨d₁E, ★₂ d₁E⟩ / ⟨E, ★₁ E⟩
+    // This avoids ★₁⁻¹ entirely, sidestepping the pseudo-inverse issue
+    // with degenerate diagonal edges (dual_length = 0).
+    const face_areas = mesh.faces.slice().items(.area);
+    var numerator: f64 = 0.0;
+    for (dE.values, face_areas) |de, area| {
+        // ⟨dE, ★₂ dE⟩ = Σ_f (dE_f)² / area_f
+        numerator += de * de / area;
+    }
+
+    const edge_slice = mesh.edges.slice();
+    const lengths = edge_slice.items(.length);
+    const dual_lengths = edge_slice.items(.dual_length);
+    var denominator: f64 = 0.0;
+    for (e_values, lengths, dual_lengths) |e, len, dual_len| {
+        // ⟨E, ★₁ E⟩ = Σ_e (dual_len / len) · E²
+        denominator += (dual_len / len) * e * e;
+    }
+
+    return numerator / denominator;
+}
+
+test "TE₁₀ cavity: discrete eigenfrequency converges to analytical ω² = π²/L²" {
+    // The DEC curl-curl operator ★₁⁻¹ d̃₀ ★₂ d₁ acting on the TE₁₀
+    // eigenmode E_y = sin(πx/L) should produce approximately ω² · E
+    // where ω = π/L is the analytical resonant frequency.
+    //
+    // We measure the Rayleigh quotient ω²_num = ⟨ΔE, ★₁E⟩ / ⟨E, ★₁E⟩
+    // at two grid resolutions and verify:
+    //   1. The finer grid is closer to the analytical ω² = π²/L².
+    //   2. Both are within a reasonable discretization tolerance.
+    const allocator = testing.allocator;
+    const domain_length: f64 = 1.0;
+    const analytical_omega_sq = std.math.pi * std.math.pi / (domain_length * domain_length);
+
+    const omega_sq_coarse = try compute_te10_eigenvalue(allocator, 8, domain_length);
+    const omega_sq_fine = try compute_te10_eigenvalue(allocator, 16, domain_length);
+
+    const error_coarse = @abs(omega_sq_coarse - analytical_omega_sq) / analytical_omega_sq;
+    const error_fine = @abs(omega_sq_fine - analytical_omega_sq) / analytical_omega_sq;
+
+    // Both eigenvalues should be positive.
+    try testing.expect(omega_sq_coarse > 0.0);
+    try testing.expect(omega_sq_fine > 0.0);
+
+    // Finer grid should be closer to analytical.
+    try testing.expect(error_fine < error_coarse);
+
+    // Fine grid (16×16) should be within 25% — the circumcentric dual
+    // on the diagonal mesh has larger eigenvalue error than standard FD.
+    try testing.expect(error_fine < 0.25);
+}
+
 test "convergence: halving grid spacing decreases E field error for TE₁₀ cavity mode" {
     // Acceptance criterion (#44): error in E decreases by factor ≥ 1.5
     // when grid is halved (first-order convergence expected for DEC).
