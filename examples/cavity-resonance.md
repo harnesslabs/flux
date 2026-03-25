@@ -1,8 +1,13 @@
 # TE₁₀ Cavity Resonance
 
-A 2D electromagnetic standing wave in a square PEC (perfect electric conductor)
-cavity — the simplest non-trivial test of the Maxwell solver against a known
+A source-free electromagnetic standing wave in a square PEC cavity — the
+simplest non-trivial validation of the Maxwell solver against a known
 analytical solution.
+
+```sh
+zig build run -- --demo cavity --steps 2000 --output output/cavity
+uv run tools/visualize.py output/cavity --field B_flux --output cavity.gif
+```
 
 ---
 
@@ -20,145 +25,96 @@ in y) on a `[0, L] × [0, L]` domain has:
 
 With wave speed c = 1:
 
-- **Resonant frequency:** ω = π/L, so f = 1/(2L) Hz
+- **Resonant frequency:** ω = π/L, giving f = 1/(2L) Hz
 - **Period:** T = 2L
 - **Wavelength:** λ = 2L (one full wavelength fits the cavity)
 
-The PEC boundary conditions (E tangential = 0 on walls) are automatically
+The PEC boundary conditions (tangential E = 0 on walls) are automatically
 satisfied: sin(πx/L) vanishes at x = 0 and x = L.
 
-### What you see in the visualization
+### Initial conditions
 
-- **B_flux** (magnetic field): A cos(πx) pattern — positive (red) on the left
-  half, negative (blue) on the right, with a nodal line at x = 0.5. This
-  pattern oscillates in amplitude over time as energy transfers between E and B.
+The demo initializes the exact analytical mode and runs **source-free** — no
+current drives the system. The leapfrog integrator uses staggered fields:
 
-- **E_intensity** (electric field): A sin(πx) pattern — strongest at x = 0.5,
-  zero at the walls. Quarter-period out of phase with B: when B is at maximum
-  amplitude, E is zero, and vice versa.
+- **E** at t = 0: sin(πx/L) · sin(0) = **0** (zero-initialized)
+- **B** at t = −dt/2: cos(πx/L) · cos(−ωdt/2) ≈ cos(πx/L) (projected onto face integrals)
 
-The sawtooth texture visible in the plots comes from the triangular mesh — each
-square cell is split by a SW→NE diagonal, creating a characteristic pattern in
-the per-face field values.
+The standing wave persists indefinitely, trading energy back and forth between
+E and B.
 
-### Energy conservation
+### What you see
+
+- **B_flux**: cos(πx/L) pattern — red on the left, blue on the right, nodal
+  line at x = L/2. Oscillates in amplitude as energy flows between E and B.
+- **E_intensity**: sin(πx/L) pattern — strongest at x = L/2, zero at walls.
+  Quarter-period out of phase with B.
+
+The sawtooth texture in the plots comes from the triangulated mesh — each square
+cell is split by a SW→NE diagonal.
+
+---
+
+## Parameters to explore
+
+### Grid resolution: coarse vs fine
+
+Compare the mesh-induced artifact pattern at different resolutions. The standing
+wave is the same; the triangulation effects shrink with refinement.
+
+```sh
+# Coarse (visible triangulation artifacts)
+zig build run -- --demo cavity --grid 8 --steps 500 --output output/cavity-8x8
+
+# Medium (default)
+zig build run -- --demo cavity --grid 32 --steps 2000 --output output/cavity-32x32
+
+# Fine (smooth, but slower)
+zig build run -- --demo cavity --grid 64 --steps 4000 --output output/cavity-64x64
+```
+
+### Domain size
+
+Changing the domain length L changes the resonant frequency (ω = π/L). A larger
+cavity resonates at a lower frequency with a longer period.
+
+```sh
+# Small cavity — high frequency, fast oscillation
+zig build run -- --demo cavity --domain 0.5 --steps 2000 --output output/cavity-small
+
+# Large cavity — low frequency, slow oscillation
+zig build run -- --demo cavity --domain 2.0 --steps 2000 --output output/cavity-large
+```
+
+### Courant number
+
+Controls the timestep size relative to the mesh spacing (dt = C · h). Smaller
+values are more accurate but need more steps to cover the same physical time.
+
+```sh
+# Conservative (very accurate, slow)
+zig build run -- --demo cavity --courant 0.05 --steps 4000 --output output/cavity-conservative
+
+# Aggressive (faster, more dispersion)
+zig build run -- --demo cavity --courant 0.4 --steps 500 --output output/cavity-fast
+```
+
+---
+
+## Energy conservation
 
 Total electromagnetic energy U = ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩) is conserved by the
-symplectic leapfrog integrator. Over 2000 steps (~3 periods), energy drift is
-< 0.02%. The energy oscillates between the E and B fields but the sum stays
-constant — this is the defining property of a standing wave.
+symplectic leapfrog integrator. The energy ratio printed at the end should stay
+close to 1.0 — any drift indicates the Courant number is too large for the mesh.
+
+| Run | Energy ratio after 3 periods |
+|-----|------------------------------|
+| 32×32, C = 0.1 | 0.999818 |
+| 64×64, C = 0.1 | 0.999349 (500 steps, partial period) |
 
 ---
 
-## Running the demos
-
-### Prerequisites
-
-- Zig 0.15.2+
-- Python 3.10+ with [uv](https://github.com/astral-sh/uv) (for visualization)
-
-### Cavity demo (source-free standing wave)
-
-Initializes the exact TE₁₀ analytical mode and evolves it with the leapfrog
-integrator. No source term — the standing wave persists indefinitely.
-
-```sh
-zig build run -- --demo cavity --steps 2000 --output output/cavity
-```
-
-### Dipole demo (default — driven simulation)
-
-Places a sinusoidal point dipole at the cavity center, driving waves at the
-TE₁₀ resonant frequency. Waves radiate outward and reflect off the PEC walls.
-
-```sh
-zig build run -- --steps 1000 --output output/dipole
-```
-
-### CLI reference
-
-```
-usage: flux [--demo <name>] [options]
-
-demos:
-  dipole    (default) point dipole radiating in a PEC cavity
-  cavity    TE₁₀ standing wave in a PEC resonant cavity
-
-options:
-  --steps N     number of timesteps (default: 1000)
-  --output DIR  output directory for VTK files (default: output)
-  --help        show this message
-```
-
-Both demos use a 32×32 triangulated grid (2048 triangles) on a unit square
-domain with dt = 0.003125 (Courant number 0.1). Output is a set of VTK `.vtu`
-snapshot files plus a `.pvd` collection file for animation.
-
----
-
-## Visualization
-
-### Quick GIF (no ParaView needed)
-
-```sh
-uv run tools/visualize.py output/cavity --field B_flux --output cavity.gif
-```
-
-This parses the VTK XML files directly and renders each frame with matplotlib.
-No ParaView installation required — `uv` handles all Python dependencies
-automatically.
-
-#### visualize.py reference
-
-```
-usage: uv run tools/visualize.py <input_dir> [options]
-
-positional:
-  input_dir            directory containing .vtu files
-
-options:
-  --field FIELD        CellData field to plot (default: B_flux)
-  --output PATH        output GIF path (default: <input_dir>/animation.gif)
-  --fps N              frames per second (default: 12)
-```
-
-Available fields in the VTK output:
-
-| Field | Meaning |
-|-------|---------|
-| `B_flux` | Magnetic flux density (primal 2-form, per face) |
-| `E_intensity` | Electric field intensity (primal 1-form projected to faces) |
-
-### ParaView (full-featured)
-
-If you have [ParaView](https://www.paraview.org/) installed, open the `.pvd`
-collection file directly:
-
-```sh
-open output/cavity/cavity.pvd    # macOS
-paraview output/cavity/cavity.pvd  # Linux
-```
-
-ParaView gives interactive 3D viewing, custom colormaps, streamlines, and
-animation export. The `.pvd` file indexes all `.vtu` snapshots with their
-simulation timestamps for correct time-axis playback.
-
----
-
-## Numerical details
-
-### Discretization
-
-The simulation uses **Discrete Exterior Calculus (DEC)** on a 2D simplicial
-mesh. Fields are represented as typed cochains — E is a primal 1-form
-(one value per edge), B is a primal 2-form (one value per face). The type
-system enforces correct operator composition at compile time.
-
-The leapfrog time integrator staggers E at integer steps and B at half-steps
-(Yee-style), giving second-order accuracy in time and exact conservation of the
-symplectic structure.
-
-### Eigenfrequency accuracy
+## Eigenfrequency accuracy
 
 The discrete eigenfrequency ω² converges to the analytical π²/L² with O(h²):
 
@@ -167,13 +123,6 @@ The discrete eigenfrequency ω² converges to the analytical π²/L² with O(h²
 | 8×8 | 0.125 | 9.838 | 9.870 | 0.32% |
 | 16×16 | 0.0625 | 9.862 | 9.870 | 0.08% |
 
-This is measured via the energy-based Rayleigh quotient ⟨d₁E, ★₂ d₁E⟩ / ⟨E, ★₁ E⟩,
+Measured via the energy-based Rayleigh quotient ⟨d₁E, ★₂ d₁E⟩ / ⟨E, ★₁ E⟩,
 which avoids the ★₁⁻¹ pseudo-inverse singularity on degenerate diagonal edges.
-
-### Key invariant
-
-The identity dB = 0 (no magnetic monopoles) is enforced **structurally**, not
-numerically. In 2D, B is a top-form (2-form on a 2D mesh), so d₂B would live
-in the 3-form space — which doesn't exist. The type system rejects
-`exterior_derivative(B)` at compile time. This is the strongest possible
-guarantee: the constraint cannot be violated because it cannot be expressed.
+This test runs in CI (`zig build test`).
