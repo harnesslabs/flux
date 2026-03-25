@@ -1265,7 +1265,7 @@ test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
 /// Project the analytical TE₁₀ E field onto mesh edges at time t.
 ///
 /// Each edge value = ∫ E · dl ≈ E(midpoint) · edge_vector.
-fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
+pub fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
     const edge_slice = mesh.edges.slice();
     const edge_verts = edge_slice.items(.vertices);
     const coords = mesh.vertices.slice().items(.coords);
@@ -1286,7 +1286,7 @@ fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64
 /// Project the analytical TE₁₀ B field onto mesh faces at time t.
 ///
 /// Each face value = ∫∫ B_z dA ≈ B_z(centroid) · area.
-fn project_te10_b(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
+pub fn project_te10_b(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
     const face_slice = mesh.faces.slice();
     const face_verts = face_slice.items(.vertices);
     const face_areas = face_slice.items(.area);

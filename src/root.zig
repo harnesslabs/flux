@@ -61,6 +61,12 @@ pub const RunConfig = em.RunConfig;
 /// Discrete electromagnetic energy: ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
 pub const electromagnetic_energy = em.electromagnetic_energy;
 
+/// Project analytical TE₁₀ E field onto mesh edges at time t.
+pub const project_te10_e = em.project_te10_e;
+
+/// Project analytical TE₁₀ B field onto mesh faces at time t.
+pub const project_te10_b = em.project_te10_b;
+
 /// Write E and B fields to a VTK .vtu file (E projected onto faces).
 pub const write_fields = io.write_fields;
 
