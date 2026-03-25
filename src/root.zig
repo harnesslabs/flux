@@ -58,6 +58,9 @@ pub const Runner = em.Runner;
 /// Configuration for the simulation runner.
 pub const RunConfig = em.RunConfig;
 
+/// Discrete electromagnetic energy: ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
+pub const electromagnetic_energy = em.electromagnetic_energy;
+
 /// Write E and B fields to a VTK .vtu file (E projected onto faces).
 pub const write_fields = io.write_fields;
 
