@@ -57,6 +57,8 @@ pub fn State(comptime MeshType: type) type {
         J: OneForm,
         /// The mesh this state is defined on.
         mesh: *const MeshType,
+        /// Discrete timestep counter (number of completed leapfrog steps).
+        timestep: u64,
 
         /// Allocate a zero-initialized Maxwell state on the given mesh.
         pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
@@ -69,7 +71,7 @@ pub fn State(comptime MeshType: type) type {
             var J = try OneForm.init(allocator, mesh);
             errdefer J.deinit(allocator);
 
-            return .{ .E = E, .B = B, .J = J, .mesh = mesh };
+            return .{ .E = E, .B = B, .J = J, .mesh = mesh, .timestep = 0 };
         }
 
         /// Free all field storage.
@@ -195,6 +197,9 @@ pub fn leapfrog_step(
 
     // Step 2: Ampere-Maxwell — advance E using the updated B.
     try ampere_step(allocator, state, dt);
+
+    // Step 3: Advance the discrete timestep counter.
+    state.timestep += 1;
 }
 
 /// Point dipole current source.
@@ -283,6 +288,34 @@ pub fn PointDipole(comptime MeshType: type) type {
 
 const Mesh2D = topology.Mesh(2);
 const MaxwellState = State(Mesh2D);
+
+// ── #37: Simulation state — timestep tracking ─────────────────────────
+
+test "MaxwellState initializes with timestep zero" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try testing.expectEqual(@as(u64, 0), state.timestep);
+}
+
+test "leapfrog_step advances timestep" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try leapfrog_step(allocator, &state, 0.01);
+    try testing.expectEqual(@as(u64, 1), state.timestep);
+
+    try leapfrog_step(allocator, &state, 0.01);
+    try testing.expectEqual(@as(u64, 2), state.timestep);
+}
 
 // ── #32: Field assignments ─────────────────────────────────────────────
 
