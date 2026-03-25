@@ -52,6 +52,18 @@ pub const apply_pec_boundary = em.apply_pec_boundary;
 /// Point dipole current source — sinusoidal J on the nearest edge.
 pub const PointDipole = em.PointDipole;
 
+/// Simulation runner — drives the leapfrog loop with configurable output.
+pub const Runner = em.Runner;
+
+/// Configuration for the simulation runner.
+pub const RunConfig = em.RunConfig;
+
+/// Write E and B fields to a VTK .vtu file (E projected onto faces).
+pub const write_fields = io.write_fields;
+
+/// Project a 1-form (edge values) to per-face averages for VTK export.
+pub const project_edges_to_faces = io.project_edges_to_faces;
+
 // ── Top-level convenience re-exports ────────────────────────────────────
 // These allow `const flux = @import("flux"); flux.Cochain(...)` without
 // navigating the module hierarchy.

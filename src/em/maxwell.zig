@@ -283,6 +283,167 @@ pub fn PointDipole(comptime MeshType: type) type {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Simulation runner
+// ═══════════════════════════════════════════════════════════════════════════
+
+const vtk = @import("../io/vtk.zig");
+const fs = std.fs;
+
+/// Configuration for the simulation runner.
+pub const RunConfig = struct {
+    /// Number of leapfrog timesteps to execute.
+    steps: u32,
+    /// Timestep size dt.
+    dt: f64,
+    /// Write a VTK snapshot every this many steps. 0 = no output.
+    output_interval: u32 = 0,
+    /// Directory path for VTK output files. Must exist if output_interval > 0.
+    output_path: ?[]const u8 = null,
+    /// Base name for snapshot files (e.g., "field" → "field_0000.vtu").
+    output_base_name: []const u8 = "field",
+};
+
+/// Simulation runner: advances a Maxwell state through a configured number
+/// of leapfrog timesteps, applying PEC boundary conditions and optionally
+/// writing VTK snapshots at a fixed interval.
+///
+/// The runner does not own the state or mesh — the caller manages their
+/// lifetimes. The runner is a pure orchestrator: it sequences the leapfrog
+/// integrator, boundary conditions, and I/O without adding physics.
+pub fn Runner(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+        const MState = State(MeshType);
+
+        /// Run the simulation for `config.steps` timesteps.
+        ///
+        /// At each step:
+        ///   1. Update the current source J (if source is provided).
+        ///   2. Advance fields via leapfrog (Faraday then Ampere).
+        ///   3. Apply PEC boundary conditions.
+        ///   4. Write a VTK snapshot if the step is a multiple of output_interval.
+        ///
+        /// After the loop, writes a .pvd collection file referencing all snapshots
+        /// (if any were written) so ParaView can load them as an animation.
+        pub fn run(
+            allocator: std.mem.Allocator,
+            state: *MState,
+            source: anytype,
+            config: RunConfig,
+        ) !void {
+            std.debug.assert(config.steps > 0);
+            std.debug.assert(config.dt > 0);
+
+            const has_output = config.output_interval > 0 and config.output_path != null;
+            const has_source = @TypeOf(source) != @TypeOf(null);
+
+            // Pre-allocate PVD entry storage for all snapshots we'll write.
+            const max_snapshots = if (has_output)
+                (config.steps / config.output_interval) + 1 // +1 for possible step 0
+            else
+                0;
+
+            var pvd_filenames: []vtk.PvdEntry = &.{};
+            var snapshot_count: u32 = 0;
+            var filename_bufs: [][vtk.max_snapshot_filename_length]u8 = &.{};
+
+            if (has_output) {
+                pvd_filenames = try allocator.alloc(vtk.PvdEntry, max_snapshots);
+                filename_bufs = try allocator.alloc([vtk.max_snapshot_filename_length]u8, max_snapshots);
+            }
+            defer if (has_output) {
+                allocator.free(pvd_filenames);
+                allocator.free(filename_bufs);
+            };
+
+            for (0..config.steps) |step_idx| {
+                const t = @as(f64, @floatFromInt(step_idx)) * config.dt;
+
+                // Update source.
+                if (has_source) {
+                    source.apply(&state.J, t);
+                }
+
+                // Advance fields.
+                try leapfrog_step(allocator, state, config.dt);
+
+                // Enforce PEC boundary conditions.
+                apply_pec_boundary(state);
+
+                // Write VTK snapshot if at output interval.
+                if (has_output and (step_idx + 1) % config.output_interval == 0) {
+                    const filename = vtk.snapshot_filename(
+                        &filename_bufs[snapshot_count],
+                        config.output_base_name,
+                        snapshot_count,
+                    );
+
+                    try writeSnapshot(allocator, config.output_path.?, filename, state);
+
+                    pvd_filenames[snapshot_count] = .{
+                        .timestep = t + config.dt,
+                        .filename = filename,
+                    };
+                    snapshot_count += 1;
+                }
+            }
+
+            // Write PVD collection file.
+            if (has_output and snapshot_count > 0) {
+                try writePvd(allocator, config.output_path.?, config.output_base_name, pvd_filenames[0..snapshot_count]);
+            }
+        }
+
+        fn writeSnapshot(
+            allocator: std.mem.Allocator,
+            output_dir: []const u8,
+            filename: []const u8,
+            state: *const MState,
+        ) !void {
+            // Build VTK content in memory, then write to file.
+            var output = std.ArrayListUnmanaged(u8){};
+            defer output.deinit(allocator);
+
+            try vtk.write_fields(
+                allocator,
+                output.writer(allocator),
+                MeshType.dimension,
+                state.mesh.*,
+                state.E.values,
+                state.B.values,
+            );
+
+            var dir = try fs.cwd().openDir(output_dir, .{});
+            defer dir.close();
+            const file = try dir.createFile(filename, .{});
+            defer file.close();
+            try file.writeAll(output.items);
+        }
+
+        fn writePvd(
+            allocator: std.mem.Allocator,
+            output_dir: []const u8,
+            base_name: []const u8,
+            entries: []const vtk.PvdEntry,
+        ) !void {
+            var output = std.ArrayListUnmanaged(u8){};
+            defer output.deinit(allocator);
+
+            try vtk.write_pvd(output.writer(allocator), entries);
+
+            const pvd_name = try std.fmt.allocPrint(allocator, "{s}.pvd", .{base_name});
+            defer allocator.free(pvd_name);
+
+            var dir = try fs.cwd().openDir(output_dir, .{});
+            defer dir.close();
+            const file = try dir.createFile(pvd_name, .{});
+            defer file.close();
+            try file.writeAll(output.items);
+        }
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -806,4 +967,130 @@ test "PointDipole.apply at half period is zero" {
     for (J.values) |v| {
         try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-12);
     }
+}
+
+// ── #41: Simulation runner ───────────────────────────────────────────────
+
+const MaxwellRunner = Runner(Mesh2D);
+
+test "Runner advances state by configured number of steps" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Seed E with small random values for non-trivial evolution.
+    var rng = std.Random.DefaultPrng.init(0xE0_4101);
+    for (state.E.values) |*v| v.* = (rng.random().float(f64) * 2.0 - 1.0) * 0.01;
+
+    try MaxwellRunner.run(allocator, &state, null, .{
+        .steps = 10,
+        .dt = 0.001,
+    });
+
+    try testing.expectEqual(@as(u64, 10), state.timestep);
+}
+
+test "Runner applies PEC boundary conditions every step" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Set non-zero E on boundary edges — runner should zero them.
+    for (state.E.values) |*v| v.* = 1.0;
+
+    try MaxwellRunner.run(allocator, &state, null, .{
+        .steps = 5,
+        .dt = 0.001,
+    });
+
+    // After running, all boundary edges must be zero (PEC enforced).
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expectEqual(@as(f64, 0), state.E.values[edge_idx]);
+    }
+}
+
+test "Runner applies source at each step" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 2.0, 2.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    const dipole = Dipole.init(&mesh, 1.0, 1.0, .{ 1.0, 1.0 });
+
+    try MaxwellRunner.run(allocator, &state, dipole, .{
+        .steps = 10,
+        .dt = 0.001,
+    });
+
+    // After running with a source, fields should be non-trivial.
+    var max_abs_e: f64 = 0;
+    for (state.E.values) |v| max_abs_e = @max(max_abs_e, @abs(v));
+    try testing.expect(max_abs_e > 1e-15);
+}
+
+test "Runner writes VTK snapshots at configured interval" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // Use a temporary directory for output.
+    var tmp_dir = testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Get the path string for the temp directory.
+    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    const tmp_path = try tmp_dir.dir.realpath(".", &path_buf);
+
+    try MaxwellRunner.run(allocator, &state, null, .{
+        .steps = 10,
+        .dt = 0.001,
+        .output_interval = 5,
+        .output_path = tmp_path,
+        .output_base_name = "test_field",
+    });
+
+    // Should have written 2 snapshots (steps 5 and 10) + 1 PVD file.
+    // Snapshot at step 5 → test_field_0000.vtu
+    // Snapshot at step 10 → test_field_0001.vtu
+    const snap0 = tmp_dir.dir.openFile("test_field_0000.vtu", .{});
+    try testing.expect(snap0 != error.FileNotFound);
+    if (snap0) |f| f.close() else |_| {}
+
+    const snap1 = tmp_dir.dir.openFile("test_field_0001.vtu", .{});
+    try testing.expect(snap1 != error.FileNotFound);
+    if (snap1) |f| f.close() else |_| {}
+
+    // PVD collection file.
+    const pvd = tmp_dir.dir.openFile("test_field.pvd", .{});
+    try testing.expect(pvd != error.FileNotFound);
+    if (pvd) |f| f.close() else |_| {}
+}
+
+test "Runner with output_interval 0 writes no files" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    // No output — should run without errors and produce no files.
+    try MaxwellRunner.run(allocator, &state, null, .{
+        .steps = 5,
+        .dt = 0.001,
+        .output_interval = 0,
+    });
+
+    try testing.expectEqual(@as(u64, 5), state.timestep);
 }
