@@ -298,8 +298,7 @@ test "d̃₀ on constant dual 0-form is zero at interior edges" {
     var result = try exterior_derivative(allocator, omega);
     defer result.deinit(allocator);
 
-    // Interior edges have nonzero dual_length; boundary edges have
-    // dual_length = 0 on a uniform grid (or are boundary).
+    // All edges have nonzero dual_length with the barycentric dual.
     // Count nonzero entries at interior edges to verify they are zero.
     const boundary2 = mesh.boundary(2);
     var interior_count: usize = 0;

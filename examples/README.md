@@ -1,0 +1,133 @@
+# Examples
+
+2D electromagnetic simulations demonstrating the flux Maxwell solver on
+triangulated PEC cavities.
+
+---
+
+## Quick start
+
+```sh
+zig build run                     # run default dipole simulation
+zig build run -- --help           # see all options
+```
+
+Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-sh/uv)):
+
+```sh
+uv run tools/visualize.py output --field B_flux --output animation.gif
+```
+
+---
+
+## Demos
+
+| Demo | What it does | Example |
+|------|-------------|---------|
+| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build run` |
+| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build run -- --demo cavity` |
+
+---
+
+## CLI reference
+
+```
+usage: flux [--demo <name>] [options]
+
+demos:
+  dipole    (default) point dipole radiating in a PEC cavity
+  cavity    TE₁₀ standing wave — exact analytical mode, source-free
+
+mesh & physics:
+  --grid N          grid cells per side (default: 32)
+  --domain L        square domain side length (default: 1.0)
+  --courant C       Courant number dt = C·h (default: 0.1)
+
+dipole source (ignored for cavity demo):
+  --frequency F     source frequency in Hz (default: TE₁₀ resonance)
+  --amplitude A     source amplitude (default: 1.0)
+
+time stepping:
+  --steps N         number of timesteps (default: 1000)
+
+output:
+  --output DIR      output directory for VTK files (default: output)
+  --frames N        number of VTK snapshots to write (default: 100)
+```
+
+### Parameter relationships
+
+The timestep is derived from the mesh: **dt = courant × h**, where h = domain / grid.
+This means:
+- Doubling `--grid` halves h and halves dt — you need ~2× more steps for the
+  same physical time.
+- Increasing `--courant` makes each step cover more time but adds numerical
+  dispersion.
+
+The total simulation time is **t = steps × dt**. For the cavity demo, one field
+period is T = 2 × domain, so you need steps = T / dt = 2 × domain / (courant × h)
+steps per period.
+
+| Grid | dt (C=0.1) | Steps for 1 period (L=1) |
+|------|-----------|--------------------------|
+| 16 | 0.00625 | 320 |
+| 32 | 0.003125 | 640 |
+| 64 | 0.001563 | 1280 |
+
+---
+
+## Visualization tools
+
+### tools/visualize.py — animated GIF
+
+Parses VTK `.vtu` files and renders an animated GIF with matplotlib. No
+ParaView needed — `uv` handles dependencies automatically.
+
+```sh
+uv run tools/visualize.py <input_dir> [options]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--field` | `B_flux` | Which CellData array to plot |
+| `--output` | `<dir>/animation.gif` | Output GIF path |
+| `--fps` | 12 | Frames per second |
+
+Available fields:
+
+| Field | What it is |
+|-------|-----------|
+| `B_flux` | Magnetic flux per face (primal 2-form) |
+| `E_intensity` | Electric field averaged to faces (primal 1-form projected) |
+
+### ParaView
+
+For interactive exploration, open the `.pvd` collection file:
+
+```sh
+open output/cavity.pvd       # macOS
+paraview output/dipole.pvd   # Linux
+```
+
+The `.pvd` indexes all snapshots with simulation timestamps for correct
+time-axis playback. ParaView supports custom colormaps, streamlines, animation
+export, and 3D viewing.
+
+---
+
+## Numerical background
+
+The simulations use **Discrete Exterior Calculus (DEC)** on 2D simplicial
+meshes. Fields are typed cochains — E is a primal 1-form (per edge), B is a
+primal 2-form (per face) — with operator compatibility enforced at compile time.
+
+The **leapfrog integrator** staggers E at integer steps and B at half-steps
+(Yee-style), giving second-order time accuracy and symplectic structure (energy
+conservation for source-free runs).
+
+**Key invariant**: dB = 0 is enforced structurally — in 2D, B is a top-form, so
+d₂B lives in the nonexistent 3-form space. The type system rejects
+`exterior_derivative(B)` at compile time.
+
+See the individual demo pages for physics details and parameter exploration
+guides.

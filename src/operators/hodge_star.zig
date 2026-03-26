@@ -1,7 +1,7 @@
 //! Discrete Hodge star operator and its inverse.
 //!
 //! The diagonal Hodge star ★ₖ maps primal k-cochains to dual (n−k)-cochains
-//! via the circumcentric dual mesh. For a 2D simplicial mesh:
+//! via the barycentric dual mesh. For a 2D simplicial mesh:
 //!
 //!   (★₀)ᵢᵢ = |dual cell of vertex i|  = dual_area[i]
 //!   (★₁)ᵢᵢ = |dual edge i| / |edge i| = dual_length[i] / length[i]
@@ -9,11 +9,6 @@
 //!
 //! The inverse ★⁻¹ is the element-wise reciprocal of the diagonal, mapping
 //! dual (n−k)-cochains back to primal k-cochains.
-//!
-//! **Known degeneracy:** On uniform grids with SW→NE diagonal triangulation,
-//! both triangles sharing a diagonal have the same circumcenter, giving
-//! dual_length = 0 for diagonal edges. The Hodge star maps those entries to
-//! zero; the inverse is undefined there and will panic.
 
 const std = @import("std");
 const testing = std.testing;
@@ -262,11 +257,9 @@ test "★₂ scales by 1 / face area" {
 
 test "Hodge star inverse is exact for all degrees" {
     // For 1000 random primal cochains of each degree, ★⁻¹(★(ω)) = ω
-    // must hold to machine precision.
-    //
-    // k=0 and k=2 are tested via the full round-trip (all entries non-degenerate).
-    // k=1 is tested entry-by-entry, skipping degenerate diagonal edges where
-    // dual_length = 0 on the uniform grid.
+    // must hold to machine precision. All three degrees (k=0,1,2) use the
+    // full round-trip: with the barycentric dual, every edge has nonzero
+    // dual_length, so ★₁ is invertible everywhere.
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
@@ -296,12 +289,8 @@ test "Hodge star inverse is exact for all degrees" {
         }
     }
 
-    // ── k = 1: entry-by-entry on non-degenerate edges ────────────────
+    // ── k = 1: full round-trip ───────────────────────────────────────
     {
-        const edge_slice = mesh.edges.slice();
-        const lengths = edge_slice.items(.length);
-        const dual_lengths = edge_slice.items(.dual_length);
-
         var rng = std.Random.DefaultPrng.init(0xDEC_57A2_01);
         for (0..1000) |_| {
             var omega = try PrimalC1.init(allocator, &mesh);
@@ -311,15 +300,11 @@ test "Hodge star inverse is exact for all degrees" {
             var starred = try hodge_star(allocator, omega);
             defer starred.deinit(allocator);
 
-            for (omega.values, starred.values, lengths, dual_lengths) |original, star_val, len, dual_len| {
-                if (dual_len == 0.0) {
-                    // Degenerate: ★₁ maps to zero, inverse is undefined.
-                    try testing.expectApproxEqAbs(@as(f64, 0.0), star_val, tolerance);
-                } else {
-                    // Non-degenerate: manual inverse recovers the original.
-                    const recovered = star_val * (len / dual_len);
-                    try testing.expectApproxEqRel(original, recovered, tolerance);
-                }
+            var round_trip = try hodge_star_inverse(allocator, starred);
+            defer round_trip.deinit(allocator);
+
+            for (omega.values, round_trip.values) |original, recovered| {
+                try testing.expectApproxEqRel(original, recovered, tolerance);
             }
         }
     }

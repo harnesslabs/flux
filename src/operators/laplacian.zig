@@ -16,10 +16,8 @@
 //! Uses the unsigned convention: Δ₀ is positive-semidefinite, meaning
 //! ⟨Δ₀ω, ω⟩_★₀ ≥ 0 for all ω.
 //!
-//! **Known limitation:** Δ₁ and Δ₂ require ★⁻¹₁, which divides by
-//! dual_length / length. On uniform grids with SW→NE diagonals, diagonal
-//! edges have dual_length = 0, making ★⁻¹₁ undefined. Use Δ₁ and Δ₂ only
-//! on meshes where all dual edge lengths are nonzero.
+//! All three Laplacians are well-defined on meshes with barycentric dual
+//! geometry, where every edge has nonzero dual length.
 
 const std = @import("std");
 const testing = std.testing;
