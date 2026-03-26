@@ -4,3 +4,6 @@ zig-out/
 
 # MacOS
 .DS_Store
+
+# Simulation Output
+output/
