@@ -35,7 +35,7 @@ pub fn Mesh(comptime n: usize) type {
 
         pub const Vertex = struct {
             coords: [n]f64,
-            /// Area of the circumcentric dual cell (Voronoi region) around this vertex.
+            /// Area of the dual cell around this vertex (cotangent-weighted).
             dual_area: f64,
         };
 
@@ -44,9 +44,9 @@ pub fn Mesh(comptime n: usize) type {
             vertices: [2]u32,
             /// Euclidean length of this edge.
             length: f64,
-            /// Length of the circumcentric dual edge.
-            /// For interior edges: distance between circumcenters of the two adjacent faces.
-            /// For boundary edges: distance from the adjacent face's circumcenter to the edge midpoint.
+            /// Length of the barycentric dual edge.
+            /// For interior edges: distance between barycenters of the two adjacent faces.
+            /// For boundary edges: distance from the adjacent face's barycenter to the edge midpoint.
             dual_length: f64,
         };
 
@@ -56,8 +56,8 @@ pub fn Mesh(comptime n: usize) type {
             vertices: [3]u32,
             /// Area of this triangle.
             area: f64,
-            /// Circumcenter coordinates.
-            circumcenter: [n]f64,
+            /// Barycenter (centroid) coordinates.
+            barycenter: [n]f64,
         };
 
         // -- Storage --
@@ -131,14 +131,13 @@ pub fn Mesh(comptime n: usize) type {
         ///
         /// The rectangle is divided into `nx × ny` rectangular cells, each split
         /// by a SW-to-NE diagonal into two CCW-oriented triangles (`2 * nx * ny` total).
-        /// All geometric data — lengths, areas, circumcenters, dual volumes — is
+        /// All geometric data — lengths, areas, barycenters, dual volumes — is
         /// computed during construction.
         ///
-        /// **Note on circumcentric dual degeneracy:** both triangles in each cell
-        /// share the same circumcenter (center of the cell) because they are right
-        /// triangles whose hypotenuse is the cell diagonal. The diagonal edges
-        /// therefore have dual length 0. This is documented and expected; the Hodge
-        /// star in M2 will need to handle this boundary case.
+        /// Uses a **barycentric dual** mesh: dual vertices are placed at triangle
+        /// centroids rather than circumcenters. This avoids the degeneracy where
+        /// right triangles sharing a hypotenuse have coincident circumcenters,
+        /// ensuring every edge has nonzero dual length and ★₁ is non-singular.
         pub fn uniform_grid(
             allocator: std.mem.Allocator,
             nx: u32,
@@ -241,9 +240,9 @@ pub fn Mesh(comptime n: usize) type {
                     _ = &zero_cc;
 
                     // Lower-right triangle: SW → SE → NE
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .area = 0, .circumcenter = zero_cc });
+                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .area = 0, .barycenter = zero_cc });
                     // Upper-left triangle:  SW → NE → NW
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .area = 0, .circumcenter = zero_cc });
+                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .area = 0, .barycenter = zero_cc });
                 }
             }
 
@@ -322,17 +321,17 @@ pub fn Mesh(comptime n: usize) type {
                 }
             }
 
-            // Face areas and circumcenters
+            // Face areas and barycenters
             {
                 const face_verts = faces_list.slice().items(.vertices);
                 const areas = faces_list.slice().items(.area);
-                const circumcenters = faces_list.slice().items(.circumcenter);
+                const barycenters = faces_list.slice().items(.barycenter);
                 for (0..face_count) |f| {
                     const p0 = coords[face_verts[f][0]];
                     const p1 = coords[face_verts[f][1]];
                     const p2 = coords[face_verts[f][2]];
                     areas[f] = triangle_area(p0, p1, p2);
-                    circumcenters[f] = triangle_circumcenter(p0, p1, p2);
+                    barycenters[f] = triangle_barycenter(p0, p1, p2);
                 }
             }
 
@@ -363,7 +362,7 @@ pub fn Mesh(comptime n: usize) type {
                     }
                 }
 
-                const circumcenters = faces_list.slice().items(.circumcenter);
+                const barycenters = faces_list.slice().items(.barycenter);
                 const edge_verts = edges_list.slice().items(.vertices);
                 const dual_lengths = edges_list.slice().items(.dual_length);
 
@@ -373,12 +372,12 @@ pub fn Mesh(comptime n: usize) type {
                 for (0..edge_count) |e| {
                     if (edge_face_count[e] == 2) {
                         dual_lengths[e] = euclidean_distance(
-                            circumcenters[edge_face_0[e]],
-                            circumcenters[edge_face_1[e]],
+                            barycenters[edge_face_0[e]],
+                            barycenters[edge_face_1[e]],
                         );
                     } else if (edge_face_count[e] == 1) {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                        dual_lengths[e] = euclidean_distance(circumcenters[edge_face_0[e]], mid);
+                        dual_lengths[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
                     }
                     // edge_face_count == 0 should not occur in a valid mesh; dual_length stays 0
@@ -504,25 +503,12 @@ pub fn Mesh(comptime n: usize) type {
             return @abs(signed_triangle_area(p0, p1, p2));
         }
 
-        /// Circumcenter of a 2D triangle. Uses only the first two coordinate components.
-        fn triangle_circumcenter(a: [n]f64, b: [n]f64, c: [n]f64) [n]f64 {
-            const ax = a[0];
-            const ay = a[1];
-            const bx = b[0];
-            const by = b[1];
-            const cx = c[0];
-            const cy = c[1];
-
-            const d_val = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-            std.debug.assert(@abs(d_val) > 1e-15); // degenerate triangle guard
-
-            const a_sq = ax * ax + ay * ay;
-            const b_sq = bx * bx + by * by;
-            const c_sq = cx * cx + cy * cy;
-
-            var result: [n]f64 = @splat(0);
-            result[0] = (a_sq * (by - cy) + b_sq * (cy - ay) + c_sq * (ay - by)) / d_val;
-            result[1] = (a_sq * (cx - bx) + b_sq * (ax - cx) + c_sq * (bx - ax)) / d_val;
+        /// Barycenter (centroid) of a triangle: average of its three vertices.
+        fn triangle_barycenter(a: [n]f64, b: [n]f64, c: [n]f64) [n]f64 {
+            var result: [n]f64 = undefined;
+            inline for (0..n) |d| {
+                result[d] = (a[d] + b[d] + c[d]) / 3.0;
+            }
             return result;
         }
     };
@@ -641,19 +627,20 @@ test "face areas for uniform grid" {
     }
 }
 
-test "circumcenters of right triangles are at hypotenuse midpoints" {
+test "barycenters of triangles are at centroids" {
     const allocator = testing.allocator;
     var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 2.0, 2.0);
     defer mesh.deinit(allocator);
 
-    const circumcenters = mesh.faces.slice().items(.circumcenter);
+    const barycenters = mesh.faces.slice().items(.barycenter);
 
-    // Single cell: both triangles have the same circumcenter at (1, 1),
-    // the midpoint of the shared hypotenuse (which is also the cell center).
-    for (0..mesh.num_faces()) |f| {
-        try testing.expectApproxEqAbs(@as(f64, 1.0), circumcenters[f][0], 1e-15);
-        try testing.expectApproxEqAbs(@as(f64, 1.0), circumcenters[f][1], 1e-15);
-    }
+    // Single 2×2 cell split by SW→NE diagonal:
+    //   lower triangle: (0,0), (2,0), (2,2) → barycenter (4/3, 2/3)
+    //   upper triangle: (0,0), (2,2), (0,2) → barycenter (2/3, 4/3)
+    try testing.expectApproxEqAbs(4.0 / 3.0, barycenters[0][0], 1e-15);
+    try testing.expectApproxEqAbs(2.0 / 3.0, barycenters[0][1], 1e-15);
+    try testing.expectApproxEqAbs(2.0 / 3.0, barycenters[1][0], 1e-15);
+    try testing.expectApproxEqAbs(4.0 / 3.0, barycenters[1][1], 1e-15);
 }
 
 test "dual vertex areas sum to total mesh area" {
@@ -696,22 +683,17 @@ test "interior vertex dual area equals cell area" {
     }
 }
 
-test "diagonal edges have zero dual length" {
-    // Both triangles sharing a diagonal have the same circumcenter,
-    // so the dual edge connecting those circumcenters has length 0.
+test "all edges have nonzero dual length" {
+    // With barycentric dual, every edge (including diagonals) has nonzero
+    // dual length because adjacent triangles have distinct barycenters.
     const allocator = testing.allocator;
     var mesh = try Mesh(2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const dual_lengths = mesh.edges.slice().items(.dual_length);
 
-    // Diagonal edges start at index: horizontal_count + vertical_count
-    const n_h: u32 = 3 * 4; // nx * (ny + 1) = 3 * 4 = 12
-    const n_v: u32 = 4 * 3; // (nx + 1) * ny = 4 * 3 = 12
-    const diag_start = n_h + n_v;
-
-    for (diag_start..mesh.num_edges()) |e| {
-        try testing.expectApproxEqAbs(@as(f64, 0), dual_lengths[e], 1e-15);
+    for (0..mesh.num_edges()) |e| {
+        try testing.expect(dual_lengths[e] > 0.0);
     }
 }
 
