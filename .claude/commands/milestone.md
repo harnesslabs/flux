@@ -18,7 +18,7 @@ Plan and create a new GitHub milestone for the current epoch.
    - At minimum: one test task, one implementation task
    - Require at least one non-obvious design choice
    - Use an imperative verb title stating what capability is delivered:
-     "Implement Hodge star ★₁ with inverse and property tests"
+     "Implement Hodge star ★ for all k-forms with inverse and property tests"
    - Stay within 1–2 component scopes (see `project/components.md`)
    - Have labels assigned:
      - `type/` — what kind of work (`feature`, `invariant`, `test`, etc.)

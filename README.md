@@ -53,31 +53,37 @@ An operator is not implemented until a property-based test for its invariant exi
 
 ## Development
 
-Development is organized into **epochs** (∼1 month), **milestones** (∼1 week), and **issues** (∼2–6 hours). Each milestone has an explicit mathematical acceptance criterion — it is not done until that invariant passes in CI.
+Development is organized into **epochs** (~1 month), **milestones** (~1–2 weeks), and **issues** (complete capabilities with 3–5 tasks each). Each milestone has an explicit mathematical acceptance criterion — it is not done until that invariant passes in CI.
 
 ### Workflow
 
 ```
-/ideate     Pressure-test raw ideas against the vision and architecture;
-            produces ideation records and horizon entries
+/ideate         Pressure-test raw ideas against the vision and architecture;
+                produces ideation records and horizon entries
 
-/epoch      Plan a new epoch — back-and-forth conversation producing
-            project/epoch_N/roadmap.md and a GitHub Project
+/epoch          Plan a new epoch — back-and-forth conversation producing
+                project/epoch_N/roadmap.md and a GitHub Project
 
-/milestone  Given an epoch, create a GitHub Milestone with 10–20 issues,
-            labels, and acceptance criterion; adds items to the Project board
+/milestone      Given an epoch, create a GitHub Milestone with 5–10 issues,
+                labels, and acceptance criterion
 
-/tackle     Pick the highest-priority open issue and work it to completion:
-            branch → test-first implementation → PR → CI → squash-merge
+/tackle         Pick the highest-priority open issue and work it to completion:
+                branch → draft PR → tests → stubs → implement → CI → review
 
-/review     Math-aware PR review: checks invariants, comptime type safety,
-            SoA layout, TigerStyle, horizons, and process before merge
+/decide         Log a non-obvious architectural decision to
+                project/epoch_N/decision_log.md (agent-invoked during /tackle)
 
-/status     Live snapshot of current milestone progress — open/closed issues,
-            acceptance criterion status, and recommended next action
+/review         PR review: agent checks implementation details (math, numerics,
+                memory); user checks API shape and test coverage
 
-/decide     Log a non-obvious architectural decision to
-            project/epoch_N/decision_log.md
+/retro          Epoch retrospective — reconstruct decisions, write retrospective,
+                identify process improvements
+
+/status         Live snapshot of current milestone progress — open/closed issues,
+                acceptance criterion status, and recommended next action
+
+/audit          Run all four code quality lenses in parallel (or individually):
+                /audit-safety, /audit-style, /audit-perf, /audit-tests
 ```
 
 These skills are available in [Claude Code](https://claude.ai/claude-code). Run any of them from the project root.

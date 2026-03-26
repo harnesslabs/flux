@@ -29,8 +29,8 @@ Each issue in the rough list should be a **complete capability**, not an atomic 
 - Be statable in one sentence: "After this issue, the framework can ___"
 
 **Too small:** "Add boundary check to mesh constructor" — that's a task inside an issue.
-**Too big:** "Implement the entire Hodge star for all k-forms" — that's a milestone, not an issue.
-**Right-sized:** "Implement Hodge star ★₁ for 1-forms with inverse and property tests" — clear capability, multiple tasks, design choices involved.
+**Too big:** "Implement all discrete operators (d, ★, Δ) with composition API" — that's a milestone, not an issue.
+**Right-sized:** "Implement Hodge star ★ for all k-forms with inverse and property tests" — clear capability, generic implementation tested at k=0,1,2, multiple tasks, design choices involved.
 
 Push back when:
 - A milestone has fewer than 5 natural issues — it may be too small (combine with another)
