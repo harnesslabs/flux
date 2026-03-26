@@ -97,6 +97,17 @@ Duration: <actual time from first commit to last merge>
 
 Present the draft to the user for review. The retrospective is a shared document — the agent writes it, the user edits and approves it.
 
+## Phase 3.5: Close milestones
+
+After the retrospective is written, close all milestones belonging to the epoch on GitHub:
+
+```sh
+# For each milestone in the epoch:
+gh api repos/:owner/:repo/milestones/<number> -X PATCH -f state=closed
+```
+
+Milestones stay open during the epoch so new issues can still be threaded in. Closing them is a retro-time action — it marks the epoch as formally complete.
+
 ## Phase 4: Identify improvements
 
 Based on the retrospective, propose specific changes:
