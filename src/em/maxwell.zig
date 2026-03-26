@@ -113,11 +113,11 @@ pub fn faraday_step(
 ///   d:  dual 0-form   → dual 1-form
 ///   ★₁⁻¹: dual 1-form → primal 1-form
 ///
-/// Uses direct diagonal application (like the Hodge Laplacian) rather
-/// than `hodge_star_inverse`, which panics on degenerate edges. On
-/// uniform grids, diagonal edges have dual_length = 0, making ★₁
-/// singular there. The physically correct treatment is ★₁⁻¹(0) = 0
-/// at those edges — they carry no field information.
+/// Ampere step: E^{n+1} = E^n + dt · (★₁⁻¹ d̃₀ ★₂ B^{n+1/2} − J).
+///
+/// Applies ★₁⁻¹ as the diagonal inverse (length / dual_length).
+/// With the barycentric dual, every edge has nonzero dual_length,
+/// so ★₁ is non-singular and no pseudo-inverse workaround is needed.
 pub fn ampere_step(
     allocator: std.mem.Allocator,
     state: anytype,
@@ -132,20 +132,13 @@ pub fn ampere_step(
     defer d_star_B.deinit(allocator);
 
     // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
-    // Apply the ★₁ inverse diagonal manually to handle degenerate edges
-    // (dual_length = 0) with the pseudo-inverse: 0/0 → 0.
     const edge_slice = state.mesh.edges.slice();
     const lengths = edge_slice.items(.length);
     const dual_lengths = edge_slice.items(.dual_length);
 
     for (state.E.values, d_star_B.values, lengths, dual_lengths, state.J.values) |*e, dsb, len, dual_len, j| {
-        const curl_component = if (dual_len == 0.0)
-            // Degenerate edge: ★₁ is singular here, pseudo-inverse gives 0.
-            0.0
-        else
-            (len / dual_len) * dsb;
-
-        e.* += dt * (curl_component - j);
+        std.debug.assert(dual_len > 0.0);
+        e.* += dt * ((len / dual_len) * dsb - j);
     }
 
     // Comptime type assertion: verify the operator chain types are correct.
@@ -710,7 +703,7 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
     var d_star_B = try ext.exterior_derivative(allocator, star_B);
     defer d_star_B.deinit(allocator);
 
-    // ★₁⁻¹(d(★₂B)) with pseudo-inverse for degenerate edges
+    // ★₁⁻¹(d(★₂B))
     const edge_slice = mesh.edges.slice();
     const lengths = edge_slice.items(.length);
     const dual_lengths = edge_slice.items(.dual_length);
@@ -718,8 +711,7 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
     const expected_E = try allocator.alloc(f64, state.E.values.len);
     defer allocator.free(expected_E);
     for (expected_E, state.E.values, d_star_B.values, lengths, dual_lengths, state.J.values) |*exp, e, dsb, len, dual_len, j| {
-        const curl_component = if (dual_len == 0.0) 0.0 else (len / dual_len) * dsb;
-        exp.* = e + dt * (curl_component - j);
+        exp.* = e + dt * ((len / dual_len) * dsb - j);
     }
 
     try ampere_step(allocator, &state, dt);
@@ -1395,8 +1387,6 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
 
     // Energy-based Rayleigh quotient:
     //   ω² = ⟨d₁E, ★₂ d₁E⟩ / ⟨E, ★₁ E⟩
-    // This avoids ★₁⁻¹ entirely, sidestepping the pseudo-inverse issue
-    // with degenerate diagonal edges (dual_length = 0).
     const face_areas = mesh.faces.slice().items(.area);
     var numerator: f64 = 0.0;
     for (dE.values, face_areas) |de, area| {
