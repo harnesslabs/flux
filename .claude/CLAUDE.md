@@ -281,6 +281,7 @@ All four must pass. Branch protection is configured in `.github/settings.yml`.
 
 | Skill | What it checks |
 |-------|---------------|
+| `/audit` | **Umbrella** — spawns all four lenses in parallel, consolidates results |
 | `/audit-safety` | Assertion coverage, bounds, memory safety, numerical safety, invariant enforcement |
 | `/audit-style` | Naming, dead code, stale references, comment quality, duplication |
 | `/audit-perf` | Memory layout, allocation patterns, algorithmic efficiency, SIMD readiness |
