@@ -4,27 +4,42 @@ Plan a new epoch for the flux project. This is a back-and-forth planning convers
 
 Before saying anything else:
 1. Read all existing `project/epoch_*/roadmap.md` files to understand where we are and what has been done.
-2. Read `project/initial.md` as the reference architecture.
-3. Read `project/horizons.md` to know which future directions must not be precluded by this epoch's work.
-3. Run `gh api "repos/harnesslabs/flux/milestones?state=all"` and `gh issue list --state open --repo harnesslabs/flux` to see live GitHub state.
-4. Present a brief, direct summary of current state (what epoch we're on, what's done, what's open).
-5. Ask the user: what should this epoch accomplish? What is the north star?
+2. Read the most recent `project/epoch_*/retrospective.md` — its recommendations feed directly into this planning session.
+3. Read `project/initial.md` as the reference architecture.
+4. Read `project/horizons.md` to know which future directions must not be precluded by this epoch's work.
+5. Read `project/components.md` to understand the current codebase structure.
+6. Run `gh api "repos/harnesslabs/flux/milestones?state=all"` and `gh issue list --state open --repo harnesslabs/flux` to see live GitHub state.
+7. Present a brief, direct summary of current state (what epoch we're on, what's done, what's open).
+8. Ask the user: what should this epoch accomplish? What is the north star?
 
 ## During the conversation
 
-Help the user define **3–5 milestones** for the epoch. Each milestone should have enough scope for 10–20 issues (~1 week of focused AI-assisted work). For each milestone, push until you have:
+Help the user define **2–4 milestones** for the epoch. Each milestone should have enough scope for 5–10 issues (~1–2 weeks of focused AI-assisted work). For each milestone, push until you have:
 - A one-sentence goal
 - A concrete, testable acceptance criterion (a mathematical invariant or behavioral property)
-- A rough list of 10–15 constituent issues to validate scope
+- A rough list of 5–10 constituent issues to validate scope
 - A rough ordering relative to other milestones (dependencies)
 
+### Issue sizing guidelines
+
+Each issue in the rough list should be a **complete capability**, not an atomic task. An issue should:
+- Own 3–5 tasks (tests, API design, implementation, edge cases, documentation)
+- Require at least one non-obvious design choice
+- Produce a PR with ~5+ commits
+- Be statable in one sentence: "After this issue, the framework can ___"
+
+**Too small:** "Add boundary check to mesh constructor" — that's a task inside an issue.
+**Too big:** "Implement all discrete operators (d, ★, Δ) with composition API" — that's a milestone, not an issue.
+**Right-sized:** "Implement Hodge star ★ for all k-forms with inverse and property tests" — clear capability, generic implementation tested at k=0,1,2, multiple tasks, design choices involved.
+
 Push back when:
-- A milestone is too small (fewer than ~10 natural issues) — consolidate it
-- A milestone is too large to close in ~1 week — split it
+- A milestone has fewer than 5 natural issues — it may be too small (combine with another)
+- A milestone has more than 10 issues — it may be too large (split it)
 - An acceptance criterion is vague or not testable
+- An issue is a single-task item — bundle it into a larger issue
 - Two milestones have an unclear dependency that will cause ordering problems
 
-Ask about the direction beyond the current phase — architecture decisions made now constrain future phases.
+Ask about the direction beyond the current epoch — architecture decisions made now constrain future work.
 
 ## When the plan is agreed
 
@@ -32,7 +47,7 @@ Ask about the direction beyond the current phase — architecture decisions made
 2. Create the epoch documents:
    - `project/epoch_N/roadmap.md` — structured list of milestones with goals, acceptance criteria, issue lists, and ordering. Include a one-paragraph epoch goal at the top.
    - `project/epoch_N/decision_log.md` — empty template with header only.
-   - `project/epoch_N/retrospective.md` — empty template (filled at epoch end).
+   - `project/epoch_N/retrospective.md` — empty template (filled at epoch end via `/retro`).
 3. Create a GitHub issue to track the planning artifact:
    ```sh
    gh issue create \
@@ -76,9 +91,9 @@ Ask about the direction beyond the current phase — architecture decisions made
 **Acceptance criterion:** <testable invariant or behavior>
 **Depends on:** none
 
-Issues (target 12–15):
-- <issue 1>
-- <issue 2>
+Issues (target 5–10):
+- <issue title — one sentence describing the capability>
+- <issue title>
 ...
 
 ### M2: <name>
@@ -86,8 +101,8 @@ Issues (target 12–15):
 **Acceptance criterion:** <testable invariant or behavior>
 **Depends on:** M1
 
-Issues (target 12–15):
-- <issue 1>
+Issues (target 5–10):
+- <issue title>
 ...
 ```
 
@@ -102,5 +117,5 @@ Issues (target 12–15):
 ```markdown
 # Epoch N Retrospective
 
-<!-- Written at epoch end. What held? What didn't? What would we change? -->
+<!-- Written at epoch end via /retro. -->
 ```

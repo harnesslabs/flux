@@ -68,7 +68,28 @@ when needed, says why.
 
 ### Atoms: Issues
 
-An issue is the smallest unit of releasable work. It is done when:
+An issue is the smallest unit of releasable work. Each issue owns **3–5 tasks**
+(checkboxes) that together deliver a complete capability. At minimum, one task
+is a test task and one is an implementation task. Diagnostics, edge-case
+handling, and documentation updates are bundled into the issue — not filed
+separately.
+
+**An issue is well-sized when:**
+- It requires at least one non-obvious design choice (triggers `/decide`)
+- It produces a PR that benefits from review (not trivially correct by inspection)
+- It maps to roughly 5+ commits of meaningful progress
+
+**An issue is too small when:**
+- It's a single function addition with an obvious implementation
+- The entire PR could be reviewed in under 2 minutes
+- No design choices were made
+
+**An issue is too big when:**
+- It touches more than 2 component scopes (see `project/components.md`)
+- The tasks list exceeds 7 items
+- You can't state the single capability it delivers in one sentence
+
+An issue is done when:
 
 1. **The implementation exists** and compiles cleanly.
 2. **Tests exist** that verify the invariant, not just the happy path. The
@@ -112,11 +133,18 @@ consequences in the broader system.
 
 ### Epochs → Milestones → Issues
 
-- **Epoch**: ~1 month of work. Living documents in `project/epoch_N/`. Tracked as a GitHub Project.
-- **Milestone**: ~1 week of validated work. Each has an explicit mathematical acceptance criterion. Tracked as a GitHub Milestone.
-- **Issue**: 2–6 hours of focused work. 10–20 per milestone. Tracked as GitHub Issues linked to the milestone.
+- **Epoch**: A substantial body of work (~1 month or more). Living documents in `project/epoch_N/`. Tracked as a GitHub Project.
+- **Milestone**: ~1–2 weeks of validated work. Each has an explicit mathematical acceptance criterion. 5–10 issues per milestone. Tracked as a GitHub Milestone.
+- **Issue**: A complete capability with 3–5 tasks. Produces a PR with ~5+ commits. 5–10 per milestone. Tracked as GitHub Issues linked to the milestone.
 
 A milestone is **done** when its acceptance criterion passes in CI — not when the code exists.
+
+### Component Scopes
+
+`project/components.md` maps each codebase component to its source files and
+dependencies. Skills use this to limit context window usage. When working an
+issue, load only the relevant component and its direct dependencies — do not
+explore the full codebase.
 
 ### Decision Log
 
@@ -236,25 +264,45 @@ All four must pass. Branch protection is configured in `.github/settings.yml`.
 
 ## Skills
 
-Six slash commands drive the development workflow. Suggest the appropriate one proactively when the context calls for it — don't wait to be asked.
+### Development workflow
 
-| Skill | When to suggest |
-|-------|----------------|
-| `/ideate` | User shares raw ideas, brainstorms features, or thinks aloud about project direction |
-| `/epoch` | User wants to plan upcoming work, discusses what to build next, or asks about direction |
-| `/milestone` | Epoch is planned and user is ready to create GitHub artifacts for a specific milestone |
-| `/tackle` | User wants to start coding, asks "what should I work on", or is ready to close an issue |
-| `/review` | A PR is open, user asks about code quality, or a branch has been pushed |
-| `/status` | User asks about progress, what's done, what's next, or what's blocking |
-| `/decide` | A non-obvious architectural choice is made during any session |
+| Skill | Invoked by | When |
+|-------|-----------|------|
+| `/ideate` | user | Sharing raw ideas, brainstorming features, thinking aloud about project direction |
+| `/epoch` | user | Planning upcoming work, discussing what to build next |
+| `/milestone` | user | Epoch is planned, ready to create GitHub artifacts for a specific milestone |
+| `/tackle` | user | Ready to start coding, asks "what should I work on" |
+| `/decide` | agent (during `/tackle`) or user | A non-obvious architectural choice is made during implementation |
+| `/review` | user | A PR is ready for review. Agent reviews implementation details; user reviews API + tests |
+| `/retro` | user | Epoch boundary — reconstruct decisions, write retrospective, identify improvements |
+| `/status` | user | Asks about progress, what's done, what's next, or what's blocking |
+
+### Code quality (run on `main`, between epochs or mid-epoch)
+
+| Skill | What it checks |
+|-------|---------------|
+| `/audit` | **Umbrella** — spawns all four lenses in parallel, consolidates results |
+| `/audit-safety` | Assertion coverage, bounds, memory safety, numerical safety, invariant enforcement |
+| `/audit-style` | Naming, dead code, stale references, comment quality, duplication |
+| `/audit-perf` | Memory layout, allocation patterns, algorithmic efficiency, SIMD readiness |
+| `/audit-tests` | Coverage gaps, property test quality, redundancy, convergence tests, comptime promotion |
+
+### Workflow sequence
+
+```
+/ideate → /epoch → /milestone → /tackle (→ /decide as needed) → /review → /retro
+                                                    ↑
+                                          /audit-* (between epochs or mid-epoch)
+```
 
 **Proactive suggestions:**
-- When the user shares loose ideas or "what if" thoughts → suggest `/ideate` before they calcify into plans
+- When the user shares loose ideas or "what if" thoughts → suggest `/ideate`
 - After any planning discussion → suggest `/epoch` if no epoch doc exists yet
 - After epoch doc exists and user asks about a milestone → suggest `/milestone`
 - At the start of a coding session → suggest `/tackle` with a preview of the top issue
 - After implementation work completes → suggest `/review` before merging
-- When an architectural choice comes up mid-session → suggest `/decide` immediately, don't let it slide
+- At epoch boundaries → suggest `/retro` before starting next epoch planning
+- When code feels messy or between epochs → suggest `/audit-*` to generate hygiene issues
 
 ---
 

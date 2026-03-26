@@ -2,6 +2,14 @@ Review a PR for the flux project with mathematical and code correctness scrutiny
 
 Usage: /review <PR number>
 
+## Context: division of review labor
+
+The **user** reviews API shape and test coverage — they check that the interface is clean and the tests are comprehensive. They rarely need to read implementation blocks in detail.
+
+The **agent** (this skill) reviews implementation details with a fine-tooth comb — catching subtleties the user will miss at a glance. This is the agent's primary value in review.
+
+Structure your review accordingly: lead with the implementation-detail findings that the user is unlikely to catch on their own. Don't spend the review restating things visible from the PR description.
+
 ## Gather context
 
 1. Fetch the PR:
@@ -12,6 +20,7 @@ Usage: /review <PR number>
 2. Extract the linked issue number from `Closes #N` in the PR body.
 3. Read the full issue: `gh issue view <N>` — get the acceptance criterion and references.
 4. Read the epoch roadmap to understand where this fits: `project/epoch_*/roadmap.md`.
+5. Read `project/components.md` to understand the expected scope. Flag if the PR touches files outside its component scope without justification.
 
 ## Review lenses
 
@@ -29,6 +38,7 @@ Work through each lens in order. Be specific — name the file and line number w
 - Is k-form type safety enforced at compile time via `comptime`?
 - Can a 2-form be accidentally passed where a 1-form is expected? If so, flag it.
 - Are comptime constants used where the value is statically known?
+- Are trait/interface requirements checked with `@hasDecl` or `@typeInfo` at comptime?
 
 ### 3. Memory and layout
 - SoA layout (`std.MultiArrayList`) for any new mesh entity types?
@@ -42,23 +52,22 @@ Work through each lens in order. Be specific — name the file and line number w
 - Comments explain *why*, not what?
 - Names are full words, units appended?
 
-### 5. Process
+### 5. Implementation subtleties
+These are the findings the user is least likely to catch:
+- Off-by-one errors in index arithmetic
+- Sign convention mismatches (orientation of simplices, boundary vs coboundary)
+- Numerical stability concerns (division by small quantities, catastrophic cancellation)
+- Redundant computation that could be hoisted or cached
+- Unnecessary allocations in hot paths
+- Code that duplicates logic existing elsewhere in the component
+
+### 6. Process
 - PR body has `Closes #N`?
-- Acceptance criterion from the issue is stated in the PR body and verified?
-- Were any non-obvious architectural decisions made? If yes, are they in `project/epoch_N/decision_log.md`?
-- Labels correct: `type/`, `phase/`, `domain/`, `priority/` all set?
-
-### 6. Molecule checklist
-Before approving, verify the PR author answered all downstream questions:
+- Acceptance criterion from the issue is stated and verified?
+- Were any non-obvious architectural decisions made? If yes, are they in the decision log?
+- Labels correct: `type/`, `domain/`, `priority/` all set?
 - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
-- Does existing documentation need updating (including `project/vision.md`)?
-- Does `README.md` need updating to stay consistent with the vision?
-- Does `.github/settings.yml` (repo description, topics) need updating?
-- Is there a new capability that warrants an end-to-end example?
-- Does this change the public API in a way that affects other modules?
 - Are there follow-on issues that should be opened before this merges?
-
-A PR that adds new capability without answering these is incomplete, even if CI is green.
 
 ## Output format
 
@@ -69,8 +78,11 @@ Write a structured review with a clear verdict at the top:
 
 **Verdict:** APPROVE | REQUEST CHANGES | BLOCK
 
+### Key findings (implementation detail)
+<The most important things the user would miss — specific, with file:line references>
+
 ### Mathematical Correctness
-<findings — specific, with file:line references>
+<findings>
 
 ### Type Safety & Comptime
 <findings>
@@ -79,6 +91,9 @@ Write a structured review with a clear verdict at the top:
 <findings>
 
 ### TigerStyle
+<findings>
+
+### Implementation Subtleties
 <findings>
 
 ### Process
