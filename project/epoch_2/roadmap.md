@@ -25,19 +25,24 @@ convergence test passes at expected rate. `examples/maxwell_2d/` builds against
 flux as a dependency and reproduces epoch 1 demos. Benchmarks establish baselines
 with bounded CI checks. No physics-specific code remains in `src/`.
 **Depends on:** none
+**GitHub milestone:** https://github.com/harnesslabs/flux/milestone/4
 
-Issues (target 8–10):
-- Cochain carries mesh reference — cochains are typed functions on a complex, not bare float arrays
-- Whitney/Galerkin mass matrix for ★₁ with convergence rate verification
-- Sparse Laplacian assembly as symmetric sparse stiffness matrix
-- Compressed incidence values for CsrMatrix — exploit {−1,0,+1} sparsity
-- Comptime trait interfaces: Operator, TimeStepper, and Mesh concepts with compile-time contract checking
-- Pluggable integrator extraction — leapfrog becomes a generic integrator parameterized on state type
-- SIMD/vectorized batch operations on cochains (add, scale, negate, inner product)
-- Benchmark suite with `zig build bench` and bounded CI regression checks
-- Full `/audit` pass — safety, style, perf, tests — generate and resolve all findings
-- Refactor `src/em/` → `examples/maxwell_2d/` consuming flux as a Zig package; library packaging in `build.zig`
-- Close stale issues (#55, #39, #3)
+Issues (10):
+- [x] ~~#55 — Investigate barycentric dual~~ (closed: investigation complete, fix tracked by #70)
+- [ ] #72 — Cochain carries mesh reference — cochains are typed functions on a complex, not bare float arrays
+- [ ] #70 — Whitney/Galerkin mass matrix for ★₁ with convergence rate verification
+- [ ] #58 — Sparse Laplacian assembly as symmetric sparse stiffness matrix
+- [ ] #48 — Compressed incidence values for CsrMatrix — exploit {−1,0,+1} sparsity
+- [ ] #62 — Comptime TimeStepper interface — enforce integrator contract at compile time
+- [ ] #75 — Comptime Operator and Mesh trait interfaces with compile-time contract checking
+- [ ] #76 — Extract pluggable integrator — leapfrog as generic time stepper parameterized on state type
+- [ ] #77 — SIMD/vectorized batch operations on cochains (add, scale, negate, inner product)
+- [ ] #78 — Benchmark suite with `zig build bench` and bounded CI regression checks
+- [ ] #79 — Refactor `src/em/` → `examples/maxwell_2d/` consuming flux as a Zig package
+
+Pre-milestone housekeeping:
+- [ ] #3 — Add/fix branch protections (priority/high)
+- #39 — d₂B = 0 structural assertion → deferred to M2 (meaningful in dim > 2)
 
 ### M2: N-Dimensional Operators + Mesh I/O + Linear Solver
 **Goal:** Generalize all operators to arbitrary dimension (tested at n=2 and n=3),
