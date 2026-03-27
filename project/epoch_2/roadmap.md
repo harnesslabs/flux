@@ -82,12 +82,15 @@ known analytic solution. All examples build as standalone binaries depending on
 the flux library.
 **Depends on:** M1 (library packaging, integrators), M2 (3D operators, solver, mesh I/O, Riemannian ★)
 
-Issues (target 8–10):
-- `examples/maxwell_3d/` — 3D cavity resonance on tetrahedral mesh, leapfrog integrator, ∇·B = 0 structural
-- `examples/heat/` — heat equation via backward Euler + CG solve, convergence test against analytic solution
-- `examples/euler_2d/` — vorticity-stream formulation, Poisson solve for stream function, circulation conservation on imported 2D mesh
-- `examples/euler_3d/` — 3D vorticity via wedge product, helicity conservation as structural invariant
-- `examples/diffusion_surface/` — heat equation on curved surface (sphere/torus) using Riemannian metric-dependent ★
-- Boundary condition library as composable comptime types (PEC, no-slip, Dirichlet, periodic)
-- Composable diagnostic observers (energy, circulation, helicity, divergence) — pluggable into any integrator
-- Each example ships with: CLI interface, VTK output, convergence test, README explaining the physics and mathematics
+**GitHub milestone:** https://github.com/harnesslabs/flux/milestone/6
+
+Issues (9):
+- [ ] #90 — Composable comptime boundary condition types (PEC, Dirichlet, no-slip, periodic)
+- [ ] #91 — Composable diagnostic observer framework pluggable into any integrator
+- [ ] #92 — `examples/maxwell_3d/` — 3D cavity resonance with ∇·B = 0 structural guarantee
+- [ ] #93 — `examples/heat/` — heat equation via backward Euler + CG solve with convergence verification
+- [ ] #94 — `examples/euler_2d/` — vorticity-stream formulation with circulation conservation
+- [ ] #95 — `examples/euler_3d/` — 3D vorticity via wedge product with helicity conservation
+- [ ] #96 — `examples/diffusion_surface/` — heat equation on curved surface with Riemannian Hodge star
+- [ ] #97 — Example packaging infrastructure — shared CLI, VTK output, and build integration
+- [ ] #98 — End-to-end acceptance test verifying all M3 conservation invariants in CI
