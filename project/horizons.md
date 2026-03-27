@@ -283,3 +283,47 @@ configuration; the Zig code is behavior. No string-based expression parsers.
 
 **Enablers:** A working simulation (M3), stable public API.
 **Source:** Ideation 2026-03-22
+
+---
+
+## Native quad/polygon cell support
+
+**Layer:** architecture
+**Constraint on current work:** The `.obj` reader must produce a `RawMesh`
+intermediate representation that preserves polygon faces of any valence
+(triangles, quads, n-gons) *before* an explicit, separable `triangulate()` pass
+converts to simplicial form. The parser is format-aware; the triangulator is
+topology-aware. They must remain separate passes so that future work can consume
+polygon cells directly without reworking the I/O layer.
+
+The deeper constraint: all Whitney-based operators (convergent Hodge star ★₁,
+field reconstruction) assume simplicial complexes. Supporting quads natively
+requires a parallel code path with tensor-product basis functions (FEM-style Q1
+elements) — a different discretization theory. The topological operators (∂, d)
+are already cell-shape-agnostic and would work on quads immediately.
+
+```zig
+// Current (M2): RawMesh → triangulate() → simplicial Mesh → operators
+// Horizon:      RawMesh → Mesh(CellType.quad) → quad-aware operators
+//               RawMesh → Mesh(CellType.simplex) → simplicial operators (existing)
+
+const CellType = enum { simplex, quad, polygon };
+
+// Mesh parameterized on cell type — operators dispatch accordingly
+pub fn Mesh(comptime n: u8, comptime dim: u8, comptime cell: CellType) type { ... }
+```
+
+**What works on quads today (topological, no simplicial assumption):**
+- Boundary operators `∂ₖ` — a quad has 4 boundary edges
+- Exterior derivative `d` — just `∂ᵀ`, topology only
+- Diagonal Hodge star — needs per-cell volume formulas, but quad area / dual
+  edge length formulas are straightforward
+
+**What requires new theory for quads:**
+- Whitney/Galerkin mass matrix — Whitney forms use barycentric coordinates on
+  simplices. Quads need bilinear (Q1) basis functions.
+- Any operator that interpolates within cells (field reconstruction, evaluation)
+
+**Enablers:** `RawMesh` intermediate representation (M2 #86), dimension-generic
+topology (M2 #80), stable operator trait interfaces (M1 #75).
+**Source:** M2 milestone planning 2026-03-26
