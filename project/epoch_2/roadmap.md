@@ -53,19 +53,23 @@ meshes. Poisson solve `Δu = f` converges at expected rate on an imported mesh.
 All 2D tests pass unchanged (generic code, not duplicated). Riemannian ★ produces
 correct results on a mesh with prescribed non-flat metric.
 **Depends on:** M1 (trait interfaces, sparse Laplacian, library packaging)
+**GitHub milestone:** https://github.com/harnesslabs/flux/milestone/5
 
-Issues (target 8–10):
-- Dimension-generic boundary operators (∂ₖ for arbitrary k via comptime, not separate implementations)
-- Dimension-generic Hodge star (Whitney/Galerkin form generalized to n-simplices)
-- Wedge product (∧) as a first-class operator with degree arithmetic checked at comptime
-- Metric-parameterized Hodge star: `Metric(.flat)` (Euclidean) and `Metric(.riemannian)` (general tensor)
-- Uniform tetrahedral grid constructor (3D analog of the 2D triangle grid)
-- .obj mesh reader with automatic triangulation of quad faces
-- .vtk/.vtu reader for unstructured grids
-- 3D VTK export (tetrahedral cells + field data)
-- Conjugate gradient solver for SPD systems with preconditioner interface (Jacobi as first implementation)
-- Poisson solve: `Δu = f` with Dirichlet BCs on imported mesh, convergence test against analytic solution
-- All property tests parameterized on dimension — dd=0, ★★⁻¹=id, ∂∂=0 tested at n=2 and n=3
+Issues (10):
+- [ ] #80 — Generalize Mesh topological dimension from constant 2 to comptime parameter
+- [ ] #81 — Uniform tetrahedral grid constructor for 3D meshes
+- [ ] #82 — Dimension-generic Hodge star with n-simplex geometric formulas
+- [ ] #83 — Dimension-generic exterior derivative with 3D dd=0 property tests
+- [ ] #84 — Wedge product (∧) as first-class operator with comptime degree arithmetic
+- [ ] #85 — Metric-parameterized Hodge star — flat (Euclidean) and Riemannian modes
+- [ ] #86 — .obj mesh reader with separable triangulation pass
+- [ ] #87 — 3D VTK export for tetrahedral meshes with field data
+- [ ] #88 — Conjugate gradient solver for SPD systems with preconditioner interface
+- [ ] #89 — Poisson solve Δu = f with convergence rate verification
+
+Design note: The .obj reader (#86) produces a `RawMesh` with polygon faces of
+any valence, then an explicit `triangulate()` pass converts to simplicial form.
+Native quad/polygon cell support is tracked as a horizon item (see `horizons.md`).
 
 ### M3: Physics Applications
 **Goal:** Five working simulations in `examples/`, exercising the full operator stack
