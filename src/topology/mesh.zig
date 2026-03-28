@@ -380,8 +380,11 @@ pub fn Mesh(comptime n: usize) type {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
                         dual_lengths[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
+                    } else {
+                        // An edge adjacent to zero faces indicates a
+                        // disconnected or malformed mesh — fail loudly.
+                        return error.NonManifoldEdge;
                     }
-                    // edge_face_count == 0 should not occur in a valid mesh; dual_length stays 0
                 }
 
                 // Collect boundary edge indices.
@@ -422,7 +425,9 @@ pub fn Mesh(comptime n: usize) type {
                     const l20_sq = distance_squared(p2, p0);
 
                     const area_4 = 4.0 * triangle_area(p0, p1, p2);
-                    std.debug.assert(area_4 > 0); // degenerate triangle
+                    // Degenerate triangles cause division by zero in the
+                    // cotangent formula below. This must survive release builds.
+                    if (!(area_4 > 0)) return error.DegenerateTriangle;
 
                     const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
                     const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
