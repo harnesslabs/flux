@@ -27,16 +27,16 @@
 
 **Source:** PR #69, commit 0a44562
 
-## 2026-03-22: Cochain as pure data — no mesh pointer [retroactive]
+## 2026-03-22: Cochain carries mesh pointer [retroactive, corrected 2026-03-28]
 
-**Decision:** `Cochain` stores only `values: []f64`, initialized with a cell count. Operators receive the mesh separately.
+**Decision:** `Cochain` stores `values: []f64` and `mesh: *const MeshType`. Operators extract the mesh from the cochain directly — no separate mesh argument.
 
 **Alternatives considered:**
-- Store mesh pointer inside cochain (original PR #50 design, changed in PR #51)
+- Pure data cochain with no mesh reference (considered in PR #51 review, rejected)
 
-**Rationale:** Decouples data from topology. However, a real cochain is inherently connected to its topology — the cochain *is* a function on the cells of the complex. Carrying a mesh reference would be more mathematically faithful and would let operators extract the mesh from the cochain directly. This should be revisited.
+**Rationale:** A cochain is mathematically a function on the cells of a CW complex — it is inherently tied to its topology. Carrying the mesh reference is faithful to the mathematics and eliminates boilerplate at operator call sites. The mesh pointer was retained in PR #51 (commit e51d0e1: "keep mesh pointer"). The original decision log entry incorrectly stated the pointer was removed.
 
-**Source:** PR #51, commit fc10c7b
+**Source:** PR #50, PR #51 (commit e51d0e1, fc10c7b)
 
 ## 2026-03-24: Standalone update functions, not methods on State [retroactive]
 

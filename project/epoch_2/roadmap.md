@@ -37,7 +37,7 @@ Pre-milestone housekeeping (audit findings — must resolve before M1 feature wo
 
 Issues (10):
 - [x] ~~#55 — Investigate barycentric dual~~ (closed: investigation complete, fix tracked by #70)
-- [ ] #72 — Cochain carries mesh reference — cochains are typed functions on a complex, not bare float arrays
+- [x] ~~#72 — Cochain carries mesh reference~~ (closed: already implemented since epoch 1, PR #51)
 - [ ] #70 — Whitney/Galerkin mass matrix for ★₁ with convergence rate verification
 - [ ] #58 — Sparse Laplacian assembly as symmetric sparse stiffness matrix
 - [ ] #48 — Compressed incidence values for CsrMatrix — exploit {−1,0,+1} sparsity
