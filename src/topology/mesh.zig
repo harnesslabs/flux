@@ -422,7 +422,7 @@ pub fn Mesh(comptime n: usize) type {
 
                     const area_4 = 4.0 * triangle_area(p0, p1, p2);
                     // Degenerate triangles cause division by zero in the
-                    // cotangent formula below. This must survive release builds.
+                    // cotangent formula below. 
                     if (!(area_4 > 0)) return flux.Error.DegenerateTriangle;
 
                     const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
