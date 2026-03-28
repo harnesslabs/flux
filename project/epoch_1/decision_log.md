@@ -71,3 +71,14 @@
 **Rationale:** Leverages Zig's type system naturally — degree/duality mismatches become compile errors through operator signatures alone. Good choice for now. Trait/interface abstractions may be added later as the operator algebra grows, but the comptime approach remains the right foundation.
 
 **Source:** PR #59, commit d703bda
+
+## 2026-03-28: Whitney assembly maps local edges to global edges by vertex lookup
+
+**Decision:** The boundary_2 column → local edge mapping in Whitney mass matrix assembly is built by explicit vertex-pair matching, not by assuming column order matches local edge order.
+
+**Alternatives considered:**
+- Assume boundary_2 columns follow the face's local edge order (fast, but wrong — boundary_2 stores edges sorted by global index)
+
+**Rationale:** The boundary_2 row stores edges sorted by global edge index, which coincidentally matches the lower-right triangle's local edge order but not the upper-left triangle's (where the diagonal edge is local edge 0 but appears last in boundary_2). Matching by vertex pair is O(9) per face and costs nothing compared to assembly. Correctness over cleverness.
+
+**Source:** PR #105, issue #70
