@@ -1700,10 +1700,6 @@ test "Whitney: eigenvalue error reduces ≥3× when grid halves (acceptance crit
     // Finer grid must be closer to analytical.
     try testing.expect(error_fine < error_coarse);
 
-    std.debug.print("\nWhitney eigenvalue: 8×8 error={d:.4}, 16×16 error={d:.4}, ratio={d:.2}\n", .{
-        error_coarse, error_fine, error_coarse / error_fine,
-    });
-
     // Acceptance criterion: error reduces by ≥3× when grid halves.
     try testing.expect(error_coarse / error_fine >= 3.0);
 }

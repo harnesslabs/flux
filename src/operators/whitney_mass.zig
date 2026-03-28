@@ -135,14 +135,17 @@ pub fn assemble_whitney_mass_1(
         for (0..3) |k| {
             const va = fv[local_edges[k][0]];
             const vb = fv[local_edges[k][1]];
+            var found = false;
             for (0..3) |col| {
                 const ev = mesh_edge_verts[boundary_global[col]];
                 if ((ev[0] == va and ev[1] == vb) or (ev[0] == vb and ev[1] == va)) {
                     local_global_edge[k] = boundary_global[col];
                     local_global_sign[k] = boundary_signs[col];
+                    found = true;
                     break;
                 }
             }
+            std.debug.assert(found); // every local edge must appear in ∂₂
         }
 
         // Scatter local mass into global assembler with orientation correction.

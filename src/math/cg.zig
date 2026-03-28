@@ -150,12 +150,14 @@ pub const Scratch = struct {
     ap: []f64,
 
     pub fn init(allocator: std.mem.Allocator, n: u32) !Scratch {
-        return .{
-            .r = try allocator.alloc(f64, n),
-            .z = try allocator.alloc(f64, n),
-            .p = try allocator.alloc(f64, n),
-            .ap = try allocator.alloc(f64, n),
-        };
+        const r = try allocator.alloc(f64, n);
+        errdefer allocator.free(r);
+        const z = try allocator.alloc(f64, n);
+        errdefer allocator.free(z);
+        const p = try allocator.alloc(f64, n);
+        errdefer allocator.free(p);
+        const ap = try allocator.alloc(f64, n);
+        return .{ .r = r, .z = z, .p = p, .ap = ap };
     }
 
     pub fn deinit(self: *Scratch, allocator: std.mem.Allocator) void {
