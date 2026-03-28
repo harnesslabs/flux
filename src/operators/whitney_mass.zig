@@ -173,6 +173,79 @@ fn triangleArea(comptime dim: usize, v0: [dim]f64, v1: [dim]f64, v2: [dim]f64) f
     @compileError("triangleArea not yet implemented for dim > 2");
 }
 
+const cg = @import("../math/cg.zig");
+
+/// Precomputed Whitney Hodge star context for ★₁.
+///
+/// Holds the mass matrix, CG scratch space, and diagonal preconditioner.
+/// Built once per mesh and reused across timesteps. The diagonal ★₁ values
+/// (dual_length / length) serve as a spectrally equivalent preconditioner
+/// for the CG solve, giving mesh-independent iteration counts.
+pub fn WhitneyHodge1(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+
+        mass_matrix: sparse.CsrMatrix(f64),
+        scratch: cg.Scratch,
+        precond_diagonal: []f64,
+
+        /// Build the Whitney Hodge star context from a mesh.
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
+            var mass = try assemble_whitney_mass_1(allocator, mesh);
+            errdefer mass.deinit(allocator);
+
+            var scratch = try cg.Scratch.init(allocator, mass.n_rows);
+            errdefer scratch.deinit(allocator);
+
+            // Build diagonal preconditioner from diagonal ★₁ = dual_length / length.
+            const n_edges = mesh.num_edges();
+            const precond = try allocator.alloc(f64, n_edges);
+            errdefer allocator.free(precond);
+
+            const edge_slice = mesh.edges.slice();
+            const lengths = edge_slice.items(.length);
+            const dual_lengths = edge_slice.items(.dual_length);
+            for (precond, lengths, dual_lengths) |*p, len, dual_len| {
+                p.* = dual_len / len;
+            }
+
+            return .{
+                .mass_matrix = mass,
+                .scratch = scratch,
+                .precond_diagonal = precond,
+            };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.precond_diagonal);
+            self.scratch.deinit(allocator);
+            self.mass_matrix.deinit(allocator);
+        }
+
+        /// Apply ★₁: y = M₁ · x (forward SpMV).
+        pub fn apply(self: Self, input: []const f64, output: []f64) void {
+            sparse.spmv(self.mass_matrix, input, output);
+        }
+
+        /// Apply ★₁⁻¹: solve M₁ · x = b via preconditioned CG.
+        /// Returns the solution in `x`. Uses `b` as the RHS.
+        pub fn solve_inverse(self: *Self, b: []const f64, x: []f64) void {
+            var precond = cg.DiagonalPreconditioner{ .diagonal = self.precond_diagonal };
+            const result = cg.solve(
+                self.mass_matrix,
+                b,
+                x,
+                1e-10,
+                1000,
+                cg.DiagonalPreconditioner.apply,
+                @ptrCast(&precond),
+                self.scratch,
+            );
+            std.debug.assert(result.converged);
+        }
+    };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════

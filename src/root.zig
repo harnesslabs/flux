@@ -80,6 +80,12 @@ pub const RunConfig = em.RunConfig;
 /// Discrete electromagnetic energy: ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
 pub const electromagnetic_energy = em.electromagnetic_energy;
 
+/// Whitney/Galerkin mass matrix assembly.
+pub const assemble_whitney_mass_1 = operators.whitney_mass.assemble_whitney_mass_1;
+
+/// Precomputed Whitney Hodge star context for ★₁.
+pub const WhitneyHodge1 = operators.whitney_mass.WhitneyHodge1;
+
 /// Project analytical TE₁₀ E field onto mesh edges at time t.
 pub const project_te10_e = em.project_te10_e;
 

@@ -151,6 +151,89 @@ pub fn ampere_step(
     }
 }
 
+const whitney = @import("../operators/whitney_mass.zig");
+
+/// Ampere-Maxwell update using the Whitney/Galerkin mass matrix for ★₁⁻¹.
+///
+/// Same physics as `ampere_step` but uses CG solve with the Whitney mass
+/// matrix instead of the diagonal ★₁⁻¹. This gives second-order field
+/// convergence on any triangulation, unlike the diagonal approximation.
+///
+/// E^{n+1} = E^n + dt · (M₁⁻¹ d̃₀ ★₂ B^{n+1/2} − J)
+pub fn ampere_step_whitney(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    dt: f64,
+    whitney_hodge: anytype,
+) !void {
+    // Steps 1-2 are identical to diagonal ampere_step.
+    var star_B = try hs.hodge_star(allocator, state.B);
+    defer star_B.deinit(allocator);
+
+    var d_star_B = try ext.exterior_derivative(allocator, star_B);
+    defer d_star_B.deinit(allocator);
+
+    // Step 3: ★₁⁻¹(d(★₂B)) via CG solve with Whitney mass matrix.
+    const n = state.E.values.len;
+    const inv_result = try allocator.alloc(f64, n);
+    defer allocator.free(inv_result);
+    @memset(inv_result, 0.0);
+
+    whitney_hodge.solve_inverse(d_star_B.values, inv_result);
+
+    // E += dt * (★₁⁻¹ d★₂B − J)
+    for (state.E.values, inv_result, state.J.values) |*e, star_inv_dsb, j| {
+        e.* += dt * (star_inv_dsb - j);
+    }
+}
+
+/// Leapfrog integrator using the Whitney mass matrix for ★₁⁻¹.
+pub fn leapfrog_step_whitney(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    dt: f64,
+    whitney_hodge: anytype,
+) !void {
+    try faraday_step(allocator, state, dt);
+    try ampere_step_whitney(allocator, state, dt, whitney_hodge);
+    state.timestep += 1;
+}
+
+/// Discrete electromagnetic energy using the Whitney mass matrix for ★₁.
+///
+/// U = ½(⟨E, M₁E⟩ + ⟨B, ★₂B⟩)
+///
+/// The E-field energy uses the Whitney mass matrix (SpMV) instead of the
+/// diagonal ★₁. The B-field energy still uses the diagonal ★₂ (which is
+/// exact for faces).
+pub fn electromagnetic_energy_whitney(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    whitney_hodge: anytype,
+) !f64 {
+    // ★₁(E) via Whitney mass matrix (SpMV).
+    const n = state.E.values.len;
+    const m1_e = try allocator.alloc(f64, n);
+    defer allocator.free(m1_e);
+    whitney_hodge.apply(state.E.values, m1_e);
+
+    var e_energy: f64 = 0.0;
+    for (state.E.values, m1_e) |e, se| {
+        e_energy += e * se;
+    }
+
+    // ★₂(B): diagonal, same as before.
+    var star_B = try hs.hodge_star(allocator, state.B);
+    defer star_B.deinit(allocator);
+
+    var b_energy: f64 = 0.0;
+    for (state.B.values, star_B.values) |b, sb| {
+        b_energy += b * sb;
+    }
+
+    return 0.5 * (e_energy + b_energy);
+}
+
 /// Apply perfect electric conductor (PEC) boundary conditions.
 ///
 /// Zeroes E on all mesh boundary edges. In the DEC formulation, E is a
