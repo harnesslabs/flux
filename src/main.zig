@@ -91,11 +91,12 @@ fn Progress(comptime Writer: type) type {
         last_draw_ns: u64 = 0,
         bar_width: u32 = 40,
 
-        fn init(writer: Writer, total: u32) !Self {
+        fn init(writer: Writer, total: u32) Self {
             return .{
                 .writer = writer,
                 .total = total,
-                .timer = std.time.Timer.start() catch return error.TimerUnavailable,
+                .timer = std.time.Timer.start() catch
+                    @panic("OS timer unavailable — cannot run simulation"),
             };
         }
 
@@ -255,7 +256,7 @@ fn simulate(
         allocator.free(filename_bufs);
     };
 
-    var progress = try Progress(@TypeOf(writer)).init(writer, config.steps);
+    var progress = Progress(@TypeOf(writer)).init(writer, config.steps);
 
     for (0..config.steps) |step_idx| {
         const t = @as(f64, @floatFromInt(step_idx)) * time_step;

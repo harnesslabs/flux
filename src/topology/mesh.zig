@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 
 /// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
@@ -145,11 +146,8 @@ pub fn Mesh(comptime n: usize) type {
             width: f64,
             height: f64,
         ) !Self {
-            // Hard errors — zero/negative inputs produce degenerate meshes with
-            // division-by-zero in spacing and zero-area triangles.
-            if (nx == 0 or ny == 0 or !(width > 0) or !(height > 0)) {
-                return error.InvalidGridDimensions;
-            }
+            if (nx == 0 or ny == 0) @panic("grid dimensions must be positive");
+            if (!(width > 0) or !(height > 0)) @panic("domain size must be positive");
 
             const dx = width / @as(f64, @floatFromInt(nx));
             const dy = height / @as(f64, @floatFromInt(ny));
@@ -383,7 +381,7 @@ pub fn Mesh(comptime n: usize) type {
                     } else {
                         // An edge adjacent to zero faces indicates a
                         // disconnected or malformed mesh — fail loudly.
-                        return error.NonManifoldEdge;
+                        return flux.Error.NonManifoldEdge;
                     }
                 }
 
@@ -427,7 +425,7 @@ pub fn Mesh(comptime n: usize) type {
                     const area_4 = 4.0 * triangle_area(p0, p1, p2);
                     // Degenerate triangles cause division by zero in the
                     // cotangent formula below. This must survive release builds.
-                    if (!(area_4 > 0)) return error.DegenerateTriangle;
+                    if (!(area_4 > 0)) return flux.Error.DegenerateTriangle;
 
                     const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
                     const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
@@ -715,21 +713,12 @@ test "Mesh(3) compiles at dimension 3" {
     try testing.expect(M.dimension == 3);
 }
 
-test "uniform_grid rejects zero grid dimensions" {
+test "uniform_grid 1×1 is the smallest valid grid" {
+    // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
+    // This test verifies the smallest valid grid constructs successfully.
     const allocator = testing.allocator;
-    // nx = 0 must be a hard error, not a silent degenerate mesh.
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 0, 4, 1.0, 1.0));
-    // ny = 0
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 0, 1.0, 1.0));
-}
-
-test "uniform_grid rejects zero or negative domain size" {
-    const allocator = testing.allocator;
-    // width = 0 must be a hard error — would cause division by zero in spacing.
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 0.0, 1.0));
-    // height = 0
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 1.0, 0.0));
-    // negative
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, -1.0, 1.0));
-    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 1.0, -1.0));
+    var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 0.001, 0.001);
+    defer mesh.deinit(allocator);
+    try testing.expectEqual(@as(u32, 4), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 2), mesh.num_faces());
 }
