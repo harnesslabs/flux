@@ -91,11 +91,11 @@ fn Progress(comptime Writer: type) type {
         last_draw_ns: u64 = 0,
         bar_width: u32 = 40,
 
-        fn init(writer: Writer, total: u32) Self {
+        fn init(writer: Writer, total: u32) !Self {
             return .{
                 .writer = writer,
                 .total = total,
-                .timer = std.time.Timer.start() catch unreachable,
+                .timer = std.time.Timer.start() catch return error.TimerUnavailable,
             };
         }
 
@@ -239,8 +239,9 @@ fn simulate(
     const interval = config.outputInterval();
     const has_output = interval > 0;
 
-    // PVD entry storage.
-    const max_snapshots = if (has_output) (config.steps / interval) + 1 else 0;
+    // PVD entry storage. Saturating add guards the pathological case where
+    // steps == u32_max and interval == 1.
+    const max_snapshots: u32 = if (has_output) (config.steps / interval) +| 1 else 0;
     var pvd_entries: []vtk.PvdEntry = &.{};
     var filename_bufs: [][vtk.max_snapshot_filename_length]u8 = &.{};
     var snapshot_count: u32 = 0;
@@ -254,7 +255,7 @@ fn simulate(
         allocator.free(filename_bufs);
     };
 
-    var progress = Progress(@TypeOf(writer)).init(writer, config.steps);
+    var progress = try Progress(@TypeOf(writer)).init(writer, config.steps);
 
     for (0..config.steps) |step_idx| {
         const t = @as(f64, @floatFromInt(step_idx)) * time_step;
@@ -283,7 +284,7 @@ fn simulate(
             snapshot_count += 1;
         }
 
-        // Progress (throttled internally to ~20 fps).
+        // Safe: step_idx < config.steps (u32), so step_idx + 1 ≤ u32 max.
         progress.update(@intCast(step_idx + 1));
     }
 
