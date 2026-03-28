@@ -48,7 +48,10 @@ pub const Error = error{
 
 pub const forms = @import("forms/cochain.zig");
 pub const io = @import("io/vtk.zig");
-pub const math = @import("math/sparse.zig");
+pub const math = struct {
+    pub const sparse = @import("math/sparse.zig");
+    pub const cg = @import("math/cg.zig");
+};
 pub const operators = struct {
     pub const compose = @import("operators/compose.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
