@@ -379,8 +379,6 @@ pub fn Mesh(comptime n: usize) type {
                         dual_lengths[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
                     } else {
-                        // An edge adjacent to zero faces indicates a
-                        // disconnected or malformed mesh — fail loudly.
                         return flux.Error.NonManifoldEdge;
                     }
                 }
