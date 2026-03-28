@@ -1615,6 +1615,99 @@ test "TE₁₀ cavity: discrete eigenfrequency converges to analytical ω² = π
     try testing.expect(error_fine < 0.25);
 }
 
+// ── Whitney mass matrix convergence test ─────────────────────────────────────
+
+/// Whitney-correct Rayleigh quotient: ω² = ⟨dE, ★₂dE⟩ / ⟨E, M₁E⟩.
+///
+/// Uses the Whitney mass matrix M₁ for the E-field energy, which is the exact
+/// Galerkin L² inner product. The curl-curl operator is M₁⁻¹ d ★₂, giving
+/// O(h²) eigenvalue convergence on any triangulation.
+///
+/// This is the Whitney-version of `compute_te10_eigenvalue` which uses the
+/// diagonal Hodge star ★₁ and only has O(h) convergence on barycentric meshes.
+fn compute_te10_eigenvalue_whitney(
+    allocator: std.mem.Allocator,
+    grid_n: u32,
+    domain_length: f64,
+) !f64 {
+    var mesh = try Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
+    defer mesh.deinit(allocator);
+
+    var wh = try whitney.WhitneyHodge1(Mesh2D).init(allocator, &mesh);
+    defer wh.deinit(allocator);
+
+    // Project TE₁₀ E-mode at t = π/(2ω) where sin(ωt) = 1 (peak amplitude).
+    const e_values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(e_values);
+    project_te10_e(&mesh, e_values, domain_length / 2.0, domain_length);
+
+    var E = try MaxwellState.OneForm.init(allocator, &mesh);
+    defer E.deinit(allocator);
+    @memcpy(E.values, e_values);
+
+    // dE (primal 2-form).
+    var dE = try ext.exterior_derivative(allocator, E);
+    defer dE.deinit(allocator);
+
+    // Numerator: ⟨dE, ★₂dE⟩ = Σ_f (dE_f)² / area_f.
+    const face_areas = mesh.faces.slice().items(.area);
+    var numerator: f64 = 0.0;
+    for (dE.values, face_areas) |de, area| {
+        numerator += de * de / area;
+    }
+
+    // Denominator: ⟨E, M₁E⟩ via Whitney mass matrix SpMV.
+    const m1_e = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(m1_e);
+    wh.apply(E.values, m1_e);
+    var denominator: f64 = 0.0;
+    for (e_values, m1_e) |e, m1e| {
+        denominator += e * m1e;
+    }
+
+    return numerator / denominator;
+}
+
+test "Whitney: eigenvalue error reduces ≥3× when grid halves (acceptance criterion)" {
+    // The Whitney/Galerkin mass matrix M₁ gives O(h²) eigenvalue convergence.
+    // The diagonal DEC Hodge star ★₁ only gives O(h) convergence on barycentric
+    // meshes (the circumcentric dual has the right orthogonality but degenerates;
+    // the barycentric dual removes degeneracy but loses the orthogonality).
+    //
+    // We verify: error_8×8 / error_16×16 ≥ 3.
+    // This is the acceptance criterion for issue #70.
+    const allocator = testing.allocator;
+    const domain_length: f64 = 1.0;
+    const analytical_omega_sq = std.math.pi * std.math.pi / (domain_length * domain_length);
+
+    const omega_sq_coarse = try compute_te10_eigenvalue_whitney(allocator, 8, domain_length);
+    const omega_sq_fine = try compute_te10_eigenvalue_whitney(allocator, 16, domain_length);
+
+    const error_coarse = @abs(omega_sq_coarse - analytical_omega_sq) / analytical_omega_sq;
+    const error_fine = @abs(omega_sq_fine - analytical_omega_sq) / analytical_omega_sq;
+
+    // Both eigenvalues should be positive.
+    try testing.expect(omega_sq_coarse > 0.0);
+    try testing.expect(omega_sq_fine > 0.0);
+
+    std.debug.print("\nWhitney ω²: 8×8={d:.6}, 16×16={d:.6}, analytical={d:.6}\n", .{
+        omega_sq_coarse, omega_sq_fine, analytical_omega_sq,
+    });
+    std.debug.print("Whitney error: 8×8={d:.6}, 16×16={d:.6}, ratio={d:.2}\n", .{
+        error_coarse, error_fine, error_coarse / error_fine,
+    });
+
+    // Finer grid must be closer to analytical.
+    try testing.expect(error_fine < error_coarse);
+
+    std.debug.print("\nWhitney eigenvalue: 8×8 error={d:.4}, 16×16 error={d:.4}, ratio={d:.2}\n", .{
+        error_coarse, error_fine, error_coarse / error_fine,
+    });
+
+    // Acceptance criterion: error reduces by ≥3× when grid halves.
+    try testing.expect(error_coarse / error_fine >= 3.0);
+}
+
 test "convergence: energy drift decreases with grid refinement for TE₁₀ cavity" {
     // The leapfrog integrator is symplectic, so energy drift in a
     // source-free cavity should decrease with finer grids (smaller dt).

@@ -51,8 +51,9 @@ pub fn assemble_whitney_mass_1(
     var assembler = sparse.TripletAssembler(f64).init(n_edges, n_edges);
     defer assembler.deinit(allocator);
 
-    // Pre-fetch SoA slices for vertices and faces.
+    // Pre-fetch SoA slices for vertices, edges, and faces.
     const coords = mesh.vertices.slice().items(.coords);
+    const mesh_edge_verts = mesh.edges.slice().items(.vertices);
     const face_verts = mesh.faces.slice().items(.vertices);
 
     // For each triangle, compute the local 3×3 Whitney mass matrix and
@@ -121,20 +122,36 @@ pub fn assemble_whitney_mass_1(
         const boundary_row = mesh.boundary_2.row(@intCast(face_idx));
         std.debug.assert(boundary_row.cols.len == 3);
 
-        // boundary_2 row gives us 3 global edge indices and their signs.
-        // We need to match these to local edges. The boundary operator stores
-        // edges in the order they appear in the face's boundary, which matches
-        // our local edge ordering (edge 0 = v0→v1, edge 1 = v1→v2, edge 2 = v2→v0).
-        const global_edges = boundary_row.cols;
-        const signs = boundary_row.vals;
+        // boundary_2 row stores edges sorted by global index, which does NOT
+        // in general match the local edge order (v0→v1, v1→v2, v2→v0).
+        // Build an explicit mapping: local_edge_k → (global_edge, sign).
+        // Match by looking up the global edge's vertex pair against the face's
+        // vertex pair for each local edge.
+        const boundary_global = boundary_row.cols;
+        const boundary_signs = boundary_row.vals;
+
+        var local_global_edge: [3]u32 = undefined;
+        var local_global_sign: [3]i8 = undefined;
+        for (0..3) |k| {
+            const va = fv[local_edges[k][0]];
+            const vb = fv[local_edges[k][1]];
+            for (0..3) |col| {
+                const ev = mesh_edge_verts[boundary_global[col]];
+                if ((ev[0] == va and ev[1] == vb) or (ev[0] == vb and ev[1] == va)) {
+                    local_global_edge[k] = boundary_global[col];
+                    local_global_sign[k] = boundary_signs[col];
+                    break;
+                }
+            }
+        }
 
         // Scatter local mass into global assembler with orientation correction.
         for (0..3) |i| {
             for (0..3) |j| {
-                const sign_i: f64 = @floatFromInt(signs[i]);
-                const sign_j: f64 = @floatFromInt(signs[j]);
+                const sign_i: f64 = @floatFromInt(local_global_sign[i]);
+                const sign_j: f64 = @floatFromInt(local_global_sign[j]);
                 const val = sign_i * sign_j * local_mass[i][j];
-                try assembler.addEntry(allocator, global_edges[i], global_edges[j], val);
+                try assembler.addEntry(allocator, local_global_edge[i], local_global_edge[j], val);
             }
         }
     }
