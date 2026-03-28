@@ -1406,6 +1406,101 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
     return numerator / denominator;
 }
 
+// ── TE₁₀ field projection tests ──────────────────────────────────────────
+
+test "project_te10_e is zero for vertical edges at x = 0 and x = L" {
+    // TE₁₀ mode: E_y(x,y,t) = sin(πx/L)sin(ωt), E_x = 0.
+    // At x = 0 and x = L, sin(πx/L) = 0, so all edge integrals vanish
+    // regardless of orientation.
+    const allocator = testing.allocator;
+    const nx: u32 = 8;
+    const ny: u32 = 6;
+    const domain_length: f64 = 1.0;
+    var mesh = try Mesh2D.uniform_grid(allocator, nx, ny, domain_length, domain_length);
+    defer mesh.deinit(allocator);
+
+    const values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(values);
+
+    // At t = L/2 (sin(ωt) = 1, maximum amplitude).
+    project_te10_e(&mesh, values, domain_length / 2.0, domain_length);
+
+    // Edges on x = 0: vertices with i = 0.
+    // Edges on x = L: vertices with i = nx.
+    const edge_verts = mesh.edges.slice().items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+    for (values, edge_verts) |val, verts| {
+        const x0 = coords[verts[0]][0];
+        const x1 = coords[verts[1]][0];
+        const mx = 0.5 * (x0 + x1);
+        // Edges centered at x = 0 or x = L have sin(πx/L) = 0.
+        if (@abs(mx) < 1e-12 or @abs(mx - domain_length) < 1e-12) {
+            try testing.expectApproxEqAbs(@as(f64, 0.0), val, 1e-14);
+        }
+    }
+}
+
+test "project_te10_e has zero contribution from horizontal edges" {
+    // E = (0, E_y), so E · dl = E_y · dy. For horizontal edges, dy = 0,
+    // so every horizontal edge gets zero regardless of x position.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 6, 6, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(values);
+
+    project_te10_e(&mesh, values, 0.25, 1.0);
+
+    const edge_verts = mesh.edges.slice().items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+    for (values, edge_verts) |val, verts| {
+        const dy = coords[verts[1]][1] - coords[verts[0]][1];
+        if (@abs(dy) < 1e-15) {
+            try testing.expectApproxEqAbs(@as(f64, 0.0), val, 1e-15);
+        }
+    }
+}
+
+test "project_te10_b at t = 0 equals cos(πx/L) · area for each face" {
+    // B_z(x,y,0) = cos(πx/L) · cos(0) = cos(πx/L).
+    // Face integral ≈ cos(πx_centroid/L) · area.
+    const allocator = testing.allocator;
+    const domain_length: f64 = 2.0;
+    var mesh = try Mesh2D.uniform_grid(allocator, 8, 8, domain_length, domain_length);
+    defer mesh.deinit(allocator);
+
+    const values = try allocator.alloc(f64, mesh.num_faces());
+    defer allocator.free(values);
+    project_te10_b(&mesh, values, 0.0, domain_length);
+
+    const face_verts = mesh.faces.slice().items(.vertices);
+    const face_areas = mesh.faces.slice().items(.area);
+    const coords = mesh.vertices.slice().items(.coords);
+    const k = std.math.pi / domain_length;
+
+    for (values, face_verts, face_areas) |val, verts, area| {
+        const cx = (coords[verts[0]][0] + coords[verts[1]][0] + coords[verts[2]][0]) / 3.0;
+        const expected = @cos(k * cx) * area;
+        try testing.expectApproxEqAbs(expected, val, 1e-14);
+    }
+}
+
+test "project_te10_e at t = 0 is identically zero" {
+    // E_y(x,y,0) = sin(πx/L) · sin(0) = 0 for all x, y.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 6, 6, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(values);
+    project_te10_e(&mesh, values, 0.0, 1.0);
+
+    for (values) |val| {
+        try testing.expectApproxEqAbs(@as(f64, 0.0), val, 1e-15);
+    }
+}
+
 test "TE₁₀ cavity: discrete eigenfrequency converges to analytical ω² = π²/L²" {
     // The DEC curl-curl operator ★₁⁻¹ d̃₀ ★₂ d₁ acting on the TE₁₀
     // eigenmode E_y = sin(πx/L) should produce approximately ω² · E

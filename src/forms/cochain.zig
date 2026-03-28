@@ -337,3 +337,216 @@ test "inner product and norm" {
     // ‖a‖² = 1 + 4 + 9 + 16 = 30
     try testing.expectApproxEqAbs(@as(f64, 30.0), a.norm_squared(), 1e-15);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Property tests: cochain arithmetic
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "add is commutative for random 0-cochains (1000 trials)" {
+    // a + b = b + a for all cochains a, b.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_ADD_00);
+
+    for (0..1000) |_| {
+        var a = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer a.deinit(allocator);
+        var b = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer b.deinit(allocator);
+
+        // Save copies for the second order of addition.
+        var a_copy = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer a_copy.deinit(allocator);
+        var b_copy = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer b_copy.deinit(allocator);
+
+        for (a.values, a_copy.values) |*av, *acv| {
+            const val = rng.random().float(f64) * 200.0 - 100.0;
+            av.* = val;
+            acv.* = val;
+        }
+        for (b.values, b_copy.values) |*bv, *bcv| {
+            const val = rng.random().float(f64) * 200.0 - 100.0;
+            bv.* = val;
+            bcv.* = val;
+        }
+
+        // a += b
+        a.add(b);
+        // b_copy += a_copy  (b + a)
+        b_copy.add(a_copy);
+
+        for (a.values, b_copy.values) |ab, ba| {
+            try testing.expectApproxEqAbs(ab, ba, 1e-14);
+        }
+    }
+}
+
+test "add is associative for random 1-cochains (1000 trials)" {
+    // (a + b) + c = a + (b + c) for all cochains a, b, c.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_A55_01);
+
+    for (0..1000) |_| {
+        var a1 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer a1.deinit(allocator);
+        var a2 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer a2.deinit(allocator);
+        var b1 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer b1.deinit(allocator);
+        var b2 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer b2.deinit(allocator);
+        var c1 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer c1.deinit(allocator);
+        var c2 = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer c2.deinit(allocator);
+
+        for (0..a1.values.len) |i| {
+            const va = rng.random().float(f64) * 200.0 - 100.0;
+            const vb = rng.random().float(f64) * 200.0 - 100.0;
+            const vc = rng.random().float(f64) * 200.0 - 100.0;
+            a1.values[i] = va;
+            a2.values[i] = va;
+            b1.values[i] = vb;
+            b2.values[i] = vb;
+            c1.values[i] = vc;
+            c2.values[i] = vc;
+        }
+
+        // (a + b) + c
+        a1.add(b1);
+        a1.add(c1);
+
+        // a + (b + c)
+        b2.add(c2);
+        a2.add(b2);
+
+        for (a1.values, a2.values) |lhs, rhs| {
+            try testing.expectApproxEqAbs(lhs, rhs, 1e-13);
+        }
+    }
+}
+
+test "scale distributes over add for random cochains (1000 trials)" {
+    // α(a + b) = αa + αb for all cochains a, b and scalar α.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 2.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_D15_02);
+
+    for (0..1000) |_| {
+        var a1 = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer a1.deinit(allocator);
+        var a2 = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer a2.deinit(allocator);
+        var b1 = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer b1.deinit(allocator);
+        var b2 = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer b2.deinit(allocator);
+
+        const alpha = rng.random().float(f64) * 20.0 - 10.0;
+
+        for (0..a1.values.len) |i| {
+            const va = rng.random().float(f64) * 200.0 - 100.0;
+            const vb = rng.random().float(f64) * 200.0 - 100.0;
+            a1.values[i] = va;
+            a2.values[i] = va;
+            b1.values[i] = vb;
+            b2.values[i] = vb;
+        }
+
+        // α(a + b)
+        a1.add(b1);
+        a1.scale(alpha);
+
+        // αa + αb
+        a2.scale(alpha);
+        b2.scale(alpha);
+        a2.add(b2);
+
+        for (a1.values, a2.values) |lhs, rhs| {
+            try testing.expectApproxEqAbs(lhs, rhs, 1e-12);
+        }
+    }
+}
+
+test "negate is self-inverse for random cochains (1000 trials)" {
+    // negate(negate(a)) = a for all cochains a.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_4E9_03);
+
+    for (0..1000) |_| {
+        var a = try Cochain(Mesh2D, 2, Primal).init(allocator, &mesh);
+        defer a.deinit(allocator);
+
+        const original = try allocator.alloc(f64, a.values.len);
+        defer allocator.free(original);
+
+        for (a.values, original) |*v, *o| {
+            const val = rng.random().float(f64) * 200.0 - 100.0;
+            v.* = val;
+            o.* = val;
+        }
+
+        a.negate();
+        a.negate();
+
+        for (a.values, original) |v, o| {
+            try testing.expectApproxEqAbs(o, v, 1e-15);
+        }
+    }
+}
+
+test "inner product is symmetric for random cochains (1000 trials)" {
+    // ⟨a, b⟩ = ⟨b, a⟩ for all cochains a, b.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_1F5_04);
+
+    for (0..1000) |_| {
+        var a = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer a.deinit(allocator);
+        var b = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
+        defer b.deinit(allocator);
+
+        for (a.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+        for (b.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+        const ab = a.inner_product(b);
+        const ba = b.inner_product(a);
+        try testing.expectApproxEqRel(ab, ba, 1e-14);
+    }
+}
+
+test "norm_squared is non-negative for random cochains (1000 trials)" {
+    // ‖a‖² ≥ 0 for all cochains a, with equality iff a = 0.
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xC0C_402_05);
+
+    for (0..1000) |_| {
+        var a = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+        defer a.deinit(allocator);
+        for (a.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+        try testing.expect(a.norm_squared() >= 0.0);
+    }
+
+    // Zero cochain has zero norm.
+    var zero = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
+    defer zero.deinit(allocator);
+    try testing.expectEqual(@as(f64, 0.0), zero.norm_squared());
+}

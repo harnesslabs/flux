@@ -711,6 +711,117 @@ test "Mesh(3) compiles at dimension 3" {
     try testing.expect(M.dimension == 3);
 }
 
+test "random grid dimensions produce valid meshes (100 trials)" {
+    // Stress test: random (nx, ny, width, height) tuples must all produce
+    // meshes with valid geometry — positive edge lengths, positive face areas,
+    // positive dual areas that sum to the total domain area, and nonzero
+    // dual lengths on all edges.
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0xE5B_57E55);
+
+    for (0..100) |_| {
+        const nx: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 20));
+        const ny: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 20));
+        const width = rng.random().float(f64) * 99.9 + 0.1; // (0.1, 100.0)
+        const height = rng.random().float(f64) * 99.9 + 0.1;
+
+        var mesh = try Mesh(2).uniform_grid(allocator, nx, ny, width, height);
+        defer mesh.deinit(allocator);
+
+        // Entity counts match the grid formulas.
+        try testing.expectEqual((nx + 1) * (ny + 1), mesh.num_vertices());
+        try testing.expectEqual(2 * nx * ny, mesh.num_faces());
+
+        // All edge lengths are positive.
+        const lengths = mesh.edges.slice().items(.length);
+        for (lengths) |l| {
+            try testing.expect(l > 0.0);
+        }
+
+        // All face areas are positive.
+        const areas = mesh.faces.slice().items(.area);
+        for (areas) |a| {
+            try testing.expect(a > 0.0);
+        }
+
+        // All dual edge lengths are positive (barycentric dual guarantee).
+        const dual_lengths = mesh.edges.slice().items(.dual_length);
+        for (dual_lengths) |dl| {
+            try testing.expect(dl > 0.0);
+        }
+
+        // All dual vertex areas are positive.
+        const dual_areas = mesh.vertices.slice().items(.dual_area);
+        for (dual_areas) |da| {
+            try testing.expect(da > 0.0);
+        }
+
+        // Dual areas sum to total domain area.
+        var total_dual: f64 = 0;
+        for (dual_areas) |da| total_dual += da;
+        try testing.expectApproxEqRel(width * height, total_dual, 1e-12);
+
+        // Face areas sum to total domain area.
+        var total_face: f64 = 0;
+        for (areas) |a| total_face += a;
+        try testing.expectApproxEqRel(width * height, total_face, 1e-12);
+    }
+}
+
+test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
+    // Stress test: Δ₀ on random meshes with random 0-forms must:
+    //   1. Produce zero for constant functions (Δ₀(const) = 0)
+    //   2. Be positive-semidefinite: ⟨ω, Δ₀ω⟩_★₀ ≥ 0
+    const allocator = testing.allocator;
+    const laplacian_mod = @import("../operators/laplacian.zig");
+    const cochain_mod = @import("../forms/cochain.zig");
+
+    var rng = std.Random.DefaultPrng.init(0xE5B_C07_00);
+
+    for (0..50) |_| {
+        const nx: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 15));
+        const ny: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 15));
+        const width = rng.random().float(f64) * 99.9 + 0.1;
+        const height = rng.random().float(f64) * 99.9 + 0.1;
+
+        var mesh = try Mesh(2).uniform_grid(allocator, nx, ny, width, height);
+        defer mesh.deinit(allocator);
+
+        const PrimalC0 = cochain_mod.Cochain(Mesh(2), 0, cochain_mod.Primal);
+
+        // Δ₀(constant) = 0.
+        {
+            var omega = try PrimalC0.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = 42.0;
+
+            var result = try laplacian_mod.laplacian(allocator, omega);
+            defer result.deinit(allocator);
+
+            for (result.values) |v| {
+                try testing.expectApproxEqAbs(@as(f64, 0.0), v, 1e-10);
+            }
+        }
+
+        // Positive-semidefiniteness on a random 0-form.
+        {
+            var omega = try PrimalC0.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+            var lap_omega = try laplacian_mod.laplacian(allocator, omega);
+            defer lap_omega.deinit(allocator);
+
+            const dual_areas = mesh.vertices.slice().items(.dual_area);
+            var inner: f64 = 0;
+            for (omega.values, lap_omega.values, dual_areas) |w, lw, area| {
+                inner += w * lw * area;
+            }
+            try testing.expect(inner >= -1e-8);
+        }
+    }
+}
+
 test "uniform_grid 1×1 is the smallest valid grid" {
     // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
     // This test verifies the smallest valid grid constructs successfully.

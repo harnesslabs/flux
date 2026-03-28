@@ -738,6 +738,74 @@ test "write_fields produces vtu with E_intensity and B_flux CellData" {
     try testing.expectEqual(mesh.num_faces(), @as(u32, @intCast(parsed_e.len)));
 }
 
+test "vtu 0-form PointData round-trips with random data across grid sizes" {
+    // Property test: for multiple grid sizes, random 0-form values
+    // survive write→parse round-trip to machine precision.
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0xF7C_27D_00);
+
+    const sizes = [_][2]u32{
+        .{ 1, 1 }, .{ 2, 3 }, .{ 4, 4 }, .{ 7, 5 }, .{ 10, 8 },
+    };
+
+    for (sizes) |size| {
+        var mesh = try topology.Mesh(2).uniform_grid(allocator, size[0], size[1], 3.0, 2.0);
+        defer mesh.deinit(allocator);
+
+        const values = try allocator.alloc(f64, mesh.num_vertices());
+        defer allocator.free(values);
+        for (values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+        var output = std.ArrayListUnmanaged(u8){};
+        defer output.deinit(allocator);
+
+        const pd = [_]DataArraySlice{.{ .name = "random_field", .values = values }};
+        try write(output.writer(allocator), 2, mesh, &pd, &.{});
+
+        const parsed = try parseDataArray(allocator, output.items, "random_field");
+        defer allocator.free(parsed);
+
+        try testing.expectEqual(values.len, parsed.len);
+        for (values, parsed) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-15);
+        }
+    }
+}
+
+test "vtu 2-form CellData round-trips with random data across grid sizes" {
+    // Property test: for multiple grid sizes, random 2-form values
+    // survive write→parse round-trip to machine precision.
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0xF7C_27D_01);
+
+    const sizes = [_][2]u32{
+        .{ 1, 1 }, .{ 3, 2 }, .{ 5, 5 }, .{ 8, 6 },
+    };
+
+    for (sizes) |size| {
+        var mesh = try topology.Mesh(2).uniform_grid(allocator, size[0], size[1], 2.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        const values = try allocator.alloc(f64, mesh.num_faces());
+        defer allocator.free(values);
+        for (values) |*v| v.* = rng.random().float(f64) * 1000.0 - 500.0;
+
+        var output = std.ArrayListUnmanaged(u8){};
+        defer output.deinit(allocator);
+
+        const cd = [_]DataArraySlice{.{ .name = "random_flux", .values = values }};
+        try write(output.writer(allocator), 2, mesh, &.{}, &cd);
+
+        const parsed = try parseDataArray(allocator, output.items, "random_flux");
+        defer allocator.free(parsed);
+
+        try testing.expectEqual(values.len, parsed.len);
+        for (values, parsed) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-15);
+        }
+    }
+}
+
 test "snapshot_filename and write_pvd compose for time-series workflow" {
     // Simulate a 3-step time series: generate filenames, then write PVD.
     const allocator = testing.allocator;
