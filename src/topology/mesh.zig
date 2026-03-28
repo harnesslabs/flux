@@ -145,10 +145,11 @@ pub fn Mesh(comptime n: usize) type {
             width: f64,
             height: f64,
         ) !Self {
-            std.debug.assert(nx > 0);
-            std.debug.assert(ny > 0);
-            std.debug.assert(width > 0);
-            std.debug.assert(height > 0);
+            // Hard errors — zero/negative inputs produce degenerate meshes with
+            // division-by-zero in spacing and zero-area triangles.
+            if (nx == 0 or ny == 0 or !(width > 0) or !(height > 0)) {
+                return error.InvalidGridDimensions;
+            }
 
             const dx = width / @as(f64, @floatFromInt(nx));
             const dy = height / @as(f64, @floatFromInt(ny));
@@ -707,4 +708,23 @@ test "Mesh(3) compiles at dimension 3" {
     // Compile-time check: Mesh(3) is a valid type (future-proofing).
     const M = Mesh(3);
     try testing.expect(M.dimension == 3);
+}
+
+test "uniform_grid rejects zero grid dimensions" {
+    const allocator = testing.allocator;
+    // nx = 0 must be a hard error, not a silent degenerate mesh.
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 0, 4, 1.0, 1.0));
+    // ny = 0
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 0, 1.0, 1.0));
+}
+
+test "uniform_grid rejects zero or negative domain size" {
+    const allocator = testing.allocator;
+    // width = 0 must be a hard error — would cause division by zero in spacing.
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 0.0, 1.0));
+    // height = 0
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 1.0, 0.0));
+    // negative
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, -1.0, 1.0));
+    try testing.expectError(error.InvalidGridDimensions, Mesh(2).uniform_grid(allocator, 4, 4, 1.0, -1.0));
 }
