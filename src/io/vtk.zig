@@ -245,7 +245,6 @@ pub fn snapshot_filename(
 ) []const u8 {
     std.debug.assert(base_name.len > 0);
     std.debug.assert(base_name.len <= 200);
-    // Provably safe: 200 (max name) + 1 ("_") + 10 (max u32 digits) + 4 (".vtu") = 215 < 224.
     return std.fmt.bufPrint(buf, "{s}_{d:0>4}.vtu", .{ base_name, step }) catch unreachable;
 }
 
