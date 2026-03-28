@@ -54,6 +54,7 @@ pub const operators = struct {
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
+    pub const whitney_mass = @import("operators/whitney_mass.zig");
 };
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
