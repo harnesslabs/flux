@@ -6,6 +6,8 @@
 
 const std = @import("std");
 
+const testing = std.testing;
+
 /// Compressed sparse row matrix parameterized on value type.
 ///
 /// Standard CSR layout: row pointers index into parallel arrays of column
@@ -45,7 +47,12 @@ pub fn CsrMatrix(comptime T: type) type {
         }
 
         /// Number of nonzero entries.
+        ///
+        /// Asserts that the count fits in u32. This is always true for matrices
+        /// constructed via `init` (which takes a u32 count), but protects against
+        /// a corrupted or externally-constructed matrix.
         pub fn nnz(self: Self) u32 {
+            std.debug.assert(self.col_idx.len <= std.math.maxInt(u32));
             return @intCast(self.col_idx.len);
         }
 
@@ -75,4 +82,75 @@ pub fn CsrMatrix(comptime T: type) type {
             }
         }
     };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "CsrMatrix init and nnz" {
+    const allocator = testing.allocator;
+    var m = try CsrMatrix(f64).init(allocator, 3, 4, 5);
+    defer m.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 3), m.n_rows);
+    try testing.expectEqual(@as(u32, 4), m.n_cols);
+    try testing.expectEqual(@as(u32, 5), m.nnz());
+}
+
+test "CsrMatrix row returns correct slice" {
+    const allocator = testing.allocator;
+    // 2×3 matrix: row 0 has 2 entries, row 1 has 1 entry
+    var m = try CsrMatrix(i8).init(allocator, 2, 3, 3);
+    defer m.deinit(allocator);
+
+    m.row_ptr[0] = 0;
+    m.row_ptr[1] = 2;
+    m.row_ptr[2] = 3;
+    m.col_idx[0] = 0;
+    m.col_idx[1] = 2;
+    m.col_idx[2] = 1;
+    m.values[0] = 1;
+    m.values[1] = -1;
+    m.values[2] = 1;
+
+    const r0 = m.row(0);
+    try testing.expectEqual(@as(usize, 2), r0.cols.len);
+    try testing.expectEqual(@as(u32, 0), r0.cols[0]);
+    try testing.expectEqual(@as(u32, 2), r0.cols[1]);
+    try testing.expectEqual(@as(i8, 1), r0.vals[0]);
+    try testing.expectEqual(@as(i8, -1), r0.vals[1]);
+
+    const r1 = m.row(1);
+    try testing.expectEqual(@as(usize, 1), r1.cols.len);
+    try testing.expectEqual(@as(u32, 1), r1.cols[0]);
+    try testing.expectEqual(@as(i8, 1), r1.vals[0]);
+}
+
+test "CsrMatrix transpose_multiply" {
+    const allocator = testing.allocator;
+    // 2×3 matrix: [[1, 0, -1], [0, 2, 0]]
+    var m = try CsrMatrix(i8).init(allocator, 2, 3, 3);
+    defer m.deinit(allocator);
+
+    m.row_ptr[0] = 0;
+    m.row_ptr[1] = 2;
+    m.row_ptr[2] = 3;
+    m.col_idx[0] = 0;
+    m.col_idx[1] = 2;
+    m.col_idx[2] = 1;
+    m.values[0] = 1;
+    m.values[1] = -1;
+    m.values[2] = 2;
+
+    // y = Aᵀ x, where x = [3.0, 5.0]
+    // Aᵀ = [[1, 0], [0, 2], [-1, 0]]
+    // y = [3.0, 10.0, -3.0]
+    const input = [_]f64{ 3.0, 5.0 };
+    var output = [_]f64{ 0.0, 0.0, 0.0 };
+    m.transpose_multiply(&input, &output);
+
+    try testing.expectApproxEqAbs(@as(f64, 3.0), output[0], 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, 10.0), output[1], 1e-15);
+    try testing.expectApproxEqAbs(@as(f64, -3.0), output[2], 1e-15);
 }

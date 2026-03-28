@@ -27,6 +27,14 @@ with bounded CI checks. No physics-specific code remains in `src/`.
 **Depends on:** none
 **GitHub milestone:** https://github.com/harnesslabs/flux/milestone/4
 
+Pre-milestone housekeeping (audit findings — must resolve before M1 feature work):
+- [ ] #3 — Add/fix branch protections (priority/high)
+- [ ] #99 — Harden error handling and safety guards across I/O and mesh (type/bug, priority/high)
+- [ ] #100 — Add missing unit and property tests for core infrastructure (type/test, priority/high)
+- [ ] #101 — Eliminate hot-path allocations in I/O and operators (type/perf, priority/high)
+- [ ] #102 — Clean up naming and comment conventions (type/refactor, priority/high)
+- #39 — d₂B = 0 structural assertion → deferred to M2 (meaningful in dim > 2)
+
 Issues (10):
 - [x] ~~#55 — Investigate barycentric dual~~ (closed: investigation complete, fix tracked by #70)
 - [ ] #72 — Cochain carries mesh reference — cochains are typed functions on a complex, not bare float arrays
@@ -39,10 +47,6 @@ Issues (10):
 - [ ] #77 — SIMD/vectorized batch operations on cochains (add, scale, negate, inner product)
 - [ ] #78 — Benchmark suite with `zig build bench` and bounded CI regression checks
 - [ ] #79 — Refactor `src/em/` → `examples/maxwell_2d/` consuming flux as a Zig package
-
-Pre-milestone housekeeping:
-- [ ] #3 — Add/fix branch protections (priority/high)
-- #39 — d₂B = 0 structural assertion → deferred to M2 (meaningful in dim > 2)
 
 ### M2: N-Dimensional Operators + Mesh I/O + Linear Solver
 **Goal:** Generalize all operators to arbitrary dimension (tested at n=2 and n=3),

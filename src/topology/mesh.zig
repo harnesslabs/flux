@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const testing = std.testing;
+const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 
 /// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
@@ -145,10 +146,8 @@ pub fn Mesh(comptime n: usize) type {
             width: f64,
             height: f64,
         ) !Self {
-            std.debug.assert(nx > 0);
-            std.debug.assert(ny > 0);
-            std.debug.assert(width > 0);
-            std.debug.assert(height > 0);
+            if (nx == 0 or ny == 0) @panic("grid dimensions must be positive");
+            if (!(width > 0) or !(height > 0)) @panic("domain size must be positive");
 
             const dx = width / @as(f64, @floatFromInt(nx));
             const dy = height / @as(f64, @floatFromInt(ny));
@@ -379,8 +378,9 @@ pub fn Mesh(comptime n: usize) type {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
                         dual_lengths[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
+                    } else {
+                        return flux.Error.NonManifoldEdge;
                     }
-                    // edge_face_count == 0 should not occur in a valid mesh; dual_length stays 0
                 }
 
                 // Collect boundary edge indices.
@@ -421,7 +421,9 @@ pub fn Mesh(comptime n: usize) type {
                     const l20_sq = distance_squared(p2, p0);
 
                     const area_4 = 4.0 * triangle_area(p0, p1, p2);
-                    std.debug.assert(area_4 > 0); // degenerate triangle
+                    // Degenerate triangles cause division by zero in the
+                    // cotangent formula below.
+                    if (!(area_4 > 0)) return flux.Error.DegenerateTriangle;
 
                     const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
                     const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
@@ -707,4 +709,14 @@ test "Mesh(3) compiles at dimension 3" {
     // Compile-time check: Mesh(3) is a valid type (future-proofing).
     const M = Mesh(3);
     try testing.expect(M.dimension == 3);
+}
+
+test "uniform_grid 1×1 is the smallest valid grid" {
+    // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
+    // This test verifies the smallest valid grid constructs successfully.
+    const allocator = testing.allocator;
+    var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 0.001, 0.001);
+    defer mesh.deinit(allocator);
+    try testing.expectEqual(@as(u32, 4), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 2), mesh.num_faces());
 }

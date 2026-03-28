@@ -228,8 +228,9 @@ pub const PvdEntry = struct {
 };
 
 /// Maximum length of a snapshot filename produced by `snapshot_filename`.
-/// Supports base names up to 200 chars + "_" + 4-digit step + ".vtu" + null.
-pub const max_snapshot_filename_length = 210;
+/// Sized for base names up to 200 chars + "_" + 10-digit u32 + ".vtu" = 215.
+/// Rounded up to 224 for alignment headroom.
+pub const max_snapshot_filename_length = 224;
 
 /// Format a snapshot filename: "{base}_{step:0>4}.vtu".
 ///
@@ -244,8 +245,7 @@ pub fn snapshot_filename(
 ) []const u8 {
     std.debug.assert(base_name.len > 0);
     std.debug.assert(base_name.len <= 200);
-    const result = std.fmt.bufPrint(buf, "{s}_{d:0>4}.vtu", .{ base_name, step }) catch unreachable;
-    return result;
+    return std.fmt.bufPrint(buf, "{s}_{d:0>4}.vtu", .{ base_name, step }) catch unreachable;
 }
 
 /// Write a PVD (ParaView Data) collection file referencing a set of .vtu snapshots.
@@ -539,7 +539,7 @@ pub fn parseDataArray(allocator: std.mem.Allocator, xml: []const u8, name: []con
         const tag = xml[tag_start..tag_end];
 
         // Check if this tag contains our name
-        const name_attr = std.fmt.allocPrint(allocator, "Name=\"{s}\"", .{name}) catch unreachable;
+        const name_attr = try std.fmt.allocPrint(allocator, "Name=\"{s}\"", .{name});
         defer allocator.free(name_attr);
 
         if (std.mem.indexOf(u8, tag, name_attr)) |_| {

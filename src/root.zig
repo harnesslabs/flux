@@ -29,6 +29,21 @@
 //! - `math` — sparse linear algebra primitives (CSR matrices)
 //! - `io` — VTK `.vtu` serialization for ParaView visualization
 
+// ── Library error set ────────────────────────────────────────────────────
+
+/// Errors arising from mesh data that violates geometric or topological
+/// invariants. These indicate problems with input data (e.g., a loaded
+/// mesh file), not programmer bugs — programmer bugs are assertions that
+/// panic immediately.
+pub const Error = error{
+    /// A triangle has zero area — cotangent weights and dual geometry
+    /// cannot be computed.
+    DegenerateTriangle,
+    /// An edge is adjacent to zero faces — the mesh is disconnected or
+    /// malformed.
+    NonManifoldEdge,
+};
+
 // ── Submodule re-exports (for namespaced access) ────────────────────────
 
 pub const forms = @import("forms/cochain.zig");
