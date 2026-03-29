@@ -61,6 +61,7 @@ pub const operators = struct {
 };
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
+pub const time_stepper = @import("time_stepper.zig");
 
 /// Electromagnetic field state (E, B, J) on a simplicial mesh.
 pub const MaxwellState = em.State;
