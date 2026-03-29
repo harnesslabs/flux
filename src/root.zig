@@ -48,12 +48,16 @@ pub const Error = error{
 
 pub const forms = @import("forms/cochain.zig");
 pub const io = @import("io/vtk.zig");
-pub const math = @import("math/sparse.zig");
+pub const math = struct {
+    pub const sparse = @import("math/sparse.zig");
+    pub const cg = @import("math/cg.zig");
+};
 pub const operators = struct {
     pub const compose = @import("operators/compose.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
+    pub const whitney_mass = @import("operators/whitney_mass.zig");
 };
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
@@ -109,13 +113,12 @@ pub const Mesh = topology.Mesh;
 /// via the coboundary operator. Works on both primal and dual cochains.
 pub const exterior_derivative = operators.exterior_derivative.exterior_derivative;
 
-/// Hodge star ★ₖ: primal Ωᵏ → dual Ωⁿ⁻ᵏ. Diagonal operator encoding the
-/// mesh metric — scales each coefficient by the ratio of dual to primal
-/// cell volumes.
+/// Hodge star ★ₖ: primal Ωᵏ → dual Ωⁿ⁻ᵏ. Diagonal for k=0,n; Whitney
+/// mass matrix (SpMV) for 0 < k < n.
 pub const hodge_star = operators.hodge_star.hodge_star;
 
-/// Inverse Hodge star ★⁻¹: dual Ωⁿ⁻ᵏ → primal Ωᵏ. Element-wise reciprocal
-/// of the Hodge star diagonal.
+/// Inverse Hodge star ★⁻¹: dual Ωⁿ⁻ᵏ → primal Ωᵏ. Diagonal for k=0,n;
+/// preconditioned CG solve for 0 < k < n.
 pub const hodge_star_inverse = operators.hodge_star.hodge_star_inverse;
 
 /// Hodge Laplacian Δₖ = dδ + δd on primal k-cochains. Self-adjoint,

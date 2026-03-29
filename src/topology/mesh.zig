@@ -8,6 +8,7 @@ const std = @import("std");
 const testing = std.testing;
 const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
+const whitney = @import("../operators/whitney_mass.zig");
 
 /// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
 pub const BoundaryMatrix = sparse.CsrMatrix(i8);
@@ -76,10 +77,22 @@ pub fn Mesh(comptime n: usize) type {
         /// Precomputed during construction for use by boundary condition routines.
         boundary_edges: []u32,
 
+        /// Whitney 1-form mass matrix M₁ for the Galerkin Hodge star ★₁.
+        /// M₁(eᵢ, eⱼ) = ∫_Ω Wᵢ · Wⱼ dA — sparse SPD, exact on any triangulation.
+        /// Used by hodge_star for k=1 (SpMV) and hodge_star_inverse for k=1 (CG solve).
+        whitney_mass_1: sparse.CsrMatrix(f64),
+
+        /// Diagonal preconditioner for CG solves with whitney_mass_1.
+        /// Values are the diagonal ★₁ = dual_length / length per edge —
+        /// spectrally equivalent to M₁, giving mesh-independent iteration counts.
+        preconditioner_1: []f64,
+
         // -- Lifetime --
 
         /// Free all entity storage and boundary matrices.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.preconditioner_1);
+            self.whitney_mass_1.deinit(allocator);
             allocator.free(self.boundary_edges);
             self.vertices.deinit(allocator);
             self.edges.deinit(allocator);
@@ -435,14 +448,42 @@ pub fn Mesh(comptime n: usize) type {
                 }
             }
 
-            return Self{
+            // -- Whitney mass matrix M₁ and diagonal preconditioner --
+            //
+            // M₁ is the Galerkin inner product of Whitney 1-form basis functions.
+            // It replaces the diagonal ★₁ (which only converges on orthogonal
+            // dual meshes) with an SPD matrix that is exact on any triangulation.
+            // The diagonal ★₁ values (dual_length / length) serve as a spectrally
+            // equivalent preconditioner for CG solves of M₁.
+
+            var partial = Self{
                 .vertices = vertices,
                 .edges = edges_list,
                 .faces = faces_list,
                 .boundary_1 = boundary_1,
                 .boundary_2 = boundary_2,
                 .boundary_edges = boundary_edge_buf,
+                .whitney_mass_1 = undefined,
+                .preconditioner_1 = undefined,
             };
+
+            var mass = try whitney.assemble_whitney_mass_1(allocator, &partial);
+            errdefer mass.deinit(allocator);
+
+            const precond = try allocator.alloc(f64, edge_count);
+            errdefer allocator.free(precond);
+            {
+                const edge_slice = edges_list.slice();
+                const lengths = edge_slice.items(.length);
+                const dual_lengths_slice = edge_slice.items(.dual_length);
+                for (precond, lengths, dual_lengths_slice) |*p, len, dual_len| {
+                    p.* = dual_len / len;
+                }
+            }
+
+            partial.whitney_mass_1 = mass;
+            partial.preconditioner_1 = precond;
+            return partial;
         }
 
         // ───────────────────────────────────────────────────────────────────

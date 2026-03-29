@@ -71,7 +71,7 @@ pub fn laplacian(
         bk1.transpose_multiply(star_d.values, temp);
 
         // ★⁻¹_k · temp → result
-        hs.applyDiagonal(MeshType, k, input.mesh, temp, result.values, true);
+        try hs.apply_inverse_raw(allocator, MeshType, k, input.mesh, temp, result.values);
     }
 
     // ── Term 2 (dδ): D_{k-1} · ★⁻¹_{k-1} · D_{k-1}ᵀ · ★_k · ω ────
@@ -91,7 +91,7 @@ pub fn laplacian(
         // ★⁻¹_{k-1} · temp
         const codiff_vals = try allocator.alloc(f64, bk.n_cols);
         defer allocator.free(codiff_vals);
-        hs.applyDiagonal(MeshType, k - 1, input.mesh, temp_km1, codiff_vals, true);
+        try hs.apply_inverse_raw(allocator, MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
 
         // D_{k-1} · codiff_vals → accumulate into result
         for (0..bk.n_rows) |row_idx| {
@@ -307,13 +307,17 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
 
 test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
     // Self-adjointness: ⟨Δ₁f, g⟩_★₁ = ⟨f, Δ₁g⟩_★₁
+    // where ⟨u, v⟩_★₁ = uᵀ M₁ v (Whitney mass matrix inner product).
     const allocator = testing.allocator;
+    const sparse_mod = @import("../math/sparse.zig");
+
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const edge_slice = mesh.edges.slice();
-    const lengths = edge_slice.items(.length);
-    const dual_lengths = edge_slice.items(.dual_length);
+    const n = mesh.num_edges();
+    const m1_buf = try allocator.alloc(f64, n);
+    defer allocator.free(m1_buf);
+
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_11);
 
     for (0..500) |_| {
@@ -330,15 +334,19 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
         var lap_g = try laplacian(allocator, g_form);
         defer lap_g.deinit(allocator);
 
+        // ⟨Δ₁f, g⟩_★₁ = (Δ₁f)ᵀ M₁ g
+        sparse_mod.spmv(mesh.whitney_mass_1, g_form.values, m1_buf);
         var inner_lap_f_g: f64 = 0;
-        var inner_f_lap_g: f64 = 0;
-        for (0..f_form.values.len) |idx| {
-            const weight = dual_lengths[idx] / lengths[idx];
-            inner_lap_f_g += lap_f.values[idx] * g_form.values[idx] * weight;
-            inner_f_lap_g += f_form.values[idx] * lap_g.values[idx] * weight;
-        }
+        for (lap_f.values, m1_buf) |lf, mg| inner_lap_f_g += lf * mg;
 
-        try testing.expectApproxEqRel(inner_lap_f_g, inner_f_lap_g, 1e-9);
+        // ⟨f, Δ₁g⟩_★₁ = fᵀ M₁ (Δ₁g)
+        sparse_mod.spmv(mesh.whitney_mass_1, lap_g.values, m1_buf);
+        var inner_f_lap_g: f64 = 0;
+        for (f_form.values, m1_buf) |fv, mlg| inner_f_lap_g += fv * mlg;
+
+        // CG solve introduces ~1e-10 relative residual per solve, and the
+        // Laplacian does two solves. Loosen tolerance accordingly.
+        try testing.expectApproxEqRel(inner_lap_f_g, inner_f_lap_g, 1e-6);
     }
 }
 
@@ -348,17 +356,14 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
 
 const PrimalC2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
 
-test "Δ₂ of constant 2-form is zero" {
-    // On a closed manifold, constant top-forms are harmonic.
-    // On a mesh with boundary, the dδ term of Δ₂ acts on a constant
-    // 2-form. Since d₂ does not exist (top degree), only the dδ term
-    // contributes: Δ₂ = D₁ ★₁⁻¹ D₁ᵀ ★₂.
-    // For a constant 2-form c, ★₂c is constant, and D₁ᵀ(★₂c) sums the
-    // constant over adjacent faces with opposite signs — zero at interior
-    // edges and nonzero only at boundary edges. So Δ₂(c) is nonzero
-    // only at faces touching the boundary.
+test "Δ₂ of constant 2-form: ⟨Δ₂c, c⟩_★₂ ≥ 0" {
+    // On a mesh with boundary, a constant 2-form is not in the kernel of Δ₂
+    // because the codifferential δ has nonzero boundary contributions. But
+    // Δ₂ is positive-semidefinite, so ⟨Δ₂c, c⟩_★₂ ≥ 0 must hold.
     //
-    // We verify: Δ₂(c) = 0 at faces not touching any boundary edge.
+    // Note: with the diagonal ★₁⁻¹, interior faces got exactly zero because
+    // the pointwise inverse was local. With the Whitney ★₁⁻¹ (global CG
+    // solve), boundary effects propagate to interior faces.
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
@@ -370,26 +375,13 @@ test "Δ₂ of constant 2-form is zero" {
     var result = try laplacian(allocator, omega);
     defer result.deinit(allocator);
 
-    // Find interior faces: faces whose three edges are all interior.
-    const boundary_2 = mesh.boundary(2);
-    var boundary_edge_set = try allocator.alloc(bool, mesh.num_edges());
-    defer allocator.free(boundary_edge_set);
-    @memset(boundary_edge_set, false);
-    for (mesh.boundary_edges) |e| boundary_edge_set[e] = true;
-
-    for (0..mesh.num_faces()) |f| {
-        const face_edges = boundary_2.row(@intCast(f));
-        var touches_boundary = false;
-        for (face_edges.cols) |e| {
-            if (boundary_edge_set[e]) {
-                touches_boundary = true;
-                break;
-            }
-        }
-        if (!touches_boundary) {
-            try testing.expectApproxEqAbs(@as(f64, 0.0), result.values[f], 1e-12);
-        }
+    // ⟨Δ₂c, c⟩_★₂ = Σ_f c_f · (Δ₂c)_f / area_f
+    const areas = mesh.faces.slice().items(.area);
+    var inner: f64 = 0;
+    for (omega.values, result.values, areas) |w, lw, area| {
+        inner += w * lw / area;
     }
+    try testing.expect(inner >= -1e-8);
 }
 
 test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {

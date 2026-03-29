@@ -71,3 +71,27 @@
 **Rationale:** Leverages Zig's type system naturally — degree/duality mismatches become compile errors through operator signatures alone. Good choice for now. Trait/interface abstractions may be added later as the operator algebra grows, but the comptime approach remains the right foundation.
 
 **Source:** PR #59, commit d703bda
+
+## 2026-03-28: Whitney assembly maps local edges to global edges by vertex lookup
+
+**Decision:** The boundary_2 column → local edge mapping in Whitney mass matrix assembly is built by explicit vertex-pair matching, not by assuming column order matches local edge order.
+
+**Alternatives considered:**
+- Assume boundary_2 columns follow the face's local edge order (fast, but wrong — boundary_2 stores edges sorted by global index)
+
+**Rationale:** The boundary_2 row stores edges sorted by global edge index, which coincidentally matches the lower-right triangle's local edge order but not the upper-left triangle's (where the diagonal edge is local edge 0 but appears last in boundary_2). Matching by vertex pair is O(9) per face and costs nothing compared to assembly. Correctness over cleverness.
+
+**Source:** PR #105, issue #70
+
+## 2026-03-29: Unified Hodge star — Whitney mass matrix is the only ★₁ implementation
+
+**Decision:** The `hodge_star` and `hodge_star_inverse` free functions dispatch by degree at comptime: k=0 and k=n use diagonal scaling (exact), 0 < k < n uses the Whitney mass matrix (SpMV forward, preconditioned CG inverse). The Whitney mass matrix and its diagonal preconditioner are stored on the mesh as precomputed geometry. There is no separate diagonal ★₁ code path.
+
+**Alternatives considered:**
+- Keep both diagonal and Whitney as parallel code paths with `_whitney`-suffixed functions (rejected: the diagonal ★₁ converges to the wrong operator on non-orthogonal duals, so offering it as a public API is misleading)
+- Explicit `HodgeContext` struct that callers construct and pass (rejected: the cochain already carries the mesh reference and degree, which is all the dispatch info needed — adding a context parameter muddies the API)
+- Compute the mass matrix lazily on first use (rejected: Zig doesn't idiomatically do memoization, and the mesh already computes all geometric data eagerly during construction)
+
+**Rationale:** The diagonal ★₁ = dual_length/length is only consistent when primal and dual edges are orthogonal. On barycentric dual meshes, it produces ~8% systematic field error that doesn't decrease with refinement. The Whitney mass matrix is exact on any triangulation and gives O(h²) convergence. Making it the only path ensures callers cannot accidentally use the broken operator. The diagonal values survive as the CG preconditioner (spectrally equivalent → mesh-independent iteration count). The trade-off is that ★₁⁻¹ is now a CG solve per application rather than a pointwise divide, and the leapfrog integrator loses exact symplecticity (energy drift is bounded but no longer monotonically decreasing with refinement).
+
+**Source:** PR #105, issue #70
