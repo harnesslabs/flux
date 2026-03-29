@@ -1577,7 +1577,7 @@ test "MaxwellLeapfrog satisfies TimeStepStrategy concept" {
     comptime time_stepper.TimeStepStrategy(Leapfrog);
 }
 
-test "MaxwellLeapfrog works with TimeStepper wrapper" {
+test "MaxwellLeapfrog works through TimeStepper wrapper" {
     const Stepper = time_stepper.TimeStepper(MaxwellLeapfrog(Mesh2D));
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
@@ -1586,10 +1586,11 @@ test "MaxwellLeapfrog works with TimeStepper wrapper" {
     var state = try MaxwellState.init(allocator, &mesh);
     defer state.deinit(allocator);
 
-    var stepper = Stepper.init();
-    try stepper.step(allocator, &state, 0.01);
-    try testing.expectEqual(@as(u64, 1), stepper.timesteps_completed);
+    try Stepper.step(allocator, &state, 0.01);
     try testing.expectEqual(@as(u64, 1), state.timestep);
+
+    try Stepper.step(allocator, &state, 0.01);
+    try testing.expectEqual(@as(u64, 2), state.timestep);
 }
 
 test "MaxwellLeapfrog.step produces same result as leapfrog_step" {

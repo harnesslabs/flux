@@ -9,6 +9,11 @@
 //! Users define a strategy (the raw physics + numerics), then pass it to
 //! `TimeStepper` which validates the contract and produces a ready-to-use
 //! integrator type.
+//!
+//! ```zig
+//! const Stepper = TimeStepper(MaxwellLeapfrog(Mesh2D));
+//! try Stepper.step(allocator, &state, dt);
+//! ```
 
 const std = @import("std");
 const testing = std.testing;
@@ -35,7 +40,7 @@ pub fn TimeStepStrategy(comptime S: type) void {
         @compileError("TimeStepStrategy: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
     }
 
-    // 2. S must declare a step function: fn(Allocator, *State, f64) !void
+    // 2. S must declare a pub step function: fn(Allocator, *State, f64) !void
     if (!@hasDecl(S, "step")) {
         @compileError("TimeStepStrategy requires a 'pub fn step(std.mem.Allocator, *State, f64) !void' " ++
             "declaration — advance state by one timestep dt");
@@ -83,36 +88,27 @@ pub fn TimeStepStrategy(comptime S: type) void {
 ///
 /// Validates the strategy contract at comptime, then exposes a uniform
 /// interface that simulation runners and composition infrastructure
-/// can depend on.
+/// can depend on. The returned type is a namespace — no instantiation
+/// needed, just call `step` directly:
 ///
 /// ```zig
 /// const Stepper = TimeStepper(MaxwellLeapfrog(Mesh2D));
-/// var stepper = Stepper.init();
-/// try stepper.step(allocator, &state, dt);
-/// // stepper.timesteps_completed == 1
+/// try Stepper.step(allocator, &state, dt);
 /// ```
+///
+/// Step counting is the strategy's responsibility (via `state.timestep`
+/// or equivalent) — the wrapper does not duplicate it.
 pub fn TimeStepper(comptime Strategy: type) type {
     // Gate: the strategy must satisfy the concept.
     comptime TimeStepStrategy(Strategy);
 
     return struct {
-        const Self = @This();
-
         /// The simulation state type, forwarded from the strategy.
         pub const State = Strategy.State;
 
-        /// Number of timesteps completed by this integrator instance.
-        timesteps_completed: u64 = 0,
-
-        /// Create a new integrator instance with zero steps completed.
-        pub fn init() Self {
-            return .{};
-        }
-
         /// Advance the state by one timestep dt using the underlying strategy.
-        pub fn step(self: *Self, allocator: std.mem.Allocator, state: *State, dt: f64) !void {
+        pub fn step(allocator: std.mem.Allocator, state: *State, dt: f64) !void {
             try Strategy.step(allocator, state, dt);
-            self.timesteps_completed += 1;
         }
     };
 }
@@ -202,31 +198,28 @@ test "TimeStepStrategy rejects step with wrong signature (missing allocator)" {
 // Tests — TimeStepper generic wrapper
 // ═══════════════════════════════════════════════════════════════════════════
 
-test "TimeStepper wraps a conforming strategy" {
+test "TimeStepper wraps a conforming strategy and forwards State" {
     const Stepper = TimeStepper(MockStrategy);
     comptime {
-        // The wrapper itself satisfies the structural contract.
         std.debug.assert(@hasDecl(Stepper, "State"));
         std.debug.assert(Stepper.State == MockStrategy.State);
     }
 }
 
-test "TimeStepper.step delegates to strategy and counts steps" {
+test "TimeStepper itself satisfies TimeStepStrategy" {
+    // The wrapper preserves the same static interface — it's a transparent
+    // pass-through that could itself be wrapped (though nesting is pointless).
     const Stepper = TimeStepper(MockStrategy);
-    var stepper = Stepper.init();
-    var state = MockStrategy.State{ .value = 0.0 };
-
-    try stepper.step(testing.allocator, &state, 0.1);
-    try testing.expectEqual(@as(u64, 1), stepper.timesteps_completed);
-    try testing.expectApproxEqAbs(0.1, state.value, 1e-15);
-
-    try stepper.step(testing.allocator, &state, 0.2);
-    try testing.expectEqual(@as(u64, 2), stepper.timesteps_completed);
-    try testing.expectApproxEqAbs(0.3, state.value, 1e-15);
+    comptime TimeStepStrategy(Stepper);
 }
 
-test "TimeStepper initializes with zero steps completed" {
+test "TimeStepper.step delegates to strategy" {
     const Stepper = TimeStepper(MockStrategy);
-    const stepper = Stepper.init();
-    try testing.expectEqual(@as(u64, 0), stepper.timesteps_completed);
+    var state = MockStrategy.State{ .value = 0.0 };
+
+    try Stepper.step(testing.allocator, &state, 0.1);
+    try testing.expectApproxEqAbs(0.1, state.value, 1e-15);
+
+    try Stepper.step(testing.allocator, &state, 0.2);
+    try testing.expectApproxEqAbs(0.3, state.value, 1e-15);
 }
