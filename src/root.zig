@@ -62,6 +62,10 @@ pub const operators = struct {
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
 pub const time_stepper = @import("time_stepper.zig");
+pub const concepts = struct {
+    pub const operator = @import("concepts/operator.zig");
+    pub const mesh = @import("concepts/mesh.zig");
+};
 
 /// Comptime concept: validate that a type satisfies the TimeStepStrategy contract.
 pub const TimeStepStrategy = time_stepper.TimeStepStrategy;
