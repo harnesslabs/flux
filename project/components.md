@@ -29,12 +29,12 @@ comptime. Arithmetic operations on cochains (add, scale, negate).
 composition. Each operator is an independent, testable unit.
 
 ### concepts
-**Domain label:** `domain/operators`, `domain/topology`
+**Domain label:** `domain/topology`
 **Owns:** `src/concepts/`
-**Dependencies:** `src/topology/`, `src/forms/`, `src/operators/`
-**Description:** Comptime concept validators (`OperatorConcept`, `MeshConcept`) and
-concept-conforming operator wrapper types. These enforce compile-time contracts on
-user-defined types and provide a generic interface layer over concrete operators.
+**Dependencies:** `src/topology/`
+**Description:** Comptime concept validators (`MeshConcept`). Enforce compile-time
+contracts on user-defined types so alternative mesh implementations (mesh views,
+imported meshes, n-dimensional meshes) are guaranteed compatible with the operator stack.
 
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)

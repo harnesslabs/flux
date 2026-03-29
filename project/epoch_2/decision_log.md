@@ -38,28 +38,29 @@ the wrapper provides infrastructure (step counting now, diagnostics/observers la
 This matches the "pluggable time integrators" horizon and enables future composition
 (Strang splitting wraps two `TimeStepper` instances).
 
-## 2026-03-29: OperatorConcept validates types, not functions
+## 2026-03-29: OperatorConcept deferred — no consumer yet
 
-**Decision:** `OperatorConcept(Op)` validates a *type* (namespace struct) with `InputType`,
-`OutputType`, and `apply(Allocator, InputType) !OutputType`. Existing free-function operators
-are wrapped into concept-conforming types via parameterized constructors (e.g.,
-`ExteriorDerivativeOperator(MeshType, k, Duality)`). The free functions remain the
-implementation layer; wrappers are the generic interface layer.
+**Decision:** Do not introduce `OperatorConcept` now. Existing operators are free
+functions using `anytype`; Zig's structural type system already gives compile errors
+on degree/duality mismatches via the cochain type. `compose.chain` threads return
+types at comptime without needing explicit `InputType`/`OutputType` metadata.
 
-**Alternatives considered:**
-1. Validate function signatures directly (concept over functions, not types): rejected
-   because functions lack metadata. A function `fn(Allocator, anytype) !U` doesn't carry
-   its input/output types as inspectable declarations. The type approach gives generic code
-   access to `Op.InputType` and `Op.OutputType` for composability checking.
-2. Refactor existing operators into types directly: rejected as too invasive for this PR.
-   The existing `anytype`-based free functions work well with `compose.chain()`. The
-   wrapper approach adds the type-level interface without disrupting existing code.
-3. No wrapper, concept only: would leave the concept without any conforming types in the
-   codebase, making it untested against real operators.
+**What was tried and removed:**
+An `OperatorConcept(Op)` validator was prototyped along with wrapper types
+(`ExteriorDerivativeOperator`, `HodgeStarOperator`, etc.) that packaged free
+functions into concept-conforming structs. The wrappers were thin delegates with
+no consumer — no generic code dispatched on `OperatorConcept`-conforming types.
 
-**Rationale:** Types carry metadata that functions don't. Generic infrastructure (solver
-graphs, operator algebras) needs to inspect input/output types at comptime. The wrapper
-pattern mirrors `MaxwellLeapfrog(MeshType)` wrapping `leapfrog_step` for `TimeStepStrategy`.
+**When to revisit:**
+When there is actual generic infrastructure that needs to inspect operator
+input/output types at comptime — e.g., declarative system specs (the `System`
+horizon), solver graphs, or operator algebra composition that goes beyond
+`compose.chain`. Design the concept to fit the consumer, not the other way around.
+
+**Rationale:** A concept without a consumer is premature abstraction. `MeshConcept`
+has a clear near-term consumer (mesh views, dimension-generic meshes). `TimeStepper`
+has a consumer (the `Runner`). Operators don't have one yet — the `anytype` + cochain
+type system already provides the guarantees users need for interoperability.
 
 ## 2026-03-29: MeshConcept — minimal interface, geometric data excluded
 
@@ -82,9 +83,9 @@ should be checked by the operators themselves, not the mesh concept.
 
 ## 2026-03-29: Concept naming convention — `*Concept` suffix
 
-**Decision:** Comptime concept validators use the `*Concept` suffix: `OperatorConcept`,
-`MeshConcept`. This is slightly inconsistent with the existing `TimeStepStrategy` name
-(which serves the same role) but more descriptive.
+**Decision:** Comptime concept validators use the `*Concept` suffix: `MeshConcept`.
+This is slightly inconsistent with the existing `TimeStepStrategy` name (which serves
+the same role) but more descriptive.
 
 **Alternatives considered:**
 1. `*Strategy` suffix for all: rejected because "strategy" implies a behavioral pattern

@@ -69,6 +69,9 @@ pub fn MeshConcept(comptime M: type) void {
     }
 
     // 4. M must declare a boundary function.
+    // We check existence and arity but not that the second parameter is
+    // comptime_int — Zig's @typeInfo does not expose comptime-ness of
+    // parameters, so we rely on call-site type checking for that.
     if (!@hasDecl(M, "boundary")) {
         @compileError("MeshConcept requires a 'pub fn boundary(self, comptime k: comptime_int)' declaration — " ++
             "returns the boundary operator ∂ₖ");
@@ -77,7 +80,6 @@ pub fn MeshConcept(comptime M: type) void {
     if (boundary_info != .@"fn") {
         @compileError("MeshConcept: 'boundary' must be a function");
     }
-    // boundary takes (self, comptime k) — 2 params.
     if (boundary_info.@"fn".params.len != 2) {
         @compileError("MeshConcept: 'boundary' must take exactly 2 parameters (self, comptime k)");
     }
