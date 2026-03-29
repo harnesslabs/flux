@@ -196,6 +196,27 @@ pub fn leapfrog_step(
     state.timestep += 1;
 }
 
+/// Maxwell leapfrog integrator as a typed struct satisfying the TimeStepper concept.
+///
+/// Wraps the free-function `leapfrog_step` into a struct with an associated
+/// `State` type, so that generic infrastructure (runners, composition) can
+/// verify the integrator contract at compile time.
+pub fn MaxwellLeapfrog(comptime MeshType: type) type {
+    // Alias the module-level State constructor to avoid name collision with
+    // the concept-required `State` declaration inside the returned struct.
+    const StateType = State(MeshType);
+
+    return struct {
+        /// The simulation state type — required by the TimeStepper concept.
+        pub const State = StateType;
+
+        /// Advance the Maxwell state by one leapfrog timestep.
+        pub fn step(allocator: std.mem.Allocator, state: *StateType, dt: f64) !void {
+            try leapfrog_step(allocator, state, dt);
+        }
+    };
+}
+
 /// Point dipole current source.
 ///
 /// Models a localized sinusoidal current density concentrated on a single
@@ -1545,4 +1566,56 @@ test "convergence: energy drift bounded for TE₁₀ cavity" {
     // Both drifts should be small.
     try testing.expect(drift_coarse < 0.02); // < 2%
     try testing.expect(drift_fine < 0.02); // < 2%
+}
+
+// ── #62: MaxwellLeapfrog — TimeStepper concept conformance ──────────
+
+const time_stepper = @import("../time_stepper.zig");
+
+test "MaxwellLeapfrog satisfies TimeStepper concept" {
+    const Leapfrog = MaxwellLeapfrog(Mesh2D);
+    comptime time_stepper.TimeStepper(Leapfrog);
+}
+
+test "MaxwellLeapfrog.step produces same result as leapfrog_step" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    // Set up two identical states.
+    var state_free = try MaxwellState.init(allocator, &mesh);
+    defer state_free.deinit(allocator);
+    var state_wrap = try MaxwellState.init(allocator, &mesh);
+    defer state_wrap.deinit(allocator);
+
+    // Identical random initial conditions.
+    var rng = std.Random.DefaultPrng.init(0x62_1EAF);
+    for (state_free.E.values, state_wrap.E.values) |*a, *b| {
+        const v = rng.random().float(f64) * 2.0 - 1.0;
+        a.* = v;
+        b.* = v;
+    }
+    for (state_free.B.values, state_wrap.B.values) |*a, *b| {
+        const v = rng.random().float(f64) * 2.0 - 1.0;
+        a.* = v;
+        b.* = v;
+    }
+
+    const dt: f64 = 0.01;
+
+    // Advance via free function.
+    try leapfrog_step(allocator, &state_free, dt);
+
+    // Advance via wrapper.
+    const Leapfrog = MaxwellLeapfrog(Mesh2D);
+    try Leapfrog.step(allocator, &state_wrap, dt);
+
+    // Results must be identical.
+    for (state_free.E.values, state_wrap.E.values) |a, b| {
+        try testing.expectEqual(a, b);
+    }
+    for (state_free.B.values, state_wrap.B.values) |a, b| {
+        try testing.expectEqual(a, b);
+    }
+    try testing.expectEqual(state_free.timestep, state_wrap.timestep);
 }
