@@ -67,11 +67,41 @@ pub const concepts = struct {
     pub const mesh = @import("concepts/mesh.zig");
 };
 
+// ── Comptime concepts ───────────────────────────────────────────────────
+// Validators that enforce compile-time contracts on user-defined types.
+// Each is a function called at comptime that produces @compileError on
+// non-conformance.
+
 /// Comptime concept: validate that a type satisfies the TimeStepStrategy contract.
 pub const TimeStepStrategy = time_stepper.TimeStepStrategy;
 
 /// Generic time integrator — wraps any conforming TimeStepStrategy.
 pub const TimeStepper = time_stepper.TimeStepper;
+
+/// Comptime concept: validate that a type satisfies the Operator contract.
+/// Requires InputType, OutputType, and apply(Allocator, InputType) !OutputType.
+pub const OperatorConcept = concepts.operator.OperatorConcept;
+
+/// Comptime concept: validate that a type satisfies the Mesh contract.
+/// Requires dimension, topological_dimension, entity count accessors, and boundary().
+pub const MeshConcept = concepts.mesh.MeshConcept;
+
+// ── Concept-conforming operator types ───────────────────────────────────
+// These wrap the free-function operators into types that satisfy
+// OperatorConcept, enabling generic code to work with any conforming
+// operator via InputType/OutputType/apply.
+
+/// Exterior derivative dₖ as an OperatorConcept-conforming type.
+pub const ExteriorDerivativeOperator = concepts.operator.ExteriorDerivativeOperator;
+
+/// Hodge star ★ₖ as an OperatorConcept-conforming type.
+pub const HodgeStarOperator = concepts.operator.HodgeStarOperator;
+
+/// Inverse Hodge star ★⁻¹ₖ as an OperatorConcept-conforming type.
+pub const HodgeStarInverseOperator = concepts.operator.HodgeStarInverseOperator;
+
+/// Hodge Laplacian Δₖ as an OperatorConcept-conforming type.
+pub const LaplacianOperator = concepts.operator.LaplacianOperator;
 
 /// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
 pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
