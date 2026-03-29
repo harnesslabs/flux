@@ -61,6 +61,16 @@ pub const operators = struct {
 };
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
+pub const time_stepper = @import("time_stepper.zig");
+
+/// Comptime concept: validate that a type satisfies the TimeStepStrategy contract.
+pub const TimeStepStrategy = time_stepper.TimeStepStrategy;
+
+/// Generic time integrator — wraps any conforming TimeStepStrategy.
+pub const TimeStepper = time_stepper.TimeStepper;
+
+/// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
+pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
 
 /// Electromagnetic field state (E, B, J) on a simplicial mesh.
 pub const MaxwellState = em.State;
