@@ -28,6 +28,14 @@ comptime. Arithmetic operations on cochains (add, scale, negate).
 **Description:** Discrete exterior derivative, Hodge star, Laplacian, operator
 composition. Each operator is an independent, testable unit.
 
+### concepts
+**Domain label:** `domain/operators`, `domain/topology`
+**Owns:** `src/concepts/`
+**Dependencies:** `src/topology/`, `src/forms/`, `src/operators/`
+**Description:** Comptime concept validators (`OperatorConcept`, `MeshConcept`) and
+concept-conforming operator wrapper types. These enforce compile-time contracts on
+user-defined types and provide a generic interface layer over concrete operators.
+
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)
 **Owns:** `src/math/`
