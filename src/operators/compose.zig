@@ -6,13 +6,13 @@
 //!
 //! Example — the codifferential δ = ★⁻¹ ∘ d ∘ ★ on a primal 1-form:
 //!
-//!     const hs = @import("hodge_star.zig");
-//!     const ext = @import("exterior_derivative.zig");
+//!     const hodge_star = @import("hodge_star.zig");
+//!     const exterior_derivative = @import("exterior_derivative.zig");
 //!
 //!     var result = try chain(allocator, omega, .{
-//!         hs.hodge_star,
-//!         ext.exterior_derivative,
-//!         hs.hodge_star_inverse,
+//!         hodge_star.hodge_star,
+//!         exterior_derivative.exterior_derivative,
+//!         hodge_star.hodge_star_inverse,
 //!     });
 //!     defer result.deinit(allocator);
 
@@ -20,8 +20,8 @@ const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
-const ext = @import("exterior_derivative.zig");
-const hs = @import("hodge_star.zig");
+const exterior_derivative = @import("exterior_derivative.zig");
+const hodge_star = @import("hodge_star.zig");
 
 /// Compute the result type of chaining `ops[start..]` starting from `InputType`.
 ///
@@ -99,7 +99,7 @@ const PrimalC2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
 test "compile-time: chain type deduction for ★ ∘ d" {
     comptime {
         const DualC1 = cochain.Cochain(Mesh2D, 1, cochain.Dual);
-        const Result = ChainResult(PrimalC0, .{ ext.exterior_derivative, hs.hodge_star });
+        const Result = ChainResult(PrimalC0, .{ exterior_derivative.exterior_derivative, hodge_star.hodge_star });
         try testing.expect(Result == DualC1);
     }
 }
@@ -107,7 +107,7 @@ test "compile-time: chain type deduction for ★ ∘ d" {
 test "compile-time: chain type deduction for ★⁻¹ ∘ d ∘ ★ (codifferential)" {
     comptime {
         // δ₁: primal 1-form → primal 0-form
-        const Result = ChainResult(PrimalC1, .{ hs.hodge_star, ext.exterior_derivative, hs.hodge_star_inverse });
+        const Result = ChainResult(PrimalC1, .{ hodge_star.hodge_star, exterior_derivative.exterior_derivative, hodge_star.hodge_star_inverse });
         try testing.expect(Result == PrimalC0);
     }
 }
@@ -122,10 +122,10 @@ test "chain with single operator equals direct call" {
     const coords = mesh.vertices.slice().items(.coords);
     for (omega.values, coords) |*v, c| v.* = c[0];
 
-    var direct = try ext.exterior_derivative(allocator, omega);
+    var direct = try exterior_derivative.exterior_derivative(allocator, omega);
     defer direct.deinit(allocator);
 
-    var chained = try chain(allocator, omega, .{ext.exterior_derivative});
+    var chained = try chain(allocator, omega, .{exterior_derivative.exterior_derivative});
     defer chained.deinit(allocator);
 
     for (direct.values, chained.values) |d, c| {
@@ -146,18 +146,18 @@ test "codifferential δ₁ via chain matches manual ★⁻¹ ∘ d ∘ ★" {
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
         // Manual: ★ → d → ★⁻¹
-        var star_omega = try hs.hodge_star(allocator, omega);
+        var star_omega = try hodge_star.hodge_star(allocator, omega);
         defer star_omega.deinit(allocator);
-        var d_star = try ext.exterior_derivative(allocator, star_omega);
+        var d_star = try exterior_derivative.exterior_derivative(allocator, star_omega);
         defer d_star.deinit(allocator);
-        var manual = try hs.hodge_star_inverse(allocator, d_star);
+        var manual = try hodge_star.hodge_star_inverse(allocator, d_star);
         defer manual.deinit(allocator);
 
         // Chain
         var composed = try chain(allocator, omega, .{
-            hs.hodge_star,
-            ext.exterior_derivative,
-            hs.hodge_star_inverse,
+            hodge_star.hodge_star,
+            exterior_derivative.exterior_derivative,
+            hodge_star.hodge_star_inverse,
         });
         defer composed.deinit(allocator);
 
@@ -188,10 +188,10 @@ test "δd via chain matches laplacian on 0-forms" {
 
         // Via chain: d → ★ → d̃ → ★⁻¹ (which is ★⁻¹ ∘ d̃ ∘ ★ ∘ d = δd)
         var via_chain = try chain(allocator, omega, .{
-            ext.exterior_derivative,
-            hs.hodge_star,
-            ext.exterior_derivative,
-            hs.hodge_star_inverse,
+            exterior_derivative.exterior_derivative,
+            hodge_star.hodge_star,
+            exterior_derivative.exterior_derivative,
+            hodge_star.hodge_star_inverse,
         });
         defer via_chain.deinit(allocator);
 
