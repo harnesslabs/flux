@@ -30,8 +30,62 @@ const testing = std.testing;
 ///
 /// Produces a descriptive `@compileError` on violation.
 pub fn OperatorConcept(comptime Op: type) void {
-    _ = Op;
-    @compileError("OperatorConcept not yet implemented");
+    // 1. Op must declare an InputType type.
+    if (!@hasDecl(Op, "InputType")) {
+        @compileError("OperatorConcept requires a 'pub const InputType: type' declaration — " ++
+            "the cochain type this operator consumes");
+    }
+    const Input = Op.InputType;
+    if (@TypeOf(Input) != type) {
+        @compileError("OperatorConcept: 'InputType' must be a type, got " ++ @typeName(@TypeOf(Input)));
+    }
+
+    // 2. Op must declare an OutputType type.
+    if (!@hasDecl(Op, "OutputType")) {
+        @compileError("OperatorConcept requires a 'pub const OutputType: type' declaration — " ++
+            "the cochain type this operator produces");
+    }
+    const Output = Op.OutputType;
+    if (@TypeOf(Output) != type) {
+        @compileError("OperatorConcept: 'OutputType' must be a type, got " ++ @typeName(@TypeOf(Output)));
+    }
+
+    // 3. Op must declare a pub apply function: fn(Allocator, InputType) !OutputType
+    if (!@hasDecl(Op, "apply")) {
+        @compileError("OperatorConcept requires a 'pub fn apply(std.mem.Allocator, InputType) !OutputType' " ++
+            "declaration — apply the operator to an input cochain");
+    }
+
+    const apply_info = @typeInfo(@TypeOf(Op.apply));
+    if (apply_info != .@"fn") {
+        @compileError("OperatorConcept: 'apply' must be a function");
+    }
+    const fn_info = apply_info.@"fn";
+
+    // Check parameter count and types.
+    if (fn_info.params.len != 2) {
+        @compileError("OperatorConcept: 'apply' must take exactly 2 parameters " ++
+            "(std.mem.Allocator, InputType)");
+    }
+    if (fn_info.params[0].type != std.mem.Allocator) {
+        @compileError("OperatorConcept: 'apply' parameter 0 must be std.mem.Allocator");
+    }
+    if (fn_info.params[1].type != Input) {
+        @compileError("OperatorConcept: 'apply' parameter 1 must be InputType (" ++
+            @typeName(Input) ++ ")");
+    }
+
+    // Check return type is an error union with payload OutputType.
+    const ret = fn_info.return_type orelse
+        @compileError("OperatorConcept: 'apply' must have a known return type");
+    const ret_info = @typeInfo(ret);
+    if (ret_info != .error_union) {
+        @compileError("OperatorConcept: 'apply' must return !OutputType (an error union)");
+    }
+    if (ret_info.error_union.payload != Output) {
+        @compileError("OperatorConcept: 'apply' must return !OutputType (!" ++
+            @typeName(Output) ++ "), got !" ++ @typeName(ret_info.error_union.payload));
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -175,7 +229,7 @@ test "MockOperator.apply copies input values" {
     var input_buf = [_]f64{ 1.0, 2.0, 3.0 };
     const input = MockCochain{ .values = &input_buf };
 
-    var output = try MockOperator.apply(allocator, input);
+    const output = try MockOperator.apply(allocator, input);
     defer allocator.free(output.values);
 
     try testing.expectEqual(@as(usize, 3), output.values.len);

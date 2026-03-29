@@ -35,8 +35,52 @@ const testing = std.testing;
 ///
 /// Produces a descriptive `@compileError` on violation.
 pub fn MeshConcept(comptime M: type) void {
-    _ = M;
-    @compileError("MeshConcept not yet implemented");
+    // 1. M must declare an embedding dimension.
+    if (!@hasDecl(M, "dimension")) {
+        @compileError("MeshConcept requires a 'pub const dimension' declaration — " ++
+            "the embedding dimension (e.g., 2 for ℝ²)");
+    }
+
+    // 2. M must declare a topological dimension.
+    if (!@hasDecl(M, "topological_dimension")) {
+        @compileError("MeshConcept requires a 'pub const topological_dimension' declaration — " ++
+            "the intrinsic mesh dimension (e.g., 2 for surfaces)");
+    }
+
+    // 3. Entity count accessors: num_vertices, num_edges, num_faces.
+    // Each must be a method taking self and returning u32.
+    inline for (.{ "num_vertices", "num_edges", "num_faces" }) |name| {
+        if (!@hasDecl(M, name)) {
+            @compileError("MeshConcept requires a 'pub fn " ++ name ++ "(self) u32' declaration");
+        }
+        const decl_info = @typeInfo(@TypeOf(@field(M, name)));
+        if (decl_info != .@"fn") {
+            @compileError("MeshConcept: '" ++ name ++ "' must be a function");
+        }
+        const fn_info = decl_info.@"fn";
+        if (fn_info.params.len != 1) {
+            @compileError("MeshConcept: '" ++ name ++ "' must take exactly 1 parameter (self)");
+        }
+        const ret = fn_info.return_type orelse
+            @compileError("MeshConcept: '" ++ name ++ "' must have a known return type");
+        if (ret != u32) {
+            @compileError("MeshConcept: '" ++ name ++ "' must return u32");
+        }
+    }
+
+    // 4. M must declare a boundary function.
+    if (!@hasDecl(M, "boundary")) {
+        @compileError("MeshConcept requires a 'pub fn boundary(self, comptime k: comptime_int)' declaration — " ++
+            "returns the boundary operator ∂ₖ");
+    }
+    const boundary_info = @typeInfo(@TypeOf(M.boundary));
+    if (boundary_info != .@"fn") {
+        @compileError("MeshConcept: 'boundary' must be a function");
+    }
+    // boundary takes (self, comptime k) — 2 params.
+    if (boundary_info.@"fn".params.len != 2) {
+        @compileError("MeshConcept: 'boundary' must take exactly 2 parameters (self, comptime k)");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
