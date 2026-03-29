@@ -62,12 +62,24 @@ pub const operators = struct {
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
 pub const time_stepper = @import("time_stepper.zig");
+pub const concepts = struct {
+    pub const mesh = @import("concepts/mesh.zig");
+};
+
+// ── Comptime concepts ───────────────────────────────────────────────────
+// Validators that enforce compile-time contracts on user-defined types.
+// Each is a function called at comptime that produces @compileError on
+// non-conformance.
 
 /// Comptime concept: validate that a type satisfies the TimeStepStrategy contract.
 pub const TimeStepStrategy = time_stepper.TimeStepStrategy;
 
 /// Generic time integrator — wraps any conforming TimeStepStrategy.
 pub const TimeStepper = time_stepper.TimeStepper;
+
+/// Comptime concept: validate that a type satisfies the Mesh contract.
+/// Requires dimension, topological_dimension, entity count accessors, and boundary().
+pub const MeshConcept = concepts.mesh.MeshConcept;
 
 /// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
 pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
