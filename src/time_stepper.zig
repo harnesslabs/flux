@@ -99,10 +99,21 @@ pub fn TimeStepStrategy(comptime S: type) void {
 /// Step counting is the strategy's responsibility (via `state.timestep`
 /// or equivalent) — the wrapper does not duplicate it.
 pub fn TimeStepper(comptime Strategy: type) type {
+    // Reject nesting: TimeStepper(TimeStepper(S)) is a footgun — it adds
+    // nothing and obscures which strategy is actually being used.
+    if (@hasDecl(Strategy, "_is_time_stepper")) {
+        @compileError("TimeStepper cannot wrap another TimeStepper — pass the " ++
+            "underlying TimeStepStrategy directly");
+    }
+
     // Gate: the strategy must satisfy the concept.
     comptime TimeStepStrategy(Strategy);
 
     return struct {
+        /// Sentinel: marks this type as a TimeStepper-produced wrapper so that
+        /// nesting can be rejected at compile time.
+        pub const _is_time_stepper = true;
+
         /// The simulation state type, forwarded from the strategy.
         pub const State = Strategy.State;
 
@@ -206,11 +217,12 @@ test "TimeStepper wraps a conforming strategy and forwards State" {
     }
 }
 
-test "TimeStepper itself satisfies TimeStepStrategy" {
-    // The wrapper preserves the same static interface — it's a transparent
-    // pass-through that could itself be wrapped (though nesting is pointless).
+test "TimeStepper rejects nesting TimeStepper(TimeStepper(S))" {
     const Stepper = TimeStepper(MockStrategy);
-    comptime TimeStepStrategy(Stepper);
+
+    // comptime _ = TimeStepper(Stepper);
+    // expected: @compileError("TimeStepper cannot wrap another TimeStepper ...")
+    _ = Stepper;
 }
 
 test "TimeStepper.step delegates to strategy" {
