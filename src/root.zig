@@ -80,12 +80,6 @@ pub const RunConfig = em.RunConfig;
 /// Discrete electromagnetic energy: ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
 pub const electromagnetic_energy = em.electromagnetic_energy;
 
-/// Whitney/Galerkin mass matrix assembly.
-pub const assemble_whitney_mass_1 = operators.whitney_mass.assemble_whitney_mass_1;
-
-/// Precomputed Whitney Hodge star context for ★₁.
-pub const WhitneyHodge1 = operators.whitney_mass.WhitneyHodge1;
-
 /// Project analytical TE₁₀ E field onto mesh edges at time t.
 pub const project_te10_e = em.project_te10_e;
 
@@ -119,13 +113,12 @@ pub const Mesh = topology.Mesh;
 /// via the coboundary operator. Works on both primal and dual cochains.
 pub const exterior_derivative = operators.exterior_derivative.exterior_derivative;
 
-/// Hodge star ★ₖ: primal Ωᵏ → dual Ωⁿ⁻ᵏ. Diagonal operator encoding the
-/// mesh metric — scales each coefficient by the ratio of dual to primal
-/// cell volumes.
+/// Hodge star ★ₖ: primal Ωᵏ → dual Ωⁿ⁻ᵏ. Diagonal for k=0,n; Whitney
+/// mass matrix (SpMV) for 0 < k < n.
 pub const hodge_star = operators.hodge_star.hodge_star;
 
-/// Inverse Hodge star ★⁻¹: dual Ωⁿ⁻ᵏ → primal Ωᵏ. Element-wise reciprocal
-/// of the Hodge star diagonal.
+/// Inverse Hodge star ★⁻¹: dual Ωⁿ⁻ᵏ → primal Ωᵏ. Diagonal for k=0,n;
+/// preconditioned CG solve for 0 < k < n.
 pub const hodge_star_inverse = operators.hodge_star.hodge_star_inverse;
 
 /// Hodge Laplacian Δₖ = dδ + δd on primal k-cochains. Self-adjoint,

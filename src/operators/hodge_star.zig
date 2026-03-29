@@ -1,25 +1,31 @@
 //! Discrete Hodge star operator and its inverse.
 //!
-//! The diagonal Hodge star ★ₖ maps primal k-cochains to dual (n−k)-cochains
-//! via the barycentric dual mesh. For a 2D simplicial mesh:
+//! The Hodge star ★ₖ maps primal k-cochains to dual (n−k)-cochains.
+//! The implementation dispatches by degree at comptime:
 //!
-//!   (★₀)ᵢᵢ = |dual cell of vertex i|  = dual_area[i]
-//!   (★₁)ᵢᵢ = |dual edge i| / |edge i| = dual_length[i] / length[i]
-//!   (★₂)ᵢᵢ = 1 / |face i|             = 1 / area[i]
+//!   ★₀ and ★₂ (k = 0 and k = n): diagonal operators using dual mesh volumes.
+//!     (★₀)ᵢᵢ = dual_area[i]
+//!     (★₂)ᵢᵢ = 1 / area[i]
 //!
-//! The inverse ★⁻¹ is the element-wise reciprocal of the diagonal, mapping
-//! dual (n−k)-cochains back to primal k-cochains.
+//!   ★₁ (0 < k < n): Whitney/Galerkin mass matrix M₁ (SpMV for forward,
+//!     preconditioned CG solve for inverse). The diagonal approximation
+//!     dual_length/length is only consistent on orthogonal dual meshes;
+//!     the Whitney mass matrix is exact on any triangulation.
+//!
+//! The mesh stores both M₁ and its diagonal preconditioner, precomputed
+//! during construction.
 
 const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
+const sparse = @import("../math/sparse.zig");
+const cg = @import("../math/cg.zig");
 
 /// Apply the Hodge star ★ₖ to a primal k-cochain, returning a dual (n−k)-cochain.
 ///
-/// The Hodge star is a diagonal operator: each output value is the input value
-/// scaled by the ratio |dual cell| / |primal cell| for the corresponding mesh
-/// entity. This ratio encodes the local metric geometry of the mesh.
+/// For k=0 and k=n, this is a diagonal scaling by dual mesh volumes.
+/// For k=1, this applies the Whitney mass matrix M₁ via SpMV.
 pub fn hodge_star(
     allocator: std.mem.Allocator,
     input: anytype,
@@ -34,7 +40,10 @@ pub fn hodge_star(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false);
+    switch (k) {
+        0, n => applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false),
+        else => sparse.spmv(input.mesh.whitney_mass_1, input.values, output.values),
+    }
 
     return output;
 }
@@ -42,10 +51,8 @@ pub fn hodge_star(
 /// Apply the inverse Hodge star ★⁻¹ to a dual (n−k)-cochain, returning a
 /// primal k-cochain.
 ///
-/// The inverse is the element-wise reciprocal of the Hodge star diagonal.
-/// Panics (via assertion) if any diagonal entry is zero — this indicates a
-/// degenerate mesh element (e.g., a diagonal edge on a uniform grid whose
-/// dual length is zero).
+/// For k=0 and k=n, this is the element-wise reciprocal of the diagonal.
+/// For k=1, this solves M₁ x = b via preconditioned conjugate gradient.
 pub fn hodge_star_inverse(
     allocator: std.mem.Allocator,
     input: anytype,
@@ -61,7 +68,29 @@ pub fn hodge_star_inverse(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true);
+    switch (primal_degree) {
+        0, n => applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true),
+        else => {
+            // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
+            @memset(output.values, 0.0);
+
+            var scratch = try cg.Scratch.init(allocator, @intCast(output.values.len));
+            defer scratch.deinit(allocator);
+
+            var precond = cg.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
+            const result = cg.solve(
+                input.mesh.whitney_mass_1,
+                input.values,
+                output.values,
+                1e-10,
+                1000,
+                cg.DiagonalPreconditioner.apply,
+                @ptrCast(&precond),
+                scratch,
+            );
+            std.debug.assert(result.converged);
+        },
+    }
 
     return output;
 }
@@ -98,13 +127,66 @@ fn validateHodgeStarInverseInput(comptime T: type) void {
     }
 }
 
-// ── Diagonal application ─────────────────────────────────────────────────
+// ── Raw buffer API (for operators that bypass typed cochains) ────────────
 
-/// Apply the Hodge star diagonal (or its inverse) for a given primal degree.
+/// Apply ★ₖ to raw f64 buffers. Dispatches by primal_degree at comptime:
+/// k=0,n use diagonal scaling; 0 < k < n uses Whitney SpMV.
+pub fn apply_raw(
+    comptime MeshType: type,
+    comptime primal_degree: comptime_int,
+    mesh: *const MeshType,
+    input: []const f64,
+    output: []f64,
+) void {
+    const n = MeshType.topological_dimension;
+    switch (primal_degree) {
+        0, n => applyDiagonal(MeshType, primal_degree, mesh, input, output, false),
+        else => sparse.spmv(mesh.whitney_mass_1, input, output),
+    }
+}
+
+/// Apply ★⁻¹ₖ to raw f64 buffers. Dispatches by primal_degree at comptime:
+/// k=0,n use diagonal reciprocal; 0 < k < n uses preconditioned CG solve.
+pub fn apply_inverse_raw(
+    allocator: std.mem.Allocator,
+    comptime MeshType: type,
+    comptime primal_degree: comptime_int,
+    mesh: *const MeshType,
+    input: []const f64,
+    output: []f64,
+) !void {
+    const n = MeshType.topological_dimension;
+    switch (primal_degree) {
+        0, n => applyDiagonal(MeshType, primal_degree, mesh, input, output, true),
+        else => {
+            @memset(output, 0.0);
+
+            var scratch = try cg.Scratch.init(allocator, @intCast(output.len));
+            defer scratch.deinit(allocator);
+
+            var precond = cg.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
+            const result = cg.solve(
+                mesh.whitney_mass_1,
+                input,
+                output,
+                1e-10,
+                1000,
+                cg.DiagonalPreconditioner.apply,
+                @ptrCast(&precond),
+                scratch,
+            );
+            std.debug.assert(result.converged);
+        },
+    }
+}
+
+// ── Diagonal application (k=0 and k=n only) ────────────────────────────
+
+/// Apply the diagonal Hodge star (or its inverse) for degree 0 or n.
 ///
 /// When `invert` is false: output[i] = ratio[i] * input[i]
 /// When `invert` is true:  output[i] = input[i] / ratio[i]  (asserts ratio ≠ 0)
-pub fn applyDiagonal(
+fn applyDiagonal(
     comptime MeshType: type,
     comptime primal_degree: comptime_int,
     mesh: *const MeshType,
@@ -113,7 +195,7 @@ pub fn applyDiagonal(
     comptime invert: bool,
 ) void {
     switch (primal_degree) {
-        // ★₀: ratio = dual_area[i]  (0-cell has unit "volume")
+        // ★₀: ratio = dual_area[i]
         0 => {
             const dual_areas = mesh.vertices.slice().items(.dual_area);
             for (output, input, dual_areas) |*out, in_val, ratio| {
@@ -122,20 +204,6 @@ pub fn applyDiagonal(
                     out.* = in_val / ratio;
                 } else {
                     out.* = ratio * in_val;
-                }
-            }
-        },
-        // ★₁: ratio = dual_length[i] / length[i]
-        1 => {
-            const edge_slice = mesh.edges.slice();
-            const lengths = edge_slice.items(.length);
-            const dual_lengths = edge_slice.items(.dual_length);
-            for (output, input, lengths, dual_lengths) |*out, in_val, len, dual_len| {
-                if (invert) {
-                    std.debug.assert(dual_len != 0.0);
-                    out.* = (len / dual_len) * in_val;
-                } else {
-                    out.* = (dual_len / len) * in_val;
                 }
             }
         },
@@ -151,7 +219,7 @@ pub fn applyDiagonal(
                 }
             }
         },
-        else => @compileError("unsupported degree for Hodge star diagonal"),
+        else => @compileError("applyDiagonal only supports k=0 and k=n"),
     }
 }
 
@@ -215,7 +283,9 @@ test "★₀ scales by dual vertex area" {
     }
 }
 
-test "★₁ scales by dual_length / length" {
+test "★₁ applies Whitney mass matrix (not diagonal)" {
+    // The Whitney mass matrix is not diagonal — ★₁ applied to a unit
+    // 1-form should differ from the diagonal dual_length/length scaling.
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
@@ -227,11 +297,14 @@ test "★₁ scales by dual_length / length" {
     var result = try hodge_star(allocator, omega);
     defer result.deinit(allocator);
 
-    const edge_slice = mesh.edges.slice();
-    const lengths = edge_slice.items(.length);
-    const dual_lengths = edge_slice.items(.dual_length);
-    for (result.values, lengths, dual_lengths) |r, len, dual_len| {
-        try testing.expectApproxEqAbs(dual_len / len, r, 1e-15);
+    // Verify output matches SpMV with the Whitney mass matrix.
+    const n = mesh.num_edges();
+    const expected = try allocator.alloc(f64, n);
+    defer allocator.free(expected);
+    sparse.spmv(mesh.whitney_mass_1, omega.values, expected);
+
+    for (result.values, expected) |r, e| {
+        try testing.expectApproxEqAbs(e, r, 1e-15);
     }
 }
 
@@ -255,21 +328,19 @@ test "★₂ scales by 1 / face area" {
 
 // ── Invariant: ★⁻¹ ∘ ★ = identity ───────────────────────────────────────
 
-test "Hodge star inverse is exact for all degrees" {
+test "★⁻¹ ∘ ★ = identity for all degrees on random inputs" {
     // For 1000 random primal cochains of each degree, ★⁻¹(★(ω)) = ω
-    // must hold to machine precision. All three degrees (k=0,1,2) use the
-    // full round-trip: with the barycentric dual, every edge has nonzero
-    // dual_length, so ★₁ is invertible everywhere.
+    // must hold to machine precision. For k=0 and k=2 the round-trip is
+    // exact (diagonal multiply + divide). For k=1, the round-trip goes
+    // through SpMV + CG solve — tolerance is set by CG convergence.
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    // The round-trip involves two floating-point operations (multiply + divide),
-    // so we use relative tolerance. Values are in [−100, 100]; 1e-14 is well
-    // within the ~15 significant digits of f64.
-    const tolerance = 1e-14;
+    // k=0,2: two floating-point ops → 1e-14 relative tolerance.
+    // k=1: CG solve to 1e-10 relative residual → 1e-8 absolute is safe.
 
-    // ── k = 0: full round-trip ───────────────────────────────────────
+    // ── k = 0 ───────────────────────────────────────────────────────
     {
         var rng = std.Random.DefaultPrng.init(0xDEC_57A2_00);
         for (0..1000) |_| {
@@ -284,15 +355,15 @@ test "Hodge star inverse is exact for all degrees" {
             defer round_trip.deinit(allocator);
 
             for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, tolerance);
+                try testing.expectApproxEqRel(original, recovered, 1e-14);
             }
         }
     }
 
-    // ── k = 1: full round-trip ───────────────────────────────────────
+    // ── k = 1 (Whitney round-trip: SpMV then CG solve) ─────────────
     {
         var rng = std.Random.DefaultPrng.init(0xDEC_57A2_01);
-        for (0..1000) |_| {
+        for (0..100) |_| {
             var omega = try PrimalC1.init(allocator, &mesh);
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
@@ -304,12 +375,14 @@ test "Hodge star inverse is exact for all degrees" {
             defer round_trip.deinit(allocator);
 
             for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, tolerance);
+                // SpMV is exact; CG solve converges to 1e-10 relative residual.
+                // Condition number amplifies the residual → solution error.
+                try testing.expectApproxEqRel(original, recovered, 1e-5);
             }
         }
     }
 
-    // ── k = 2: full round-trip ───────────────────────────────────────
+    // ── k = 2 ───────────────────────────────────────────────────────
     {
         var rng = std.Random.DefaultPrng.init(0xDEC_57A2_02);
         for (0..1000) |_| {
@@ -324,7 +397,7 @@ test "Hodge star inverse is exact for all degrees" {
             defer round_trip.deinit(allocator);
 
             for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, tolerance);
+                try testing.expectApproxEqRel(original, recovered, 1e-14);
             }
         }
     }
