@@ -18,8 +18,54 @@ const testing = std.testing;
 ///
 /// Produces a descriptive `@compileError` on violation.
 pub fn TimeStepper(comptime T: type) void {
-    _ = T;
-    @compileError("TimeStepper concept not yet implemented");
+    // 1. T must declare a State type.
+    if (!@hasDecl(T, "State")) {
+        @compileError("TimeStepper requires a 'pub const State: type' declaration — " ++
+            "the simulation state type this integrator advances");
+    }
+    const S = T.State;
+    if (@TypeOf(S) != type) {
+        @compileError("TimeStepper: 'State' must be a type, got " ++ @typeName(@TypeOf(S)));
+    }
+
+    // 2. T must declare a step function: fn(Allocator, *State, f64) !void
+    if (!@hasDecl(T, "step")) {
+        @compileError("TimeStepper requires a 'pub fn step(std.mem.Allocator, *State, f64) !void' " ++
+            "declaration — advance state by one timestep dt");
+    }
+
+    const step_info = @typeInfo(@TypeOf(T.step));
+    if (step_info != .@"fn") {
+        @compileError("TimeStepper: 'step' must be a function");
+    }
+    const fn_info = step_info.@"fn";
+
+    // Check parameter count and types.
+    if (fn_info.params.len != 3) {
+        @compileError("TimeStepper: 'step' must take exactly 3 parameters " ++
+            "(std.mem.Allocator, *State, f64)");
+    }
+    if (fn_info.params[0].type != std.mem.Allocator) {
+        @compileError("TimeStepper: 'step' parameter 0 must be std.mem.Allocator");
+    }
+    if (fn_info.params[1].type != *S) {
+        @compileError("TimeStepper: 'step' parameter 1 must be *State");
+    }
+    if (fn_info.params[2].type != f64) {
+        @compileError("TimeStepper: 'step' parameter 2 must be f64 (the timestep dt)");
+    }
+
+    // Check return type is an error union with payload void.
+    const ret = fn_info.return_type orelse
+        @compileError("TimeStepper: 'step' must have a known return type");
+    const ret_info = @typeInfo(ret);
+    if (ret_info != .error_union) {
+        @compileError("TimeStepper: 'step' must return !void (an error union of void)");
+    }
+    if (ret_info.error_union.payload != void) {
+        @compileError("TimeStepper: 'step' must return !void, not !" ++
+            @typeName(ret_info.error_union.payload));
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
