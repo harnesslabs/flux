@@ -1,80 +1,128 @@
-//! Comptime TimeStepper concept — validates time integrator contracts at compile time.
+//! Comptime time-stepping infrastructure.
 //!
-//! A TimeStepper is any type T that provides:
-//!   - `T.State`: the simulation state type it operates on
-//!   - `T.step(allocator, *T.State, dt) !void`: advance state by one timestep
+//! Two layers:
+//!   1. `TimeStepStrategy` — a comptime concept that validates a user-defined
+//!      integration strategy has the required `State` and `step` declarations.
+//!   2. `TimeStepper(Strategy)` — a generic integrator that wraps any conforming
+//!      strategy, providing a uniform interface for simulation runners.
 //!
-//! The concept is physics-agnostic — it constrains the integrator interface
-//! without knowing what equations are being solved.
+//! Users define a strategy (the raw physics + numerics), then pass it to
+//! `TimeStepper` which validates the contract and produces a ready-to-use
+//! integrator type.
 
 const std = @import("std");
 const testing = std.testing;
 
-/// Validate that `T` satisfies the TimeStepper concept at compile time.
+// ═══════════════════════════════════════════════════════════════════════════
+// TimeStepStrategy — comptime concept
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Validate that `S` satisfies the TimeStepStrategy concept at compile time.
 ///
-/// A conforming type must declare:
+/// A conforming strategy must declare:
 ///   - `pub const State: type` — the simulation state type
-///   - `pub fn step(std.mem.Allocator, *State, f64) anyerror!void`
+///   - `pub fn step(std.mem.Allocator, *State, f64) !void` — advance by dt
 ///
 /// Produces a descriptive `@compileError` on violation.
-pub fn TimeStepper(comptime T: type) void {
-    // 1. T must declare a State type.
-    if (!@hasDecl(T, "State")) {
-        @compileError("TimeStepper requires a 'pub const State: type' declaration — " ++
-            "the simulation state type this integrator advances");
+pub fn TimeStepStrategy(comptime S: type) void {
+    // 1. S must declare a State type.
+    if (!@hasDecl(S, "State")) {
+        @compileError("TimeStepStrategy requires a 'pub const State: type' declaration — " ++
+            "the simulation state type this strategy advances");
     }
-    const S = T.State;
-    if (@TypeOf(S) != type) {
-        @compileError("TimeStepper: 'State' must be a type, got " ++ @typeName(@TypeOf(S)));
+    const State = S.State;
+    if (@TypeOf(State) != type) {
+        @compileError("TimeStepStrategy: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
     }
 
-    // 2. T must declare a step function: fn(Allocator, *State, f64) !void
-    if (!@hasDecl(T, "step")) {
-        @compileError("TimeStepper requires a 'pub fn step(std.mem.Allocator, *State, f64) !void' " ++
+    // 2. S must declare a step function: fn(Allocator, *State, f64) !void
+    if (!@hasDecl(S, "step")) {
+        @compileError("TimeStepStrategy requires a 'pub fn step(std.mem.Allocator, *State, f64) !void' " ++
             "declaration — advance state by one timestep dt");
     }
 
-    const step_info = @typeInfo(@TypeOf(T.step));
+    const step_info = @typeInfo(@TypeOf(S.step));
     if (step_info != .@"fn") {
-        @compileError("TimeStepper: 'step' must be a function");
+        @compileError("TimeStepStrategy: 'step' must be a function");
     }
     const fn_info = step_info.@"fn";
 
     // Check parameter count and types.
     if (fn_info.params.len != 3) {
-        @compileError("TimeStepper: 'step' must take exactly 3 parameters " ++
+        @compileError("TimeStepStrategy: 'step' must take exactly 3 parameters " ++
             "(std.mem.Allocator, *State, f64)");
     }
     if (fn_info.params[0].type != std.mem.Allocator) {
-        @compileError("TimeStepper: 'step' parameter 0 must be std.mem.Allocator");
+        @compileError("TimeStepStrategy: 'step' parameter 0 must be std.mem.Allocator");
     }
-    if (fn_info.params[1].type != *S) {
-        @compileError("TimeStepper: 'step' parameter 1 must be *State");
+    if (fn_info.params[1].type != *State) {
+        @compileError("TimeStepStrategy: 'step' parameter 1 must be *State");
     }
     if (fn_info.params[2].type != f64) {
-        @compileError("TimeStepper: 'step' parameter 2 must be f64 (the timestep dt)");
+        @compileError("TimeStepStrategy: 'step' parameter 2 must be f64 (the timestep dt)");
     }
 
     // Check return type is an error union with payload void.
     const ret = fn_info.return_type orelse
-        @compileError("TimeStepper: 'step' must have a known return type");
+        @compileError("TimeStepStrategy: 'step' must have a known return type");
     const ret_info = @typeInfo(ret);
     if (ret_info != .error_union) {
-        @compileError("TimeStepper: 'step' must return !void (an error union of void)");
+        @compileError("TimeStepStrategy: 'step' must return !void (an error union of void)");
     }
     if (ret_info.error_union.payload != void) {
-        @compileError("TimeStepper: 'step' must return !void, not !" ++
+        @compileError("TimeStepStrategy: 'step' must return !void, not !" ++
             @typeName(ret_info.error_union.payload));
     }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Tests
+// TimeStepper — generic integrator wrapper
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// A minimal conforming stepper for testing — does nothing, proves the
-/// concept accepts a valid type.
-const MockStepper = struct {
+/// Generic time integrator parameterized on a `TimeStepStrategy`.
+///
+/// Validates the strategy contract at comptime, then exposes a uniform
+/// interface that simulation runners and composition infrastructure
+/// can depend on.
+///
+/// ```zig
+/// const Stepper = TimeStepper(MaxwellLeapfrog(Mesh2D));
+/// var stepper = Stepper.init();
+/// try stepper.step(allocator, &state, dt);
+/// // stepper.timesteps_completed == 1
+/// ```
+pub fn TimeStepper(comptime Strategy: type) type {
+    // Gate: the strategy must satisfy the concept.
+    comptime TimeStepStrategy(Strategy);
+
+    return struct {
+        const Self = @This();
+
+        /// The simulation state type, forwarded from the strategy.
+        pub const State = Strategy.State;
+
+        /// Number of timesteps completed by this integrator instance.
+        timesteps_completed: u64 = 0,
+
+        /// Create a new integrator instance with zero steps completed.
+        pub fn init() Self {
+            return .{};
+        }
+
+        /// Advance the state by one timestep dt using the underlying strategy.
+        pub fn step(self: *Self, allocator: std.mem.Allocator, state: *State, dt: f64) !void {
+            try Strategy.step(allocator, state, dt);
+            self.timesteps_completed += 1;
+        }
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests — TimeStepStrategy concept
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A minimal conforming strategy for testing — increments value by dt.
+const MockStrategy = struct {
     pub const State = struct {
         value: f64,
     };
@@ -84,14 +132,12 @@ const MockStepper = struct {
     }
 };
 
-test "TimeStepper accepts a conforming type" {
-    // This should compile without error.
-    comptime TimeStepper(MockStepper);
+test "TimeStepStrategy accepts a conforming type" {
+    comptime TimeStepStrategy(MockStrategy);
 }
 
-test "TimeStepper accepts a stepper with extra declarations" {
-    // A conforming type may have additional declarations beyond the contract.
-    const ExtendedStepper = struct {
+test "TimeStepStrategy accepts a strategy with extra declarations" {
+    const ExtendedStrategy = struct {
         pub const State = struct {
             x: f64,
             y: f64,
@@ -108,41 +154,37 @@ test "TimeStepper accepts a stepper with extra declarations" {
             state.y = 0;
         }
     };
-    comptime TimeStepper(ExtendedStepper);
+    comptime TimeStepStrategy(ExtendedStrategy);
 }
 
 // ── Negative tests (compile-time rejection) ──────────────────────────────
 //
 // These verify that non-conforming types produce compile errors. Since
-// @compileError is fatal, we cannot test it at runtime. Instead we
-// use a pattern: wrap the concept call behind a comptime-unreachable
-// branch so that the test documents intent without triggering the error.
-//
-// The real verification is: uncomment the direct call and confirm it
-// fails to compile with a descriptive message. CI tests the positive
-// path; the negative path is verified manually during review.
+// @compileError is fatal, we cannot test them in CI. The test bodies
+// document the contract violation and the expected error message.
+// Verification: uncomment the `comptime` call and confirm it fails.
 
-test "TimeStepper rejects type missing State declaration" {
+test "TimeStepStrategy rejects type missing State declaration" {
     const NoState = struct {
         pub fn step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
     };
 
-    // If we could test compile errors at runtime, we'd assert:
-    //   comptime TimeStepper(NoState);  // expected: @compileError about missing State
-    // Instead, document the contract violation.
+    // comptime TimeStepStrategy(NoState);
+    // expected: @compileError("TimeStepStrategy requires a 'pub const State: type' declaration ...")
     _ = NoState;
 }
 
-test "TimeStepper rejects type missing step function" {
+test "TimeStepStrategy rejects type missing step function" {
     const NoStep = struct {
         pub const State = struct { value: f64 };
     };
 
-    // comptime TimeStepper(NoStep);  // expected: @compileError about missing step
+    // comptime TimeStepStrategy(NoStep);
+    // expected: @compileError("TimeStepStrategy requires a 'pub fn step(...) !void' ...")
     _ = NoStep;
 }
 
-test "TimeStepper rejects step with wrong signature (missing allocator)" {
+test "TimeStepStrategy rejects step with wrong signature (missing allocator)" {
     const WrongSig = struct {
         pub const State = struct { value: f64 };
 
@@ -151,6 +193,40 @@ test "TimeStepper rejects step with wrong signature (missing allocator)" {
         }
     };
 
-    // comptime TimeStepper(WrongSig);  // expected: @compileError about wrong step signature
+    // comptime TimeStepStrategy(WrongSig);
+    // expected: @compileError("TimeStepStrategy: 'step' must take exactly 3 parameters ...")
     _ = WrongSig;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tests — TimeStepper generic wrapper
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "TimeStepper wraps a conforming strategy" {
+    const Stepper = TimeStepper(MockStrategy);
+    comptime {
+        // The wrapper itself satisfies the structural contract.
+        std.debug.assert(@hasDecl(Stepper, "State"));
+        std.debug.assert(Stepper.State == MockStrategy.State);
+    }
+}
+
+test "TimeStepper.step delegates to strategy and counts steps" {
+    const Stepper = TimeStepper(MockStrategy);
+    var stepper = Stepper.init();
+    var state = MockStrategy.State{ .value = 0.0 };
+
+    try stepper.step(testing.allocator, &state, 0.1);
+    try testing.expectEqual(@as(u64, 1), stepper.timesteps_completed);
+    try testing.expectApproxEqAbs(0.1, state.value, 1e-15);
+
+    try stepper.step(testing.allocator, &state, 0.2);
+    try testing.expectEqual(@as(u64, 2), stepper.timesteps_completed);
+    try testing.expectApproxEqAbs(0.3, state.value, 1e-15);
+}
+
+test "TimeStepper initializes with zero steps completed" {
+    const Stepper = TimeStepper(MockStrategy);
+    const stepper = Stepper.init();
+    try testing.expectEqual(@as(u64, 0), stepper.timesteps_completed);
 }

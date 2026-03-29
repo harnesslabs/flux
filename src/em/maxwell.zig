@@ -1572,9 +1572,24 @@ test "convergence: energy drift bounded for TE₁₀ cavity" {
 
 const time_stepper = @import("../time_stepper.zig");
 
-test "MaxwellLeapfrog satisfies TimeStepper concept" {
+test "MaxwellLeapfrog satisfies TimeStepStrategy concept" {
     const Leapfrog = MaxwellLeapfrog(Mesh2D);
-    comptime time_stepper.TimeStepper(Leapfrog);
+    comptime time_stepper.TimeStepStrategy(Leapfrog);
+}
+
+test "MaxwellLeapfrog works with TimeStepper wrapper" {
+    const Stepper = time_stepper.TimeStepper(MaxwellLeapfrog(Mesh2D));
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    var stepper = Stepper.init();
+    try stepper.step(allocator, &state, 0.01);
+    try testing.expectEqual(@as(u64, 1), stepper.timesteps_completed);
+    try testing.expectEqual(@as(u64, 1), state.timestep);
 }
 
 test "MaxwellLeapfrog.step produces same result as leapfrog_step" {
