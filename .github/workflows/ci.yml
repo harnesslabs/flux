@@ -51,6 +51,17 @@ jobs:
       - name: Generate docs
         run: zig build docs
 
+  bench:
+    name: bench
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Run benchmarks (regression check)
+        run: zig build bench -- --check
+
   lint:
     name: lint
     runs-on: ubuntu-latest

@@ -96,3 +96,24 @@ the same role) but more descriptive.
 
 **Rationale:** `*Concept` is the clearest name for "comptime function that validates a
 type satisfies an interface." Unifying `TimeStepStrategy` is tracked as a follow-up.
+
+## 2026-03-29: Benchmark baselines generated on CI, not committed locally
+
+**Decision:** `bench/baselines.json` is generated and committed by a dedicated
+`update-baselines.yml` GitHub Actions workflow running on `ubuntu-latest`. Local
+`zig build bench` runs without `--check` by default (informational only). The CI
+`bench` job runs `--check` to detect regressions against the CI-generated baselines.
+
+**Alternatives considered:**
+1. Commit local (developer machine) baselines: rejected because absolute timings
+   vary wildly across machine architectures (ARM vs x86, different clock speeds).
+   A 20% threshold would produce false positives on every machine transition.
+2. Ratio-based baselines (normalize to a reference benchmark): considered but adds
+   complexity. Ratios are fragile if the reference benchmark's absolute time changes
+   due to system load rather than code changes.
+3. No committed baselines — benchmarks are purely informational: rejected because
+   the M1 acceptance criterion requires "bounded CI checks."
+
+**Rationale:** Same-machine-class comparison (ubuntu-latest → ubuntu-latest) keeps
+the 20% regression threshold meaningful. The `update-baselines` workflow runs
+automatically when operator code changes on main, keeping baselines fresh.

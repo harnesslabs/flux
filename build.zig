@@ -177,11 +177,33 @@ pub fn build(b: *std.Build) void {
     const serve_docs_step = b.step("serve-docs", "Build docs and serve locally at http://127.0.0.1:8080");
     serve_docs_step.dependOn(&serve_docs_run.step);
 
+    // -- bench step --
+    // Builds and runs the benchmark suite in ReleaseFast mode.
+    // Pass --check to compare against committed baselines and fail on regression.
+    // Pass --update to overwrite baselines.json with current results.
+    const bench_exe = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/main.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    const bench_run = b.addRunArtifact(bench_exe);
+    if (b.args) |args| {
+        bench_run.addArgs(args);
+    }
+    const bench_step = b.step("bench", "Run operator benchmarks (--check to compare baselines, --update to save)");
+    bench_step.dependOn(&bench_run.step);
+
     // -- fmt step --
     // Runs zig fmt --check on all source files. Fails if anything is unformatted.
     const fmt_step = b.step("fmt", "Check source formatting");
     const fmt_cmd = b.addFmt(.{
-        .paths = &.{ "src", "build.zig" },
+        .paths = &.{ "src", "bench", "build.zig" },
         .check = true,
     });
     fmt_step.dependOn(&fmt_cmd.step);
