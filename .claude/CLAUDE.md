@@ -23,6 +23,10 @@ zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run executable
+zig build bench                 # run operator benchmarks (informational)
+zig build bench -- --check      # compare against baselines, fail on >20% regression
+zig build bench -- --update     # run benchmarks and save baselines.json
+zig build bench -- --json       # output JSON to stdout
 zig build docs                  # generate API docs to zig-out/docs/
 zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 ```
