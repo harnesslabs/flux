@@ -103,7 +103,7 @@ fn Progress(comptime Writer: type) type {
         fn update(self: *Self, step: u32) void {
             const elapsed_ns = self.timer.read();
 
-            // Throttle redraws to ~20 fps (50ms).
+            // Avoid flooding stderr on fast machines — cap at ~20 fps.
             if (elapsed_ns - self.last_draw_ns < 50_000_000 and step < self.total) return;
             self.last_draw_ns = elapsed_ns;
 
@@ -111,15 +111,14 @@ fn Progress(comptime Writer: type) type {
             const frac = @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(self.total));
             const pct = frac * 100.0;
 
-            // ETA.
+            // Guard against division by zero in the first few milliseconds.
             const steps_per_sec = if (elapsed_s > 0.01) @as(f64, @floatFromInt(step)) / elapsed_s else 0.0;
             const remaining = @as(f64, @floatFromInt(self.total - step));
             const eta_s = if (steps_per_sec > 0.01) remaining / steps_per_sec else 0.0;
 
-            // Bar.
             const filled: u32 = @intFromFloat(frac * @as(f64, @floatFromInt(self.bar_width)));
 
-            // Build bar string in a fixed buffer.
+            // Stack buffer avoids allocation on every redraw.
             var bar: [64]u8 = undefined;
             for (0..self.bar_width) |j| {
                 bar[j] = if (j < filled) '#' else '-';

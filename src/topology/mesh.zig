@@ -200,7 +200,7 @@ pub fn Mesh(comptime n: usize) type {
             }
 
             // -- Populate edges --
-            // Horizontal: h(i,j) = j*nx + i, tail = v(i,j), head = v(i+1,j)
+            // Horizontal: horizontal_edge(i,j) = j*nx + i, tail = vertex(i,j), head = vertex(i+1,j)
             for (0..ny + 1) |j_u| {
                 for (0..nx) |i_u| {
                     const i: u32 = @intCast(i_u);
@@ -212,7 +212,7 @@ pub fn Mesh(comptime n: usize) type {
                     });
                 }
             }
-            // Vertical: vert(i,j) = horizontal_edge_count + i*ny + j
+            // Vertical: vertical_edge(i,j) = horizontal_edge_count + i*ny + j
             for (0..nx + 1) |i_u| {
                 for (0..ny) |j_u| {
                     const i: u32 = @intCast(i_u);
@@ -224,7 +224,7 @@ pub fn Mesh(comptime n: usize) type {
                     });
                 }
             }
-            // Diagonal (SW→NE): d(i,j) = horizontal_edge_count + vertical_edge_count + i*ny + j
+            // Diagonal (SW→NE): diagonal_edge(i,j) = horizontal_edge_count + vertical_edge_count + i*ny + j
             for (0..nx) |i_u| {
                 for (0..ny) |j_u| {
                     const i: u32 = @intCast(i_u);
@@ -248,8 +248,7 @@ pub fn Mesh(comptime n: usize) type {
                     const nw = vertex_index(i, j + 1, ny);
                     const ne = vertex_index(i + 1, j + 1, ny);
 
-                    var zero_cc: [n]f64 = @splat(0);
-                    _ = &zero_cc;
+                    const zero_cc: [n]f64 = @splat(0);
 
                     // Lower-right triangle: SW → SE → NE
                     faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .area = 0, .barycenter = zero_cc });
