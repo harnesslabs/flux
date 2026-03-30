@@ -23,8 +23,8 @@ const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
-const ext = @import("exterior_derivative.zig");
-const hs = @import("hodge_star.zig");
+const exterior_derivative = @import("exterior_derivative.zig");
+const hodge_star = @import("hodge_star.zig");
 
 /// Apply the Hodge Laplacian Δₖ to a primal k-cochain.
 ///
@@ -56,11 +56,11 @@ pub fn laplacian(
     // Exists when k < n, so that d_k is defined.
     if (k < n) {
         // d_k ω = boundary(k+1) · ω
-        var d_omega = try ext.exterior_derivative(allocator, input);
+        var d_omega = try exterior_derivative.exterior_derivative(allocator, input);
         defer d_omega.deinit(allocator);
 
         // ★_{k+1} (d_k ω)
-        var star_d = try hs.hodge_star(allocator, d_omega);
+        var star_d = try hodge_star.hodge_star(allocator, d_omega);
         defer star_d.deinit(allocator);
 
         // D_kᵀ · (★_{k+1} d_k ω) — transpose sparse matrix–vector product
@@ -71,14 +71,14 @@ pub fn laplacian(
         bk1.transpose_multiply(star_d.values, temp);
 
         // ★⁻¹_k · temp → result
-        try hs.apply_inverse_raw(allocator, MeshType, k, input.mesh, temp, result.values);
+        try hodge_star.apply_inverse_raw(allocator, MeshType, k, input.mesh, temp, result.values);
     }
 
     // ── Term 2 (dδ): D_{k-1} · ★⁻¹_{k-1} · D_{k-1}ᵀ · ★_k · ω ────
     // Exists when k > 0, so that δ_k is defined.
     if (k > 0) {
         // ★_k ω
-        var star_omega = try hs.hodge_star(allocator, input);
+        var star_omega = try hodge_star.hodge_star(allocator, input);
         defer star_omega.deinit(allocator);
 
         // D_{k-1}ᵀ · (★_k ω) — transpose multiply
@@ -91,7 +91,7 @@ pub fn laplacian(
         // ★⁻¹_{k-1} · temp
         const codiff_vals = try allocator.alloc(f64, bk.n_cols);
         defer allocator.free(codiff_vals);
-        try hs.apply_inverse_raw(allocator, MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
+        try hodge_star.apply_inverse_raw(allocator, MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
 
         // D_{k-1} · codiff_vals → accumulate into result
         for (0..bk.n_rows) |row_idx| {

@@ -20,7 +20,7 @@ const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
-const cg = @import("../math/cg.zig");
+const conjugate_gradient = @import("../math/cg.zig");
 
 /// Apply the Hodge star ★ₖ to a primal k-cochain, returning a dual (n−k)-cochain.
 ///
@@ -74,17 +74,17 @@ pub fn hodge_star_inverse(
             // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
             @memset(output.values, 0.0);
 
-            var scratch = try cg.Scratch.init(allocator, @intCast(output.values.len));
+            var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.values.len));
             defer scratch.deinit(allocator);
 
-            var precond = cg.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
-            const result = cg.solve(
+            var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
+            const result = conjugate_gradient.solve(
                 input.mesh.whitney_mass_1,
                 input.values,
                 output.values,
                 1e-10,
                 1000,
-                cg.DiagonalPreconditioner.apply,
+                conjugate_gradient.DiagonalPreconditioner.apply,
                 @ptrCast(&precond),
                 scratch,
             );
@@ -161,17 +161,17 @@ pub fn apply_inverse_raw(
         else => {
             @memset(output, 0.0);
 
-            var scratch = try cg.Scratch.init(allocator, @intCast(output.len));
+            var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
             defer scratch.deinit(allocator);
 
-            var precond = cg.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
-            const result = cg.solve(
+            var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
+            const result = conjugate_gradient.solve(
                 mesh.whitney_mass_1,
                 input,
                 output,
                 1e-10,
                 1000,
-                cg.DiagonalPreconditioner.apply,
+                conjugate_gradient.DiagonalPreconditioner.apply,
                 @ptrCast(&precond),
                 scratch,
             );

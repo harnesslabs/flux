@@ -29,8 +29,8 @@ const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
-const ext = @import("../operators/exterior_derivative.zig");
-const hs = @import("../operators/hodge_star.zig");
+const exterior_derivative = @import("../operators/exterior_derivative.zig");
+const hodge_star = @import("../operators/hodge_star.zig");
 
 /// Electromagnetic field state on a 2D simplicial mesh.
 ///
@@ -97,7 +97,7 @@ pub fn faraday_step(
     state: anytype,
     dt: f64,
 ) !void {
-    var dE = try ext.exterior_derivative(allocator, state.E);
+    var dE = try exterior_derivative.exterior_derivative(allocator, state.E);
     defer dE.deinit(allocator);
 
     dE.scale(dt);
@@ -125,11 +125,11 @@ pub fn ampere_step(
     dt: f64,
 ) !void {
     // Step 1: ★₂(B) — primal 2-form → dual 0-form.
-    var star_B = try hs.hodge_star(allocator, state.B);
+    var star_B = try hodge_star.hodge_star(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // Step 2: d(★₂B) — dual 0-form → dual 1-form.
-    var d_star_B = try ext.exterior_derivative(allocator, star_B);
+    var d_star_B = try exterior_derivative.exterior_derivative(allocator, star_B);
     defer d_star_B.deinit(allocator);
 
     // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
@@ -312,11 +312,11 @@ pub fn electromagnetic_energy(
     state: anytype,
 ) !f64 {
     // ★₁(E): primal 1-form → dual 1-form.
-    var star_E = try hs.hodge_star(allocator, state.E);
+    var star_E = try hodge_star.hodge_star(allocator, state.E);
     defer star_E.deinit(allocator);
 
     // ★₂(B): primal 2-form → dual 0-form.
-    var star_B = try hs.hodge_star(allocator, state.B);
+    var star_B = try hodge_star.hodge_star(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // ⟨E, ★₁E⟩ = Σᵢ Eᵢ · (★₁E)ᵢ
@@ -338,8 +338,8 @@ pub fn electromagnetic_energy(
 // Simulation runner
 // ═══════════════════════════════════════════════════════════════════════════
 
-const vtk = @import("../io/vtk.zig");
-const fs = std.fs;
+const flux_io = @import("../io/vtk.zig");
+const std_fs = std.fs;
 
 /// Configuration for the simulation runner.
 pub const RunConfig = struct {
@@ -395,13 +395,13 @@ pub fn Runner(comptime MeshType: type) type {
             else
                 0;
 
-            var pvd_filenames: []vtk.PvdEntry = &.{};
+            var pvd_filenames: []flux_io.PvdEntry = &.{};
             var snapshot_count: u32 = 0;
-            var filename_bufs: [][vtk.max_snapshot_filename_length]u8 = &.{};
+            var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
 
             if (has_output) {
-                pvd_filenames = try allocator.alloc(vtk.PvdEntry, max_snapshots);
-                filename_bufs = try allocator.alloc([vtk.max_snapshot_filename_length]u8, max_snapshots);
+                pvd_filenames = try allocator.alloc(flux_io.PvdEntry, max_snapshots);
+                filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, max_snapshots);
             }
             defer if (has_output) {
                 allocator.free(pvd_filenames);
@@ -424,7 +424,7 @@ pub fn Runner(comptime MeshType: type) type {
 
                 // Write VTK snapshot if at output interval.
                 if (has_output and (step_idx + 1) % config.output_interval == 0) {
-                    const filename = vtk.snapshot_filename(
+                    const filename = flux_io.snapshot_filename(
                         &filename_bufs[snapshot_count],
                         config.output_base_name,
                         snapshot_count,
@@ -456,7 +456,7 @@ pub fn Runner(comptime MeshType: type) type {
             var output = std.ArrayListUnmanaged(u8){};
             defer output.deinit(allocator);
 
-            try vtk.write_fields(
+            try flux_io.write_fields(
                 allocator,
                 output.writer(allocator),
                 MeshType.dimension,
@@ -465,7 +465,7 @@ pub fn Runner(comptime MeshType: type) type {
                 state.B.values,
             );
 
-            var dir = try fs.cwd().openDir(output_dir, .{});
+            var dir = try std_fs.cwd().openDir(output_dir, .{});
             defer dir.close();
             const file = try dir.createFile(filename, .{});
             defer file.close();
@@ -476,17 +476,17 @@ pub fn Runner(comptime MeshType: type) type {
             allocator: std.mem.Allocator,
             output_dir: []const u8,
             base_name: []const u8,
-            entries: []const vtk.PvdEntry,
+            entries: []const flux_io.PvdEntry,
         ) !void {
             var output = std.ArrayListUnmanaged(u8){};
             defer output.deinit(allocator);
 
-            try vtk.write_pvd(output.writer(allocator), entries);
+            try flux_io.write_pvd(output.writer(allocator), entries);
 
             const pvd_name = try std.fmt.allocPrint(allocator, "{s}.pvd", .{base_name});
             defer allocator.free(pvd_name);
 
-            var dir = try fs.cwd().openDir(output_dir, .{});
+            var dir = try std_fs.cwd().openDir(output_dir, .{});
             defer dir.close();
             const file = try dir.createFile(pvd_name, .{});
             defer file.close();
@@ -634,7 +634,7 @@ test "faraday_step is B -= dt * d(E)" {
 
     // Compute expected: B_old - dt * d(E)
     const dt: f64 = 0.025;
-    var dE = try ext.exterior_derivative(allocator, state.E);
+    var dE = try exterior_derivative.exterior_derivative(allocator, state.E);
     defer dE.deinit(allocator);
 
     const expected_B = try allocator.alloc(f64, state.B.values.len);
@@ -715,11 +715,11 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
     const dt: f64 = 0.025;
 
     // ★₂(B)
-    var star_B = try hs.hodge_star(allocator, state.B);
+    var star_B = try hodge_star.hodge_star(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // d(★₂B)
-    var d_star_B = try ext.exterior_derivative(allocator, star_B);
+    var d_star_B = try exterior_derivative.exterior_derivative(allocator, star_B);
     defer d_star_B.deinit(allocator);
 
     // ★₁⁻¹(d(★₂B))
@@ -1100,7 +1100,7 @@ test "Runner writes VTK snapshots at configured interval" {
     defer tmp_dir.cleanup();
 
     // Get the path string for the temp directory.
-    var path_buf: [fs.max_path_bytes]u8 = undefined;
+    var path_buf: [std_fs.max_path_bytes]u8 = undefined;
     const tmp_path = try tmp_dir.dir.realpath(".", &path_buf);
 
     try MaxwellRunner.run(allocator, &state, null, .{
@@ -1394,14 +1394,14 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
     project_te10_e(&mesh, E.values, domain_length / 2.0, domain_length);
 
     // dE (primal 2-form).
-    var dE = try ext.exterior_derivative(allocator, E);
+    var dE = try exterior_derivative.exterior_derivative(allocator, E);
     defer dE.deinit(allocator);
 
     // Energy-based Rayleigh quotient: ω² = ⟨dE, ★₂dE⟩ / ⟨E, ★₁E⟩
     // ★₂ is diagonal (exact for faces), ★₁ uses the Whitney mass matrix.
 
     // Numerator: ⟨dE, ★₂dE⟩
-    var star_dE = try hs.hodge_star(allocator, dE);
+    var star_dE = try hodge_star.hodge_star(allocator, dE);
     defer star_dE.deinit(allocator);
     var numerator: f64 = 0.0;
     for (dE.values, star_dE.values) |de, sde| {
@@ -1409,7 +1409,7 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
     }
 
     // Denominator: ⟨E, ★₁E⟩ (Whitney mass matrix via hodge_star)
-    var star_E = try hs.hodge_star(allocator, E);
+    var star_E = try hodge_star.hodge_star(allocator, E);
     defer star_E.deinit(allocator);
     var denominator: f64 = 0.0;
     for (E.values, star_E.values) |e, se| {

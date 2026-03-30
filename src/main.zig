@@ -16,9 +16,9 @@ const Mesh2D = flux.Mesh(2);
 const MaxwellState = flux.MaxwellState(Mesh2D);
 const PointDipole = flux.PointDipole(Mesh2D);
 
-const vtk = flux.io;
-const em = flux.em;
-const fs = std.fs;
+const flux_io = flux.io;
+const flux_em = flux.em;
+const std_fs = std.fs;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Configuration
@@ -103,7 +103,7 @@ fn Progress(comptime Writer: type) type {
         fn update(self: *Self, step: u32) void {
             const elapsed_ns = self.timer.read();
 
-            // Throttle redraws to ~20 fps (50ms).
+            // Avoid flooding stderr on fast machines — cap at ~20 fps.
             if (elapsed_ns - self.last_draw_ns < 50_000_000 and step < self.total) return;
             self.last_draw_ns = elapsed_ns;
 
@@ -111,15 +111,14 @@ fn Progress(comptime Writer: type) type {
             const frac = @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(self.total));
             const pct = frac * 100.0;
 
-            // ETA.
+            // Guard against division by zero in the first few milliseconds.
             const steps_per_sec = if (elapsed_s > 0.01) @as(f64, @floatFromInt(step)) / elapsed_s else 0.0;
             const remaining = @as(f64, @floatFromInt(self.total - step));
             const eta_s = if (steps_per_sec > 0.01) remaining / steps_per_sec else 0.0;
 
-            // Bar.
             const filled: u32 = @intFromFloat(frac * @as(f64, @floatFromInt(self.bar_width)));
 
-            // Build bar string in a fixed buffer.
+            // Stack buffer avoids allocation on every redraw.
             var bar: [64]u8 = undefined;
             for (0..self.bar_width) |j| {
                 bar[j] = if (j < filled) '#' else '-';
@@ -174,7 +173,7 @@ fn writeSnapshot(
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try vtk.write_fields(
+    try flux_io.write_fields(
         allocator,
         output.writer(allocator),
         Mesh2D.dimension,
@@ -183,7 +182,7 @@ fn writeSnapshot(
         state.B.values,
     );
 
-    var dir = try fs.cwd().openDir(output_dir, .{});
+    var dir = try std_fs.cwd().openDir(output_dir, .{});
     defer dir.close();
     const file = try dir.createFile(filename, .{});
     defer file.close();
@@ -194,17 +193,17 @@ fn writePvd(
     allocator: std.mem.Allocator,
     output_dir: []const u8,
     base_name: []const u8,
-    entries: []const vtk.PvdEntry,
+    entries: []const flux_io.PvdEntry,
 ) !void {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try vtk.write_pvd(output.writer(allocator), entries);
+    try flux_io.write_pvd(output.writer(allocator), entries);
 
     const pvd_name = try std.fmt.allocPrint(allocator, "{s}.pvd", .{base_name});
     defer allocator.free(pvd_name);
 
-    var dir = try fs.cwd().openDir(output_dir, .{});
+    var dir = try std_fs.cwd().openDir(output_dir, .{});
     defer dir.close();
     const file = try dir.createFile(pvd_name, .{});
     defer file.close();
@@ -243,13 +242,13 @@ fn simulate(
     // PVD entry storage. Saturating add guards the pathological case where
     // steps == u32_max and interval == 1.
     const max_snapshots: u32 = if (has_output) (config.steps / interval) +| 1 else 0;
-    var pvd_entries: []vtk.PvdEntry = &.{};
-    var filename_bufs: [][vtk.max_snapshot_filename_length]u8 = &.{};
+    var pvd_entries: []flux_io.PvdEntry = &.{};
+    var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
     var snapshot_count: u32 = 0;
 
     if (has_output) {
-        pvd_entries = try allocator.alloc(vtk.PvdEntry, max_snapshots);
-        filename_bufs = try allocator.alloc([vtk.max_snapshot_filename_length]u8, max_snapshots);
+        pvd_entries = try allocator.alloc(flux_io.PvdEntry, max_snapshots);
+        filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, max_snapshots);
     }
     defer if (has_output) {
         allocator.free(pvd_entries);
@@ -267,12 +266,12 @@ fn simulate(
         }
 
         // Advance fields.
-        try em.leapfrog_step(allocator, state, time_step);
-        em.apply_pec_boundary(state);
+        try flux_em.leapfrog_step(allocator, state, time_step);
+        flux_em.apply_pec_boundary(state);
 
         // VTK snapshot.
         if (has_output and (step_idx + 1) % interval == 0) {
-            const filename = vtk.snapshot_filename(
+            const filename = flux_io.snapshot_filename(
                 &filename_bufs[snapshot_count],
                 base_name,
                 snapshot_count,
