@@ -117,3 +117,20 @@ type satisfies an interface." Unifying `TimeStepStrategy` is tracked as a follow
 **Rationale:** Same-machine-class comparison (ubuntu-latest → ubuntu-latest) keeps
 the 20% regression threshold meaningful. The `update-baselines` workflow runs
 automatically when operator code changes on main, keeping baselines fresh.
+
+## 2026-03-30: Generic integrators live in `src/integrators/`, not `src/operators/`
+
+**Decision:** Time integrators (leapfrog, forward Euler, future backward Euler)
+live in `src/integrators/`. The issue suggested `src/operators/` as an alternative.
+
+**Alternatives considered:**
+1. `src/operators/` — rejected because `operators/` contains *spatial* DEC operators
+   (d, ★, Δ). Time integrators are a fundamentally different concern — they compose
+   spatial operators into time-stepping patterns. Mixing them blurs the boundary.
+2. `src/time_stepper.zig` (expand the existing file) — rejected because the existing
+   file defines the `TimeStepStrategy` concept and `TimeStepper` wrapper. Concrete
+   integrators are consumers of that concept, not part of its definition.
+
+**Rationale:** Separate directory keeps the spatial/temporal distinction clear and
+gives a natural home for future integrators (backward Euler for #93 heat equation,
+Strang splitting from horizons).

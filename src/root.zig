@@ -62,6 +62,10 @@ pub const operators = struct {
 pub const topology = @import("topology/mesh.zig");
 pub const em = @import("em/maxwell.zig");
 pub const time_stepper = @import("time_stepper.zig");
+pub const integrators = struct {
+    pub const leapfrog = @import("integrators/leapfrog.zig");
+    pub const forward_euler = @import("integrators/forward_euler.zig");
+};
 pub const concepts = struct {
     pub const mesh = @import("concepts/mesh.zig");
 };
@@ -81,7 +85,16 @@ pub const TimeStepper = time_stepper.TimeStepper;
 /// Requires dimension, topological_dimension, entity count accessors, and boundary().
 pub const MeshConcept = concepts.mesh.MeshConcept;
 
-/// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
+/// Generic leapfrog integrator — composes two symplectic half-steps.
+pub const Leapfrog = integrators.leapfrog.Leapfrog;
+
+/// Generic forward Euler integrator — single explicit step.
+pub const ForwardEuler = integrators.forward_euler.ForwardEuler;
+
+/// Maxwell system — defines Faraday/Ampere half-steps for the generic Leapfrog.
+pub const MaxwellSystem = em.MaxwellSystem;
+
+/// Maxwell leapfrog — Leapfrog(MaxwellSystem(...)). Satisfies TimeStepStrategy.
 pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
 
 /// Electromagnetic field state (E, B, J) on a simplicial mesh.

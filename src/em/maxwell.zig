@@ -31,6 +31,7 @@ const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const exterior_derivative = @import("../operators/exterior_derivative.zig");
 const hodge_star = @import("../operators/hodge_star.zig");
+const leapfrog_mod = @import("../integrators/leapfrog.zig");
 
 /// Electromagnetic field state on a 2D simplicial mesh.
 ///
@@ -181,40 +182,50 @@ pub fn apply_pec_boundary(state: anytype) void {
 ///
 /// For source-free fields (J = 0), symplecticity of the leapfrog scheme
 /// guarantees bounded energy oscillation — no secular drift.
+///
+/// Delegates to the generic `Leapfrog(MaxwellSystem(...))` integrator.
 pub fn leapfrog_step(
     allocator: std.mem.Allocator,
     state: anytype,
     dt: f64,
 ) !void {
-    // Step 1: Faraday — advance B by a full dt at the half-step level.
     try faraday_step(allocator, state, dt);
-
-    // Step 2: Ampere-Maxwell — advance E using the updated B.
     try ampere_step(allocator, state, dt);
-
-    // Step 3: Advance the discrete timestep counter.
     state.timestep += 1;
 }
 
-/// Maxwell leapfrog integrator as a typed struct satisfying the TimeStepper concept.
+/// Maxwell system for the generic leapfrog integrator.
 ///
-/// Wraps the free-function `leapfrog_step` into a struct with an associated
-/// `State` type, so that generic infrastructure (runners, composition) can
-/// verify the integrator contract at compile time.
-pub fn MaxwellLeapfrog(comptime MeshType: type) type {
-    // Alias the module-level State constructor to avoid name collision with
-    // the concept-required `State` declaration inside the returned struct.
+/// Wraps the Faraday and Ampere free functions as typed half-step
+/// operators, conforming to the interface that `Leapfrog` requires.
+/// The timestep counter is incremented in `second_half_step` because
+/// it is Maxwell-specific state bookkeeping, not integrator logic.
+pub fn MaxwellSystem(comptime MeshType: type) type {
     const StateType = State(MeshType);
 
     return struct {
-        /// The simulation state type — required by the TimeStepper concept.
         pub const State = StateType;
 
-        /// Advance the Maxwell state by one leapfrog timestep.
-        pub fn step(allocator: std.mem.Allocator, state: *StateType, dt: f64) !void {
-            try leapfrog_step(allocator, state, dt);
+        /// Faraday half-step: B^{n+1/2} = B^{n-1/2} − dt · dE^n.
+        pub fn first_half_step(allocator: std.mem.Allocator, state: *StateType, dt: f64) !void {
+            try faraday_step(allocator, state, dt);
+        }
+
+        /// Ampere half-step: E^{n+1} = E^n + dt · (★₁⁻¹ d ★₂ B^{n+1/2} − J).
+        /// Also advances the discrete timestep counter.
+        pub fn second_half_step(allocator: std.mem.Allocator, state: *StateType, dt: f64) !void {
+            try ampere_step(allocator, state, dt);
+            state.timestep += 1;
         }
     };
+}
+
+/// Maxwell leapfrog integrator — built from the generic `Leapfrog`.
+///
+/// Satisfies the `TimeStepStrategy` concept so it can be wrapped by
+/// `TimeStepper` and used by simulation runners.
+pub fn MaxwellLeapfrog(comptime MeshType: type) type {
+    return leapfrog_mod.Leapfrog(MaxwellSystem(MeshType));
 }
 
 /// Point dipole current source.
