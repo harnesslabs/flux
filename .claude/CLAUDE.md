@@ -22,7 +22,8 @@ zig build                       # build
 zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
-zig build run                   # run executable
+zig build run                   # run stub (directs to examples)
+zig build example-maxwell2d     # run 2D Maxwell electromagnetic example
 zig build bench                 # run operator benchmarks (informational)
 zig build bench -- --check      # compare against baselines, fail on >20% regression
 zig build bench -- --update     # run benchmarks and save baselines.json
@@ -315,13 +316,16 @@ All four must pass. Branch protection is configured in `.github/settings.yml`.
 ```
 src/
   root.zig          # library entry point — re-exports public API
-  main.zig          # CLI entry point
-  topology/         # CW complexes, incidence matrices (Phase 1.1)
-  forms/            # discrete k-forms / cochains (Phase 1.2)
-  operators/        # d, ★, and their compositions (Phase 1.3–1.4)
-  io/               # VTK export (Phase 2.2)
-  em/               # electromagnetics integrators (Phase 3)
-  fluid/            # fluid dynamics integrators (Phase 4)
+  main.zig          # stub CLI (directs to examples)
+  topology/         # CW complexes, incidence matrices
+  forms/            # discrete k-forms / cochains
+  operators/        # d, ★, and their compositions
+  math/             # sparse linear algebra primitives
+  io/               # VTK export
+  integrators/      # generic time steppers (leapfrog, forward Euler)
+  concepts/         # comptime concept validators
+examples/
+  maxwell_2d/       # 2D electromagnetic simulation (cavity, dipole)
 project/
   initial.md
   epoch_1/
