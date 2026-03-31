@@ -350,14 +350,14 @@ pub fn Mesh(comptime n: usize) type {
 
             // Dual edge lengths require edge→face adjacency.
             // Each edge borders at most 2 faces; boundary edges border exactly 1.
+            // Single scratch allocation: [count | face_0 | face_1], each edge_count u32s.
             var boundary_edge_buf: []u32 = &.{};
             {
-                var edge_face_count = try allocator.alloc(u8, edge_count);
-                defer allocator.free(edge_face_count);
-                var edge_face_0 = try allocator.alloc(u32, edge_count);
-                defer allocator.free(edge_face_0);
-                var edge_face_1 = try allocator.alloc(u32, edge_count);
-                defer allocator.free(edge_face_1);
+                const scratch = try allocator.alloc(u32, 3 * edge_count);
+                defer allocator.free(scratch);
+                const edge_face_count = scratch[0..edge_count];
+                const edge_face_0 = scratch[edge_count .. 2 * edge_count];
+                const edge_face_1 = scratch[2 * edge_count .. 3 * edge_count];
                 @memset(edge_face_count, 0);
 
                 for (0..face_count) |f| {
