@@ -91,7 +91,10 @@ pub const Leapfrog = integrators.leapfrog.Leapfrog;
 /// Generic forward Euler integrator — single explicit step.
 pub const ForwardEuler = integrators.forward_euler.ForwardEuler;
 
-/// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
+/// Maxwell system — defines Faraday/Ampere half-steps for the generic Leapfrog.
+pub const MaxwellSystem = em.MaxwellSystem;
+
+/// Maxwell leapfrog — Leapfrog(MaxwellSystem(...)). Satisfies TimeStepStrategy.
 pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
 
 /// Electromagnetic field state (E, B, J) on a simplicial mesh.
