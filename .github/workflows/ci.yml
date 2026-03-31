@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   build:
     name: build
@@ -80,7 +84,77 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           cp /tmp/base-baselines.json bench/baselines.json
-          zig build bench -- --check
+          zig build bench -- --check 2> /tmp/bench-output.txt
+        # Allow this step to "fail" so we can still post the comment.
+        # The regression is re-checked in the comment step below.
+        continue-on-error: true
+        id: bench_run
+
+      - name: Comment on PR with benchmark results
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BENCH_OUTCOME: ${{ steps.bench_run.outcome }}
+        run: |
+          # Extract lines with >= 20% change in either direction.
+          # Bench output lines look like:
+          #   hodge_star_2             22.0 µs  ...  24.2% faster
+          #   exterior_derivative_d1   65.7 µs  ...  +81.4% REGRESSED
+          #
+          # grep -E pulls candidate lines, then python filters by the 20% threshold.
+          # Using python avoids gawk dependency (ubuntu ships mawk).
+          NOTABLE=$(grep -E '(% faster|% REGRESSED)' /tmp/bench-output.txt | python3 -c "
+          import sys, re
+          for line in sys.stdin:
+              m = re.search(r'(\d+\.\d+)% (faster|REGRESSED)', line)
+              if m and float(m.group(1)) >= 20:
+                  print(line.strip())
+          " || true)
+
+          if [ -z "$NOTABLE" ]; then
+            echo "No notable benchmark changes (all within ±20%)"
+            # Delete any previous bench comment to keep the PR clean.
+            PREV=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body | startswith("## ⚡ Benchmark")) | .id' 2>/dev/null | head -1)
+            if [ -n "$PREV" ]; then
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${PREV}"
+            fi
+          else
+            # Build the comment body.
+            {
+              echo "## ⚡ Benchmark Report"
+              echo ""
+              echo "Compared against base branch (\`${BASE_SHA}\`) on the same runner."
+              echo ""
+              echo '```'
+              echo "$NOTABLE"
+              echo '```'
+              echo ""
+              if echo "$NOTABLE" | grep -q "REGRESSED"; then
+                echo "🔴 **Regressions detected** — review before merging."
+              else
+                echo "🟢 **Improvements only** — no regressions."
+              fi
+            } > /tmp/bench-comment.md
+
+            # Upsert: update existing comment or create new one.
+            PREV=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body | startswith("## ⚡ Benchmark")) | .id' 2>/dev/null | head -1)
+            if [ -n "$PREV" ]; then
+              gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${PREV}" \
+                -F body=@/tmp/bench-comment.md
+            else
+              gh pr comment "${PR_NUMBER}" --body-file /tmp/bench-comment.md
+            fi
+          fi
+
+          # Fail the job if the bench run detected a regression.
+          if [ "$BENCH_OUTCOME" = "failure" ]; then
+            echo "::error::Benchmark regression detected"
+            exit 1
+          fi
 
       # ── On push to main: informational only (no regression check) ──
       - name: Checkout
