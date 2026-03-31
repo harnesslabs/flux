@@ -85,17 +85,11 @@ pub const TimeStepper = time_stepper.TimeStepper;
 /// Requires dimension, topological_dimension, entity count accessors, and boundary().
 pub const MeshConcept = concepts.mesh.MeshConcept;
 
-/// Generic leapfrog integrator — wraps any conforming LeapfrogSystem.
+/// Generic leapfrog integrator — composes two symplectic half-steps.
 pub const Leapfrog = integrators.leapfrog.Leapfrog;
 
-/// Comptime concept: validate that a type provides two symplectic half-steps.
-pub const LeapfrogSystem = integrators.leapfrog.LeapfrogSystem;
-
-/// Generic forward Euler integrator — wraps any conforming ExplicitSystem.
+/// Generic forward Euler integrator — single explicit step.
 pub const ForwardEuler = integrators.forward_euler.ForwardEuler;
-
-/// Comptime concept: validate that a type provides a single explicit step.
-pub const ExplicitSystem = integrators.forward_euler.ExplicitSystem;
 
 /// Maxwell leapfrog strategy — satisfies the TimeStepStrategy concept.
 pub const MaxwellLeapfrog = em.MaxwellLeapfrog;

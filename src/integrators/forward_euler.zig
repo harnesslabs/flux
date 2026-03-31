@@ -28,78 +28,22 @@ const testing = std.testing;
 const time_stepper = @import("../time_stepper.zig");
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ExplicitSystem — comptime concept
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Validate that `S` satisfies the ExplicitSystem concept at compile time.
-///
-/// A conforming system must declare:
-///   - `pub const State: type`
-///   - `pub fn forward_step(Allocator, *State, f64) !void`
-///
-/// The `forward_step` computes the RHS and advances the state in one call:
-/// `state += dt * f(state)`. This is intentionally simple — the system owns
-/// both the derivative evaluation and the state update, giving it full control
-/// over intermediate allocations and in-place mutation.
-pub fn ExplicitSystem(comptime S: type) void {
-    // 1. S must declare a State type.
-    if (!@hasDecl(S, "State")) {
-        @compileError("ExplicitSystem requires a 'pub const State: type' declaration — " ++
-            "the simulation state type this system advances");
-    }
-    const State = S.State;
-    if (@TypeOf(State) != type) {
-        @compileError("ExplicitSystem: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
-    }
-
-    // 2. Validate forward_step function signature.
-    if (!@hasDecl(S, "forward_step")) {
-        @compileError("ExplicitSystem requires a 'pub fn forward_step(std.mem.Allocator, *State, f64) !void' " ++
-            "declaration — compute f(state) and advance by dt");
-    }
-
-    const info = @typeInfo(@TypeOf(S.forward_step));
-    if (info != .@"fn") {
-        @compileError("ExplicitSystem: 'forward_step' must be a function");
-    }
-    const fn_info = info.@"fn";
-
-    if (fn_info.params.len != 3) {
-        @compileError("ExplicitSystem: 'forward_step' must take exactly 3 parameters " ++
-            "(std.mem.Allocator, *State, f64)");
-    }
-    if (fn_info.params[0].type != std.mem.Allocator) {
-        @compileError("ExplicitSystem: 'forward_step' parameter 0 must be std.mem.Allocator");
-    }
-    if (fn_info.params[1].type != *State) {
-        @compileError("ExplicitSystem: 'forward_step' parameter 1 must be *State");
-    }
-    if (fn_info.params[2].type != f64) {
-        @compileError("ExplicitSystem: 'forward_step' parameter 2 must be f64 (the timestep dt)");
-    }
-
-    const ret = fn_info.return_type orelse
-        @compileError("ExplicitSystem: 'forward_step' must have a known return type");
-    const ret_info = @typeInfo(ret);
-    if (ret_info != .error_union) {
-        @compileError("ExplicitSystem: 'forward_step' must return !void");
-    }
-    if (ret_info.error_union.payload != void) {
-        @compileError("ExplicitSystem: 'forward_step' must return !void, not !" ++
-            @typeName(ret_info.error_union.payload));
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // ForwardEuler — generic integrator
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Generic forward Euler integrator parameterized on an `ExplicitSystem`.
+/// Generic forward Euler integrator parameterized on a system type.
 ///
-/// Delegates to the system's `forward_step` for a single explicit update.
+/// The system must declare:
+///   - `pub const State: type`
+///   - `pub fn forward_step(Allocator, *State, f64) !void`
+///
+/// `forward_step` computes the RHS and advances the state in one call:
+/// `state += dt * f(state)`. The system owns both derivative evaluation
+/// and state update, giving it full control over intermediate allocations.
+///
 /// The returned type satisfies `TimeStepStrategy`.
 pub fn ForwardEuler(comptime System: type) type {
-    comptime ExplicitSystem(System);
+    comptime validateSystem(System);
 
     return struct {
         /// The simulation state type, forwarded from the system.
@@ -112,8 +56,56 @@ pub fn ForwardEuler(comptime System: type) type {
     };
 }
 
+/// Validate that `S` provides the interface ForwardEuler needs.
+fn validateSystem(comptime S: type) void {
+    if (!@hasDecl(S, "State")) {
+        @compileError("ForwardEuler requires a 'pub const State: type' declaration — " ++
+            "the simulation state type this system advances");
+    }
+    const State = S.State;
+    if (@TypeOf(State) != type) {
+        @compileError("ForwardEuler: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
+    }
+
+    if (!@hasDecl(S, "forward_step")) {
+        @compileError("ForwardEuler requires a 'pub fn forward_step(std.mem.Allocator, *State, f64) !void' " ++
+            "declaration — compute f(state) and advance by dt");
+    }
+
+    const info = @typeInfo(@TypeOf(S.forward_step));
+    if (info != .@"fn") {
+        @compileError("ForwardEuler: 'forward_step' must be a function");
+    }
+    const fn_info = info.@"fn";
+
+    if (fn_info.params.len != 3) {
+        @compileError("ForwardEuler: 'forward_step' must take exactly 3 parameters " ++
+            "(std.mem.Allocator, *State, f64)");
+    }
+    if (fn_info.params[0].type != std.mem.Allocator) {
+        @compileError("ForwardEuler: 'forward_step' parameter 0 must be std.mem.Allocator");
+    }
+    if (fn_info.params[1].type != *State) {
+        @compileError("ForwardEuler: 'forward_step' parameter 1 must be *State");
+    }
+    if (fn_info.params[2].type != f64) {
+        @compileError("ForwardEuler: 'forward_step' parameter 2 must be f64 (the timestep dt)");
+    }
+
+    const ret = fn_info.return_type orelse
+        @compileError("ForwardEuler: 'forward_step' must have a known return type");
+    const ret_info = @typeInfo(ret);
+    if (ret_info != .error_union) {
+        @compileError("ForwardEuler: 'forward_step' must return !void");
+    }
+    if (ret_info.error_union.payload != void) {
+        @compileError("ForwardEuler: 'forward_step' must return !void, not !" ++
+            @typeName(ret_info.error_union.payload));
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Tests — ExplicitSystem concept
+// Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Mock system: exponential decay dy/dt = -y.
@@ -128,11 +120,11 @@ const MockExplicitSystem = struct {
     }
 };
 
-test "ExplicitSystem accepts a conforming type" {
-    comptime ExplicitSystem(MockExplicitSystem);
+test "ForwardEuler accepts a conforming system" {
+    _ = ForwardEuler(MockExplicitSystem);
 }
 
-test "ExplicitSystem accepts a type with extra declarations" {
+test "ForwardEuler accepts a system with extra declarations" {
     const Extended = struct {
         pub const State = struct { x: f64, y: f64 };
         pub fn forward_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
@@ -141,37 +133,35 @@ test "ExplicitSystem accepts a type with extra declarations" {
             state.x += dt * dx;
             state.y += dt * dy;
         }
-        /// Extra — concept should not reject.
+        /// Extra — should not be rejected.
         pub fn norm(state: *const State) f64 {
             return @sqrt(state.x * state.x + state.y * state.y);
         }
     };
-    comptime ExplicitSystem(Extended);
+    _ = ForwardEuler(Extended);
 }
 
 // ── Negative tests (compile-time rejection) ──────────────────────────────
 
-test "ExplicitSystem rejects type missing State" {
+test "ForwardEuler rejects system missing State" {
     const NoState = struct {
         pub fn forward_step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
     };
-    // comptime ExplicitSystem(NoState);
-    // expected: @compileError("ExplicitSystem requires a 'pub const State: type' declaration ...")
+    // comptime _ = ForwardEuler(NoState);
+    // expected: @compileError("ForwardEuler requires a 'pub const State: type' declaration ...")
     _ = NoState;
 }
 
-test "ExplicitSystem rejects type missing forward_step" {
+test "ForwardEuler rejects system missing forward_step" {
     const NoStep = struct {
         pub const State = struct { value: f64 };
     };
-    // comptime ExplicitSystem(NoStep);
-    // expected: @compileError("ExplicitSystem requires a 'pub fn forward_step(...)' ...")
+    // comptime _ = ForwardEuler(NoStep);
+    // expected: @compileError("ForwardEuler requires a 'pub fn forward_step(...)' ...")
     _ = NoStep;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests — ForwardEuler integrator
-// ═══════════════════════════════════════════════════════════════════════════
+// ── Behavioral tests ────────────────────────────────────────────────────
 
 test "ForwardEuler satisfies TimeStepStrategy" {
     const Stepper = ForwardEuler(MockExplicitSystem);
@@ -227,13 +217,13 @@ test "ForwardEuler on zero state is a no-op" {
     try testing.expectApproxEqAbs(0.0, state.value, 1e-15);
 }
 
-test "ForwardEuler and Leapfrog are distinct integrator types" {
-    // This test validates that the interface isn't leapfrog-shaped:
-    // ForwardEuler requires ExplicitSystem (forward_step), not
-    // LeapfrogSystem (first_half_step + second_half_step).
+test "ForwardEuler and Leapfrog accept disjoint system interfaces" {
+    // ForwardEuler requires forward_step; Leapfrog requires
+    // first_half_step + second_half_step. A type satisfying one
+    // should not accidentally satisfy the other.
     const leapfrog = @import("leapfrog.zig");
 
-    // A type that satisfies ExplicitSystem but NOT LeapfrogSystem.
+    // Satisfies ForwardEuler but NOT Leapfrog.
     const ExplicitOnly = struct {
         pub const State = struct { value: f64 };
         pub fn forward_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
@@ -242,12 +232,10 @@ test "ForwardEuler and Leapfrog are distinct integrator types" {
     };
 
     // ForwardEuler accepts it.
-    comptime ExplicitSystem(ExplicitOnly);
-    const EulerStepper = ForwardEuler(ExplicitOnly);
-    comptime time_stepper.TimeStepStrategy(EulerStepper);
+    _ = ForwardEuler(ExplicitOnly);
 
-    // Leapfrog rejects it (no first_half_step / second_half_step).
-    // comptime leapfrog.LeapfrogSystem(ExplicitOnly);
+    // Leapfrog would reject it (no first_half_step / second_half_step).
+    // comptime _ = leapfrog.Leapfrog(ExplicitOnly);
     // expected: @compileError(...)
     _ = leapfrog;
 }

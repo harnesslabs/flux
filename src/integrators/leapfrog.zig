@@ -29,12 +29,12 @@ const testing = std.testing;
 const time_stepper = @import("../time_stepper.zig");
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LeapfrogSystem — comptime concept
+// Leapfrog — generic integrator
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Validate that `S` satisfies the LeapfrogSystem concept at compile time.
+/// Generic leapfrog integrator parameterized on a system type.
 ///
-/// A conforming system must declare:
+/// The system must declare:
 ///   - `pub const State: type`
 ///   - `pub fn first_half_step(Allocator, *State, f64) !void`
 ///   - `pub fn second_half_step(Allocator, *State, f64) !void`
@@ -42,71 +42,14 @@ const time_stepper = @import("../time_stepper.zig");
 /// The two half-steps encode the symplectic splitting: the first advances
 /// the staggered variable (e.g., B in Maxwell), the second advances the
 /// integer-time variable (e.g., E in Maxwell).
-pub fn LeapfrogSystem(comptime S: type) void {
-    // 1. S must declare a State type.
-    if (!@hasDecl(S, "State")) {
-        @compileError("LeapfrogSystem requires a 'pub const State: type' declaration — " ++
-            "the simulation state type this system advances");
-    }
-    const State = S.State;
-    if (@TypeOf(State) != type) {
-        @compileError("LeapfrogSystem: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
-    }
-
-    // 2. Validate both half-step functions.
-    inline for (.{ "first_half_step", "second_half_step" }) |name| {
-        if (!@hasDecl(S, name)) {
-            @compileError("LeapfrogSystem requires a 'pub fn " ++ name ++
-                "(std.mem.Allocator, *State, f64) !void' declaration");
-        }
-
-        const info = @typeInfo(@TypeOf(@field(S, name)));
-        if (info != .@"fn") {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' must be a function");
-        }
-        const fn_info = info.@"fn";
-
-        if (fn_info.params.len != 3) {
-            @compileError("LeapfrogSystem: '" ++ name ++
-                "' must take exactly 3 parameters (std.mem.Allocator, *State, f64)");
-        }
-        if (fn_info.params[0].type != std.mem.Allocator) {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' parameter 0 must be std.mem.Allocator");
-        }
-        if (fn_info.params[1].type != *State) {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' parameter 1 must be *State");
-        }
-        if (fn_info.params[2].type != f64) {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' parameter 2 must be f64 (the timestep dt)");
-        }
-
-        const ret = fn_info.return_type orelse
-            @compileError("LeapfrogSystem: '" ++ name ++ "' must have a known return type");
-        const ret_info = @typeInfo(ret);
-        if (ret_info != .error_union) {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' must return !void");
-        }
-        if (ret_info.error_union.payload != void) {
-            @compileError("LeapfrogSystem: '" ++ name ++ "' must return !void, not !" ++
-                @typeName(ret_info.error_union.payload));
-        }
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Leapfrog — generic integrator
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Generic leapfrog integrator parameterized on a `LeapfrogSystem`.
 ///
-/// Composes two half-steps into a full timestep. The returned type satisfies
-/// `TimeStepStrategy`, so it can be wrapped by `TimeStepper` and used by
-/// simulation runners.
+/// The returned type satisfies `TimeStepStrategy`, so it can be wrapped
+/// by `TimeStepper` and used by simulation runners.
 ///
 /// The integrator does not track timestep counts — that is the caller's
 /// responsibility (typically via a field on State or the runner loop).
 pub fn Leapfrog(comptime System: type) type {
-    comptime LeapfrogSystem(System);
+    comptime validateSystem(System);
 
     return struct {
         /// The simulation state type, forwarded from the system.
@@ -122,11 +65,62 @@ pub fn Leapfrog(comptime System: type) type {
     };
 }
 
+/// Validate that `S` provides the interface Leapfrog needs.
+fn validateSystem(comptime S: type) void {
+    if (!@hasDecl(S, "State")) {
+        @compileError("Leapfrog requires a 'pub const State: type' declaration — " ++
+            "the simulation state type this system advances");
+    }
+    const State = S.State;
+    if (@TypeOf(State) != type) {
+        @compileError("Leapfrog: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
+    }
+
+    inline for (.{ "first_half_step", "second_half_step" }) |name| {
+        if (!@hasDecl(S, name)) {
+            @compileError("Leapfrog requires a 'pub fn " ++ name ++
+                "(std.mem.Allocator, *State, f64) !void' declaration");
+        }
+
+        const info = @typeInfo(@TypeOf(@field(S, name)));
+        if (info != .@"fn") {
+            @compileError("Leapfrog: '" ++ name ++ "' must be a function");
+        }
+        const fn_info = info.@"fn";
+
+        if (fn_info.params.len != 3) {
+            @compileError("Leapfrog: '" ++ name ++
+                "' must take exactly 3 parameters (std.mem.Allocator, *State, f64)");
+        }
+        if (fn_info.params[0].type != std.mem.Allocator) {
+            @compileError("Leapfrog: '" ++ name ++ "' parameter 0 must be std.mem.Allocator");
+        }
+        if (fn_info.params[1].type != *State) {
+            @compileError("Leapfrog: '" ++ name ++ "' parameter 1 must be *State");
+        }
+        if (fn_info.params[2].type != f64) {
+            @compileError("Leapfrog: '" ++ name ++ "' parameter 2 must be f64 (the timestep dt)");
+        }
+
+        const ret = fn_info.return_type orelse
+            @compileError("Leapfrog: '" ++ name ++ "' must have a known return type");
+        const ret_info = @typeInfo(ret);
+        if (ret_info != .error_union) {
+            @compileError("Leapfrog: '" ++ name ++ "' must return !void");
+        }
+        if (ret_info.error_union.payload != void) {
+            @compileError("Leapfrog: '" ++ name ++ "' must return !void, not !" ++
+                @typeName(ret_info.error_union.payload));
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// Tests — LeapfrogSystem concept
+// Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Mock system: two coupled variables advanced by half-steps.
+/// Models a harmonic oscillator: ẍ = -x.
 const MockLeapfrogSystem = struct {
     pub const State = struct {
         position: f64,
@@ -139,17 +133,16 @@ const MockLeapfrogSystem = struct {
     }
 
     /// Second half-step: advance velocity using updated position.
-    /// (Trivial force: a = -position, i.e., harmonic oscillator.)
     pub fn second_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
         state.velocity += dt * (-state.position);
     }
 };
 
-test "LeapfrogSystem accepts a conforming type" {
-    comptime LeapfrogSystem(MockLeapfrogSystem);
+test "Leapfrog accepts a conforming system" {
+    _ = Leapfrog(MockLeapfrogSystem);
 }
 
-test "LeapfrogSystem accepts a type with extra declarations" {
+test "Leapfrog accepts a system with extra declarations" {
     const Extended = struct {
         pub const State = struct { x: f64, v: f64 };
         pub fn first_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
@@ -158,49 +151,47 @@ test "LeapfrogSystem accepts a type with extra declarations" {
         pub fn second_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
             state.v -= dt * state.x;
         }
-        /// Extra — concept should not reject.
+        /// Extra — should not be rejected.
         pub fn energy(state: *const State) f64 {
             return 0.5 * (state.x * state.x + state.v * state.v);
         }
     };
-    comptime LeapfrogSystem(Extended);
+    _ = Leapfrog(Extended);
 }
 
 // ── Negative tests (compile-time rejection) ──────────────────────────────
 
-test "LeapfrogSystem rejects type missing State" {
+test "Leapfrog rejects system missing State" {
     const NoState = struct {
         pub fn first_half_step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
         pub fn second_half_step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
     };
-    // comptime LeapfrogSystem(NoState);
-    // expected: @compileError("LeapfrogSystem requires a 'pub const State: type' declaration ...")
+    // comptime _ = Leapfrog(NoState);
+    // expected: @compileError("Leapfrog requires a 'pub const State: type' declaration ...")
     _ = NoState;
 }
 
-test "LeapfrogSystem rejects type missing first_half_step" {
+test "Leapfrog rejects system missing first_half_step" {
     const NoFirst = struct {
         pub const State = struct { x: f64 };
         pub fn second_half_step(_: std.mem.Allocator, _: *State, _: f64) !void {}
     };
-    // comptime LeapfrogSystem(NoFirst);
-    // expected: @compileError("LeapfrogSystem requires a 'pub fn first_half_step(...)' ...")
+    // comptime _ = Leapfrog(NoFirst);
+    // expected: @compileError("Leapfrog requires a 'pub fn first_half_step(...)' ...")
     _ = NoFirst;
 }
 
-test "LeapfrogSystem rejects type missing second_half_step" {
+test "Leapfrog rejects system missing second_half_step" {
     const NoSecond = struct {
         pub const State = struct { x: f64 };
         pub fn first_half_step(_: std.mem.Allocator, _: *State, _: f64) !void {}
     };
-    // comptime LeapfrogSystem(NoSecond);
-    // expected: @compileError("LeapfrogSystem requires a 'pub fn second_half_step(...)' ...")
+    // comptime _ = Leapfrog(NoSecond);
+    // expected: @compileError("Leapfrog requires a 'pub fn second_half_step(...)' ...")
     _ = NoSecond;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests — Leapfrog integrator
-// ═══════════════════════════════════════════════════════════════════════════
+// ── Behavioral tests ────────────────────────────────────────────────────
 
 test "Leapfrog satisfies TimeStepStrategy" {
     const Stepper = Leapfrog(MockLeapfrogSystem);
