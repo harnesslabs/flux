@@ -135,12 +135,44 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // -- example-maxwell2d step --
+    // Builds and runs the 2D Maxwell electromagnetic example.
+    // This example consumes flux as a library dependency, proving the
+    // package API works end-to-end.
+    const maxwell2d_exe = b.addExecutable(.{
+        .name = "maxwell_2d",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/maxwell_2d/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(maxwell2d_exe);
+    const maxwell2d_run = b.addRunArtifact(maxwell2d_exe);
+    maxwell2d_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        maxwell2d_run.addArgs(args);
+    }
+    const maxwell2d_step = b.step("example-maxwell2d", "Run the 2D Maxwell electromagnetic example");
+    maxwell2d_step.dependOn(&maxwell2d_run.step);
+
+    // Example tests — these are integration tests that verify the physics
+    // module works correctly through the public flux API.
+    const maxwell2d_tests = b.addTest(.{
+        .root_module = maxwell2d_exe.root_module,
+    });
+    const run_maxwell2d_tests = b.addRunArtifact(maxwell2d_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_maxwell2d_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
@@ -203,7 +235,7 @@ pub fn build(b: *std.Build) void {
     // Runs zig fmt --check on all source files. Fails if anything is unformatted.
     const fmt_step = b.step("fmt", "Check source formatting");
     const fmt_cmd = b.addFmt(.{
-        .paths = &.{ "src", "bench", "build.zig" },
+        .paths = &.{ "src", "bench", "examples", "build.zig" },
         .check = true,
     });
     fmt_step.dependOn(&fmt_cmd.step);
@@ -214,5 +246,6 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(b.getInstallStep());
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
+    ci_step.dependOn(&run_maxwell2d_tests.step);
     ci_step.dependOn(&fmt_cmd.step);
 }

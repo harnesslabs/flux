@@ -190,5 +190,5 @@ jobs:
         # zig build already provides type-level correctness; this catches malformed
         # source early in the pipeline without waiting for codegen.
         run: |
-          find src -name '*.zig' -print0 | xargs -0 -n1 zig ast-check
+          find src examples -name '*.zig' -print0 | xargs -0 -n1 zig ast-check
           zig ast-check build.zig
