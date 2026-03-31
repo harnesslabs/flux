@@ -36,6 +36,16 @@ composition. Each operator is an independent, testable unit.
 contracts on user-defined types so alternative mesh implementations (mesh views,
 imported meshes, n-dimensional meshes) are guaranteed compatible with the operator stack.
 
+### integrators
+**Domain label:** `domain/operators` (shares label with spatial operators)
+**Owns:** `src/integrators/`, `src/time_stepper.zig`
+**Dependencies:** none (generic — parameterized on system types at comptime)
+**Description:** Time-stepping patterns: generic leapfrog (symplectic two-step),
+forward Euler (explicit single-step). Each integrator validates its system type
+at comptime and satisfies the `TimeStepStrategy` concept. Concrete physics
+systems (e.g., `MaxwellSystem` in `src/em/`) provide the half-step or derivative
+functions; the integrators compose them into full timesteps.
+
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)
 **Owns:** `src/math/`
@@ -97,6 +107,7 @@ flowchart TD
     forms --> operators
     topology --> io
     forms --> io
+    integrators --> em
     topology --> em
     forms --> em
     operators --> em
