@@ -200,8 +200,9 @@ fn writePvd(
 
     try flux_io.write_pvd(output.writer(allocator), entries);
 
-    const pvd_name = try std.fmt.allocPrint(allocator, "{s}.pvd", .{base_name});
-    defer allocator.free(pvd_name);
+    var pvd_buf: [flux_io.max_snapshot_filename_length]u8 = undefined;
+    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
+        return error.FilenameTooLong;
 
     var dir = try std_fs.cwd().openDir(output_dir, .{});
     defer dir.close();

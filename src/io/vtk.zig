@@ -523,6 +523,26 @@ test "vtu all cell types are triangle (type 5)" {
 // Parsing
 // ───────────────────────────────────────────────────────────────────────────
 
+/// Check whether an XML tag fragment contains `Name="<expected>"`.
+/// Avoids heap allocation by scanning for the prefix and comparing
+/// the name bytes inline.
+fn matchNameAttribute(tag: []const u8, expected: []const u8) bool {
+    const prefix = "Name=\"";
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, tag, pos, prefix)) |attr_start| {
+        const value_start = attr_start + prefix.len;
+        const value_end = value_start + expected.len;
+        if (value_end < tag.len and
+            std.mem.eql(u8, tag[value_start..value_end], expected) and
+            tag[value_end] == '"')
+        {
+            return true;
+        }
+        pos = attr_start + 1;
+    }
+    return false;
+}
+
 /// Parse a named `<DataArray>` from VTK XML and return its f64 values.
 ///
 /// Searches the XML for a `<DataArray ... Name="name" ...>` element and
@@ -538,11 +558,10 @@ pub fn parseDataArray(allocator: std.mem.Allocator, xml: []const u8, name: []con
         const tag_end = std.mem.indexOfPos(u8, xml, tag_start, ">") orelse break;
         const tag = xml[tag_start..tag_end];
 
-        // Check if this tag contains our name
-        const name_attr = try std.fmt.allocPrint(allocator, "Name=\"{s}\"", .{name});
-        defer allocator.free(name_attr);
-
-        if (std.mem.indexOf(u8, tag, name_attr)) |_| {
+        // Check if this tag contains our name — match without allocating.
+        // Look for Name="<name>" by finding the prefix, then comparing
+        // the name bytes directly, then checking for the closing quote.
+        if (matchNameAttribute(tag, name)) {
             const data_start = tag_end + 1;
             const data_end = std.mem.indexOfPos(u8, xml, data_start, "</DataArray>") orelse break;
             const data_block = xml[data_start..data_end];

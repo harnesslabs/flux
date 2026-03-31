@@ -52,6 +52,16 @@ pub fn laplacian(
     var result = try InputType.init(allocator, input.mesh);
     errdefer result.deinit(allocator);
 
+    // Pre-compute workspace size: one allocation for all temporary vectors.
+    // Term 1 (δd, k < n) needs bk1.n_cols elements.
+    // Term 2 (dδ, k > 0) needs 2 × bk.n_cols elements.
+    const bk1_cols = if (k < n) input.mesh.boundary(k + 1).n_cols else 0;
+    const bk_cols = if (k > 0) input.mesh.boundary(k).n_cols else 0;
+    const workspace_len = bk1_cols + 2 * bk_cols;
+
+    const workspace = try allocator.alloc(f64, workspace_len);
+    defer allocator.free(workspace);
+
     // ── Term 1 (δd): ★⁻¹_k · D_kᵀ · ★_{k+1} · D_k · ω ─────────────
     // Exists when k < n, so that d_k is defined.
     if (k < n) {
@@ -65,8 +75,7 @@ pub fn laplacian(
 
         // D_kᵀ · (★_{k+1} d_k ω) — transpose sparse matrix–vector product
         const bk1 = input.mesh.boundary(k + 1);
-        const temp = try allocator.alloc(f64, bk1.n_cols);
-        defer allocator.free(temp);
+        const temp = workspace[0..bk1_cols];
         @memset(temp, 0);
         bk1.transpose_multiply(star_d.values, temp);
 
@@ -83,14 +92,12 @@ pub fn laplacian(
 
         // D_{k-1}ᵀ · (★_k ω) — transpose multiply
         const bk = input.mesh.boundary(k);
-        const temp_km1 = try allocator.alloc(f64, bk.n_cols);
-        defer allocator.free(temp_km1);
+        const temp_km1 = workspace[bk1_cols .. bk1_cols + bk_cols];
         @memset(temp_km1, 0);
         bk.transpose_multiply(star_omega.values, temp_km1);
 
         // ★⁻¹_{k-1} · temp
-        const codiff_vals = try allocator.alloc(f64, bk.n_cols);
-        defer allocator.free(codiff_vals);
+        const codiff_vals = workspace[bk1_cols + bk_cols ..];
         try hodge_star.apply_inverse_raw(allocator, MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
 
         // D_{k-1} · codiff_vals → accumulate into result
