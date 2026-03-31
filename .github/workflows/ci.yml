@@ -55,12 +55,40 @@ jobs:
     name: bench
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
       - uses: mlugg/setup-zig@v2
         with:
           version: "0.15.2"
-      - name: Run benchmarks (regression check)
-        run: zig build bench -- --check
+
+      # ── On PRs: relative comparison (base vs PR on same runner) ──
+      - name: Checkout base branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Benchmark base branch
+        if: github.event_name == 'pull_request'
+        run: |
+          zig build bench -- --update
+          cp bench/baselines.json /tmp/base-baselines.json
+
+      - name: Checkout PR branch
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Benchmark PR branch (vs base)
+        if: github.event_name == 'pull_request'
+        run: |
+          cp /tmp/base-baselines.json bench/baselines.json
+          zig build bench -- --check
+
+      # ── On push to main: informational only (no regression check) ──
+      - name: Checkout
+        if: github.event_name == 'push'
+        uses: actions/checkout@v4
+      - name: Benchmark (informational)
+        if: github.event_name == 'push'
+        run: zig build bench
 
   lint:
     name: lint

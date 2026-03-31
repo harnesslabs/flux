@@ -2,15 +2,15 @@
   "mesh_size": "50x50",
   "iterations": 100,
   "benchmarks": [
-    {"name": "exterior_derivative_d0", "median_ns": 53100},
-    {"name": "exterior_derivative_d1", "median_ns": 65700},
-    {"name": "hodge_star_0", "median_ns": 27700},
-    {"name": "hodge_star_1_whitney", "median_ns": 95200},
-    {"name": "hodge_star_2", "median_ns": 31700},
-    {"name": "hodge_star_inverse_1_cg", "median_ns": 1310000},
-    {"name": "laplacian_0", "median_ns": 168800},
-    {"name": "cochain_add", "median_ns": 1200},
-    {"name": "cochain_scale", "median_ns": 952},
-    {"name": "cochain_inner_product", "median_ns": 2400}
+    {"name": "exterior_derivative_d0", "median_ns": 56315},
+    {"name": "exterior_derivative_d1", "median_ns": 36217},
+    {"name": "hodge_star_0", "median_ns": 20488},
+    {"name": "hodge_star_1_whitney", "median_ns": 64921},
+    {"name": "hodge_star_2", "median_ns": 21781},
+    {"name": "hodge_star_inverse_1_cg", "median_ns": 1301936},
+    {"name": "laplacian_0", "median_ns": 162623},
+    {"name": "cochain_add", "median_ns": 1482},
+    {"name": "cochain_scale", "median_ns": 962},
+    {"name": "cochain_inner_product", "median_ns": 2435}
   ]
 }
