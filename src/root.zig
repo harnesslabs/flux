@@ -60,7 +60,6 @@ pub const operators = struct {
     pub const whitney_mass = @import("operators/whitney_mass.zig");
 };
 pub const topology = @import("topology/mesh.zig");
-pub const em = @import("em/maxwell.zig");
 pub const time_stepper = @import("time_stepper.zig");
 pub const integrators = struct {
     pub const leapfrog = @import("integrators/leapfrog.zig");
@@ -90,42 +89,6 @@ pub const Leapfrog = integrators.leapfrog.Leapfrog;
 
 /// Generic forward Euler integrator — single explicit step.
 pub const ForwardEuler = integrators.forward_euler.ForwardEuler;
-
-/// Maxwell system — defines Faraday/Ampere half-steps for the generic Leapfrog.
-pub const MaxwellSystem = em.MaxwellSystem;
-
-/// Maxwell leapfrog — Leapfrog(MaxwellSystem(...)). Satisfies TimeStepStrategy.
-pub const MaxwellLeapfrog = em.MaxwellLeapfrog;
-
-/// Electromagnetic field state (E, B, J) on a simplicial mesh.
-pub const MaxwellState = em.State;
-
-/// Apply PEC boundary conditions — zero E on all boundary edges.
-pub const apply_pec_boundary = em.apply_pec_boundary;
-
-/// Point dipole current source — sinusoidal J on the nearest edge.
-pub const PointDipole = em.PointDipole;
-
-/// Simulation runner — drives the leapfrog loop with configurable output.
-pub const Runner = em.Runner;
-
-/// Configuration for the simulation runner.
-pub const RunConfig = em.RunConfig;
-
-/// Discrete electromagnetic energy: ½(⟨E, ★₁E⟩ + ⟨B, ★₂B⟩).
-pub const electromagnetic_energy = em.electromagnetic_energy;
-
-/// Project analytical TE₁₀ E field onto mesh edges at time t.
-pub const project_te10_e = em.project_te10_e;
-
-/// Project analytical TE₁₀ B field onto mesh faces at time t.
-pub const project_te10_b = em.project_te10_b;
-
-/// Write E and B fields to a VTK .vtu file (E projected onto faces).
-pub const write_fields = io.write_fields;
-
-/// Project a 1-form (edge values) to per-face averages for VTK export.
-pub const project_edges_to_faces = io.project_edges_to_faces;
 
 // ── Top-level convenience re-exports ────────────────────────────────────
 // These allow `const flux = @import("flux"); flux.Cochain(...)` without
