@@ -135,13 +135,12 @@ pub fn ampere_step(
     defer d_star_B.deinit(allocator);
 
     // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
-    const edge_slice = state.mesh.edges.slice();
-    const lengths = edge_slice.items(.length);
-    const dual_lengths = edge_slice.items(.dual_length);
+    const edge_volumes = state.mesh.simplices(1).items(.volume);
+    const dual_edge_vols = state.mesh.dual_edge_volumes;
 
-    for (state.E.values, d_star_B.values, lengths, dual_lengths, state.J.values) |*e, dsb, len, dual_len, j| {
-        std.debug.assert(dual_len > 0.0);
-        e.* += dt * ((len / dual_len) * dsb - j);
+    for (state.E.values, d_star_B.values, edge_volumes, dual_edge_vols, state.J.values) |*e, dsb, vol, dual_vol, j| {
+        std.debug.assert(dual_vol > 0.0);
+        e.* += dt * ((vol / dual_vol) * dsb - j);
     }
 
     // Comptime type assertion: verify the operator chain types are correct.
@@ -259,9 +258,9 @@ pub fn PointDipole(comptime MeshType: type) type {
         /// Finds the edge whose midpoint is nearest to `position` and
         /// caches its index and length for repeated evaluation.
         pub fn init(mesh: *const MeshType, frequency: f64, amplitude: f64, position: [MeshType.embedding_dimension]f64) Self {
-            const edge_slice = mesh.edges.slice();
-            const edge_verts = edge_slice.items(.vertices);
-            const lengths = edge_slice.items(.length);
+            const simplex_1 = mesh.simplices(1);
+            const edge_verts = simplex_1.items(.vertices);
+            const lengths = simplex_1.items(.volume);
             const coords = mesh.vertices.slice().items(.coords);
 
             var best_edge: u32 = 0;
@@ -737,14 +736,13 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
     defer d_star_B.deinit(allocator);
 
     // ★₁⁻¹(d(★₂B))
-    const edge_slice = mesh.edges.slice();
-    const lengths = edge_slice.items(.length);
-    const dual_lengths = edge_slice.items(.dual_length);
+    const edge_volumes = mesh.simplices(1).items(.volume);
+    const dual_edge_vols = mesh.dual_edge_volumes;
 
     const expected_E = try allocator.alloc(f64, state.E.values.len);
     defer allocator.free(expected_E);
-    for (expected_E, state.E.values, d_star_B.values, lengths, dual_lengths, state.J.values) |*exp, e, dsb, len, dual_len, j| {
-        exp.* = e + dt * ((len / dual_len) * dsb - j);
+    for (expected_E, state.E.values, d_star_B.values, edge_volumes, dual_edge_vols, state.J.values) |*exp, e, dsb, vol, dual_vol, j| {
+        exp.* = e + dt * ((vol / dual_vol) * dsb - j);
     }
 
     try ampere_step(allocator, &state, dt);
@@ -978,7 +976,7 @@ test "PointDipole finds nearest edge to given position" {
     const dipole = Dipole.init(&mesh, 1.0, 1.0, .{ 0.5, 0.0 });
 
     // The selected edge should have its midpoint very close to (0.5, 0).
-    const verts = mesh.edges.slice().items(.vertices)[dipole.edge_index];
+    const verts = mesh.simplices(1).items(.vertices)[dipole.edge_index];
     const coords = mesh.vertices.slice().items(.coords);
     const mx = 0.5 * (coords[verts[0]][0] + coords[verts[1]][0]);
     const my = 0.5 * (coords[verts[0]][1] + coords[verts[1]][1]);
@@ -1291,8 +1289,7 @@ test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
 ///
 /// Each edge value = ∫ E · dl ≈ E(midpoint) · edge_vector.
 pub fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
-    const edge_slice = mesh.edges.slice();
-    const edge_verts = edge_slice.items(.vertices);
+    const edge_verts = mesh.simplices(1).items(.vertices);
     const coords = mesh.vertices.slice().items(.coords);
     const k = std.math.pi / domain_length;
     const omega = k; // c = 1
@@ -1312,9 +1309,9 @@ pub fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length:
 ///
 /// Each face value = ∫∫ B_z dA ≈ B_z(centroid) · area.
 pub fn project_te10_b(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
-    const face_slice = mesh.faces.slice();
-    const face_verts = face_slice.items(.vertices);
-    const face_areas = face_slice.items(.area);
+    const simplex_2 = mesh.simplices(2);
+    const face_verts = simplex_2.items(.vertices);
+    const face_areas = simplex_2.items(.volume);
     const coords = mesh.vertices.slice().items(.coords);
     const k = std.math.pi / domain_length;
     const omega = k;
@@ -1341,7 +1338,7 @@ fn discrete_energy_from_arrays(allocator: std.mem.Allocator, mesh: *const Mesh2D
     }
 
     // ★₂(B): diagonal (1 / area).
-    const face_areas = mesh.faces.slice().items(.area);
+    const face_areas = mesh.simplices(2).items(.volume);
     var b_energy: f64 = 0.0;
     for (b_vals, face_areas) |b, area| {
         b_energy += b * b / area;
@@ -1454,7 +1451,7 @@ test "project_te10_e is zero for vertical edges at x = 0 and x = L" {
 
     // Edges on x = 0: vertices with i = 0.
     // Edges on x = L: vertices with i = nx.
-    const edge_verts = mesh.edges.slice().items(.vertices);
+    const edge_verts = mesh.simplices(1).items(.vertices);
     const coords = mesh.vertices.slice().items(.coords);
     for (values, edge_verts) |val, verts| {
         const x0 = coords[verts[0]][0];
@@ -1479,7 +1476,7 @@ test "project_te10_e has zero contribution from horizontal edges" {
 
     project_te10_e(&mesh, values, 0.25, 1.0);
 
-    const edge_verts = mesh.edges.slice().items(.vertices);
+    const edge_verts = mesh.simplices(1).items(.vertices);
     const coords = mesh.vertices.slice().items(.coords);
     for (values, edge_verts) |val, verts| {
         const dy = coords[verts[1]][1] - coords[verts[0]][1];
@@ -1501,8 +1498,8 @@ test "project_te10_b at t = 0 equals cos(πx/L) · area for each face" {
     defer allocator.free(values);
     project_te10_b(&mesh, values, 0.0, domain_length);
 
-    const face_verts = mesh.faces.slice().items(.vertices);
-    const face_areas = mesh.faces.slice().items(.area);
+    const face_verts = mesh.simplices(2).items(.vertices);
+    const face_areas = mesh.simplices(2).items(.volume);
     const coords = mesh.vertices.slice().items(.coords);
     const k = std.math.pi / domain_length;
 

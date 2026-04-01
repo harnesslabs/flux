@@ -195,10 +195,10 @@ fn applyDiagonal(
     comptime invert: bool,
 ) void {
     switch (primal_degree) {
-        // ★₀: ratio = dual_area[i]
+        // ★₀: ratio = dual_volume[i]
         0 => {
-            const dual_areas = mesh.vertices.slice().items(.dual_area);
-            for (output, input, dual_areas) |*out, in_val, ratio| {
+            const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+            for (output, input, dual_volumes) |*out, in_val, ratio| {
                 if (invert) {
                     std.debug.assert(ratio != 0.0);
                     out.* = in_val / ratio;
@@ -207,15 +207,15 @@ fn applyDiagonal(
                 }
             }
         },
-        // ★₂: ratio = 1 / area[i]
+        // ★₂: ratio = 1 / volume[i] (face area)
         2 => {
-            const areas = mesh.faces.slice().items(.area);
-            for (output, input, areas) |*out, in_val, area| {
+            const face_volumes = mesh.simplices(2).items(.volume);
+            for (output, input, face_volumes) |*out, in_val, vol| {
                 if (invert) {
-                    out.* = area * in_val;
+                    out.* = vol * in_val;
                 } else {
-                    std.debug.assert(area != 0.0);
-                    out.* = in_val / area;
+                    std.debug.assert(vol != 0.0);
+                    out.* = in_val / vol;
                 }
             }
         },
@@ -277,7 +277,7 @@ test "★₀ scales by dual vertex area" {
     var result = try hodge_star(allocator, omega);
     defer result.deinit(allocator);
 
-    const dual_areas = mesh.vertices.slice().items(.dual_area);
+    const dual_areas = mesh.vertices.slice().items(.dual_volume);
     for (result.values, dual_areas) |r, expected| {
         try testing.expectApproxEqAbs(expected, r, 1e-15);
     }
@@ -320,9 +320,9 @@ test "★₂ scales by 1 / face area" {
     var result = try hodge_star(allocator, omega);
     defer result.deinit(allocator);
 
-    const areas = mesh.faces.slice().items(.area);
-    for (result.values, areas) |r, area| {
-        try testing.expectApproxEqAbs(1.0 / area, r, 1e-15);
+    const face_volumes = mesh.simplices(2).items(.volume);
+    for (result.values, face_volumes) |r, vol| {
+        try testing.expectApproxEqAbs(1.0 / vol, r, 1e-15);
     }
 }
 

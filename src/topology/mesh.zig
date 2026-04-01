@@ -15,6 +15,53 @@ const whitney = @import("../operators/whitney_mass.zig");
 pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 
 // ───────────────────────────────────────────────────────────────────────────
+// Comptime simplex storage type
+// ───────────────────────────────────────────────────────────────────────────
+
+/// Build a tuple type whose field `i` is `MultiArrayList(Simplex(i+1))` for
+/// i = 0..dim-1. This lets us store all k-simplex lists (k = 1..dim) in a
+/// single comptime-indexed struct without hardcoded field names.
+fn SimplexListsType(comptime n: usize, comptime dim: usize) type {
+    var fields: [dim]std.builtin.Type.StructField = undefined;
+    for (0..dim) |i| {
+        const k = i + 1;
+        const S = SimplexType(n, dim, k);
+        const MAL = std.MultiArrayList(S);
+        fields[i] = .{
+            .name = std.fmt.comptimePrint("{d}", .{i}),
+            .type = MAL,
+            .default_value_ptr = null,
+            .is_comptime = false,
+            .alignment = @alignOf(MAL),
+        };
+    }
+    return @Type(.{ .@"struct" = .{
+        .layout = .auto,
+        .fields = &fields,
+        .decls = &.{},
+        .is_tuple = true,
+    } });
+}
+
+/// Standalone Simplex type constructor used both by `SimplexListsType` (which
+/// cannot call into the not-yet-defined `Mesh` struct) and by `Mesh.Simplex`.
+fn SimplexType(comptime n: usize, comptime dim: usize, comptime k: usize) type {
+    if (k < 1) @compileError("Simplex(k) requires k ≥ 1; vertices are stored separately");
+    if (k > dim) @compileError(std.fmt.comptimePrint(
+        "Simplex({d}) exceeds topological dimension {d}",
+        .{ k, dim },
+    ));
+    return struct {
+        /// Vertex indices defining this oriented k-simplex.
+        vertices: [k + 1]u32,
+        /// k-dimensional measure (length for k=1, area for k=2, volume for k=3).
+        volume: f64,
+        /// Barycenter (centroid) coordinates.
+        barycenter: [n]f64,
+    };
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Mesh
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -44,54 +91,44 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         /// Topological dimension of the simplicial complex.
         pub const topological_dimension = dim;
 
-        // -- Entity types stored in SoA layout via MultiArrayList --
+        // -- Entity types --
 
+        /// A 0-simplex (vertex) in the mesh. Carries embedding coordinates and
+        /// the volume of its dual cell (Voronoi region).
         pub const Vertex = struct {
             coords: [n]f64,
-            /// Area of the dual cell around this vertex (cotangent-weighted).
-            dual_area: f64,
+            /// Volume of the dual cell (cotangent-weighted).
+            /// For dim=2 this is an area; for dim=3 a volume. The name is
+            /// dimension-agnostic.
+            dual_volume: f64,
         };
 
-        pub const Edge = struct {
-            /// Vertex indices `[tail, head]` defining the edge orientation.
-            vertices: [2]u32,
-            /// Euclidean length of this edge.
-            length: f64,
-            /// Length of the barycentric dual edge.
-            /// For interior edges: distance between barycenters of the two adjacent faces.
-            /// For boundary edges: distance from the adjacent face's barycenter to the edge midpoint.
-            dual_length: f64,
-        };
+        /// A k-simplex (k ≥ 1) in the mesh, defined by k+1 vertex indices.
+        /// Carries its k-dimensional measure ("volume") and barycenter.
+        pub fn Simplex(comptime k: usize) type {
+            return SimplexType(n, dim, k);
+        }
 
-        /// A triangular face with CCW-oriented vertex indices and geometric data.
-        pub const Face = struct {
-            /// Vertex indices `[v0, v1, v2]` in counter-clockwise orientation.
-            vertices: [3]u32,
-            /// Area of this triangle.
-            area: f64,
-            /// Barycenter (centroid) coordinates.
-            barycenter: [n]f64,
-        };
-
-        /// A tetrahedron with oriented vertex indices and geometric data.
-        /// Only available when `dim >= 3`.
-        pub const Tet = struct {
-            /// Vertex indices `[v0, v1, v2, v3]` in positive orientation.
-            vertices: [4]u32,
-            /// Volume of this tetrahedron.
-            volume: f64,
-        };
+        /// Comptime-generated tuple of `MultiArrayList(Simplex(k))` for k = 1..dim.
+        /// Access via `simplices(k)` which returns a SoA slice.
+        const SimplexLists = SimplexListsType(n, dim);
 
         // -- Storage --
 
         vertices: std.MultiArrayList(Vertex),
-        edges: std.MultiArrayList(Edge),
-        faces: std.MultiArrayList(Face),
-        tets: if (dim >= 3) std.MultiArrayList(Tet) else void,
+
+        /// SoA storage for k-simplices (k = 1..dim). Indexed as `simplex_lists[k-1]`.
+        /// Use `simplices(k)` for typed access.
+        simplex_lists: SimplexLists,
 
         /// Boundary operators ∂ₖ for k = 1..dim, stored as `boundaries[k-1]`.
         /// ∂₁: edges → vertices, ∂₂: faces → edges, ∂₃: tets → faces.
         boundaries: [dim]BoundaryMatrix,
+
+        /// Dual cell volumes for each 1-simplex (edge). For dim=2 this is the
+        /// dual edge length; for dim=3 the dual face area. Stored separately
+        /// from Simplex(1) to avoid every simplex carrying dimension-dependent fields.
+        dual_edge_volumes: []f64,
 
         /// Indices of edges on the mesh boundary (adjacent to exactly one face).
         /// Precomputed during construction for use by boundary condition routines.
@@ -103,7 +140,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         whitney_mass_1: sparse.CsrMatrix(f64),
 
         /// Diagonal preconditioner for CG solves with whitney_mass_1.
-        /// Values are the diagonal ★₁ = dual_length / length per edge —
+        /// Values are the diagonal ★₁ = dual_volume / volume per edge —
         /// spectrally equivalent to M₁, giving mesh-independent iteration counts.
         preconditioner_1: []f64,
 
@@ -114,10 +151,11 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             allocator.free(self.preconditioner_1);
             self.whitney_mass_1.deinit(allocator);
             allocator.free(self.boundary_edges);
+            allocator.free(self.dual_edge_volumes);
             self.vertices.deinit(allocator);
-            self.edges.deinit(allocator);
-            self.faces.deinit(allocator);
-            if (dim >= 3) self.tets.deinit(allocator);
+            inline for (0..dim) |i| {
+                self.simplex_lists[i].deinit(allocator);
+            }
             for (&self.boundaries) |*b| b.deinit(allocator);
         }
 
@@ -138,20 +176,28 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             return self.boundaries[k - 1];
         }
 
+        /// SoA slice of k-simplices (k ≥ 1). Returns a `MultiArrayList(Simplex(k)).Slice`
+        /// with fields `.vertices`, `.volume`, `.barycenter`.
+        pub fn simplices(self: *const Self, comptime k: comptime_int) std.MultiArrayList(Simplex(k)).Slice {
+            if (k < 1 or k > dim) {
+                @compileError(std.fmt.comptimePrint(
+                    "no {d}-simplices on a {d}-dimensional mesh (need 1 ≤ k ≤ {d})",
+                    .{ k, dim, dim },
+                ));
+            }
+            return self.simplex_lists[k - 1].slice();
+        }
+
         /// Number of k-simplices in the mesh (generic entity count accessor).
         pub fn num_cells(self: Self, comptime k: comptime_int) u32 {
-            return switch (k) {
-                0 => @intCast(self.vertices.len),
-                1 => @intCast(self.edges.len),
-                2 => @intCast(self.faces.len),
-                3 => if (dim >= 3) @intCast(self.tets.len) else @compileError(
-                    "no 3-cells on a mesh with topological dimension < 3",
-                ),
-                else => @compileError(std.fmt.comptimePrint(
+            if (k == 0) return @intCast(self.vertices.len);
+            if (k < 0 or k > dim) {
+                @compileError(std.fmt.comptimePrint(
                     "no {d}-cells on a {d}-dimensional mesh",
                     .{ k, dim },
-                )),
-            };
+                ));
+            }
+            return @intCast(self.simplex_lists[k - 1].len);
         }
 
         /// Number of vertices in the mesh.
@@ -221,11 +267,11 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             try vertices.ensureTotalCapacity(allocator, vertex_count);
             errdefer vertices.deinit(allocator);
 
-            var edges_list = std.MultiArrayList(Edge){};
+            var edges_list = std.MultiArrayList(Simplex(1)){};
             try edges_list.ensureTotalCapacity(allocator, edge_count);
             errdefer edges_list.deinit(allocator);
 
-            var faces_list = std.MultiArrayList(Face){};
+            var faces_list = std.MultiArrayList(Simplex(2)){};
             try faces_list.ensureTotalCapacity(allocator, face_count);
             errdefer faces_list.deinit(allocator);
 
@@ -238,7 +284,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     var coords: [n]f64 = @splat(0);
                     coords[0] = fi * dx;
                     coords[1] = fj * dy;
-                    vertices.appendAssumeCapacity(.{ .coords = coords, .dual_area = 0 });
+                    vertices.appendAssumeCapacity(.{ .coords = coords, .dual_volume = 0 });
                 }
             }
 
@@ -250,8 +296,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const j: u32 = @intCast(j_u);
                     edges_list.appendAssumeCapacity(.{
                         .vertices = .{ vertex_index(i, j, ny), vertex_index(i + 1, j, ny) },
-                        .length = 0,
-                        .dual_length = 0,
+                        .volume = 0,
+                        .barycenter = @splat(0),
                     });
                 }
             }
@@ -262,8 +308,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const j: u32 = @intCast(j_u);
                     edges_list.appendAssumeCapacity(.{
                         .vertices = .{ vertex_index(i, j, ny), vertex_index(i, j + 1, ny) },
-                        .length = 0,
-                        .dual_length = 0,
+                        .volume = 0,
+                        .barycenter = @splat(0),
                     });
                 }
             }
@@ -274,8 +320,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const j: u32 = @intCast(j_u);
                     edges_list.appendAssumeCapacity(.{
                         .vertices = .{ vertex_index(i, j, ny), vertex_index(i + 1, j + 1, ny) },
-                        .length = 0,
-                        .dual_length = 0,
+                        .volume = 0,
+                        .barycenter = @splat(0),
                     });
                 }
             }
@@ -294,9 +340,9 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const zero_cc: [n]f64 = @splat(0);
 
                     // Lower-right triangle: SW → SE → NE
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .area = 0, .barycenter = zero_cc });
+                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .volume = 0, .barycenter = zero_cc });
                     // Upper-left triangle:  SW → NE → NW
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .area = 0, .barycenter = zero_cc });
+                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .volume = 0, .barycenter = zero_cc });
                 }
             }
 
@@ -366,34 +412,40 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
             const coords = vertices.slice().items(.coords);
 
-            // Edge lengths
+            // Edge lengths and barycenters
             {
-                const edge_verts = edges_list.slice().items(.vertices);
-                const lengths = edges_list.slice().items(.length);
+                const edge_slice = edges_list.slice();
+                const edge_verts = edge_slice.items(.vertices);
+                const edge_volumes = edge_slice.items(.volume);
+                const edge_barycenters = edge_slice.items(.barycenter);
                 for (0..edge_count) |e| {
-                    lengths[e] = euclidean_distance(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
+                    edge_volumes[e] = euclidean_distance(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
+                    edge_barycenters[e] = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
                 }
             }
 
             // Face areas and barycenters
             {
-                const face_verts = faces_list.slice().items(.vertices);
-                const areas = faces_list.slice().items(.area);
-                const barycenters = faces_list.slice().items(.barycenter);
+                const face_slice = faces_list.slice();
+                const face_verts = face_slice.items(.vertices);
+                const face_volumes = face_slice.items(.volume);
+                const face_barycenters = face_slice.items(.barycenter);
                 for (0..face_count) |f| {
                     const p0 = coords[face_verts[f][0]];
                     const p1 = coords[face_verts[f][1]];
                     const p2 = coords[face_verts[f][2]];
-                    areas[f] = triangle_area(p0, p1, p2);
-                    barycenters[f] = triangle_barycenter(p0, p1, p2);
+                    face_volumes[f] = triangle_area(p0, p1, p2);
+                    face_barycenters[f] = triangle_barycenter(p0, p1, p2);
                 }
             }
 
             // -- Compute circumcentric dual geometry --
 
-            // Dual edge lengths require edge→face adjacency.
+            // Dual edge volumes require edge→face adjacency.
             // Each edge borders at most 2 faces; boundary edges border exactly 1.
             // Single scratch allocation: [count | face_0 | face_1], each edge_count u32s.
+            const dual_edge_vols = try allocator.alloc(f64, edge_count);
+            errdefer allocator.free(dual_edge_vols);
             var boundary_edge_buf: []u32 = &.{};
             {
                 const scratch = try allocator.alloc(u32, 3 * edge_count);
@@ -418,20 +470,19 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
                 const barycenters = faces_list.slice().items(.barycenter);
                 const edge_verts = edges_list.slice().items(.vertices);
-                const dual_lengths = edges_list.slice().items(.dual_length);
 
                 // Count boundary edges (adjacent to exactly one face) and
-                // compute dual lengths in one pass.
+                // compute dual edge volumes in one pass.
                 var boundary_count: u32 = 0;
                 for (0..edge_count) |e| {
                     if (edge_face_count[e] == 2) {
-                        dual_lengths[e] = euclidean_distance(
+                        dual_edge_vols[e] = euclidean_distance(
                             barycenters[edge_face_0[e]],
                             barycenters[edge_face_1[e]],
                         );
                     } else if (edge_face_count[e] == 1) {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                        dual_lengths[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
+                        dual_edge_vols[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
                     } else {
                         return flux.Error.NonManifoldEdge;
@@ -450,19 +501,19 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                 std.debug.assert(bi == boundary_count);
             }
 
-            // Dual vertex areas via the cotangent formula.
+            // Dual vertex volumes via the cotangent formula.
             //
             // For triangle (v₀, v₁, v₂) with edge lengths l₀₁, l₁₂, l₂₀:
             //   cot(αᵢ) = (lⱼₖ² + lₖᵢ² − lᵢⱼ²) / (4 · area)
             //
-            //   dual_area[vᵢ] += (cot(αⱼ) · lᵢₖ² + cot(αₖ) · lᵢⱼ²) / 8
+            //   dual_volume[vᵢ] += (cot(αⱼ) · lᵢₖ² + cot(αₖ) · lᵢⱼ²) / 8
             //
             // This gives the circumcentric (Voronoi) dual area contribution.
             // Reference: Meyer et al., "Discrete Differential-Geometry Operators
             // for Triangulated 2-Manifolds" (2002), §4.
             {
-                const dual_areas = vertices.slice().items(.dual_area);
-                @memset(dual_areas, 0);
+                const dual_volumes = vertices.slice().items(.dual_volume);
+                @memset(dual_volumes, 0);
 
                 const face_verts = faces_list.slice().items(.vertices);
                 for (0..face_count) |f| {
@@ -484,9 +535,9 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
                     const cot2 = (l12_sq + l20_sq - l01_sq) / area_4;
 
-                    dual_areas[vs[0]] += (cot1 * l20_sq + cot2 * l01_sq) / 8.0;
-                    dual_areas[vs[1]] += (cot2 * l01_sq + cot0 * l12_sq) / 8.0;
-                    dual_areas[vs[2]] += (cot0 * l12_sq + cot1 * l20_sq) / 8.0;
+                    dual_volumes[vs[0]] += (cot1 * l20_sq + cot2 * l01_sq) / 8.0;
+                    dual_volumes[vs[1]] += (cot2 * l01_sq + cot0 * l12_sq) / 8.0;
+                    dual_volumes[vs[2]] += (cot0 * l12_sq + cot1 * l20_sq) / 8.0;
                 }
             }
 
@@ -500,10 +551,9 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
             var partial = Self{
                 .vertices = vertices,
-                .edges = edges_list,
-                .faces = faces_list,
-                .tets = {}, // void for dim=2
+                .simplex_lists = .{ edges_list, faces_list },
                 .boundaries = .{ boundary_1, boundary_2 },
+                .dual_edge_volumes = dual_edge_vols,
                 .boundary_edges = boundary_edge_buf,
                 .whitney_mass_1 = undefined,
                 .preconditioner_1 = undefined,
@@ -515,11 +565,9 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             const precond = try allocator.alloc(f64, edge_count);
             errdefer allocator.free(precond);
             {
-                const edge_slice = edges_list.slice();
-                const lengths = edge_slice.items(.length);
-                const dual_lengths_slice = edge_slice.items(.dual_length);
-                for (precond, lengths, dual_lengths_slice) |*p, len, dual_len| {
-                    p.* = dual_len / len;
+                const edge_volumes = edges_list.slice().items(.volume);
+                for (precond, edge_volumes, dual_edge_vols) |*p, vol, dual_vol| {
+                    p.* = dual_vol / vol;
                 }
             }
 
@@ -685,7 +733,7 @@ test "edge lengths for unit square 1×1 grid" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    const lengths = mesh.edges.slice().items(.length);
+    const lengths = mesh.simplices(1).items(.volume);
 
     // 1×1 grid: 2 horizontal (len 1), 2 vertical (len 1), 1 diagonal (len √2)
     try testing.expectEqual(@as(u32, 5), mesh.num_edges());
@@ -704,7 +752,7 @@ test "face areas for uniform grid" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    const areas = mesh.faces.slice().items(.area);
+    const areas = mesh.simplices(2).items(.volume);
     const expected_area: f64 = 0.5 * 0.5 / 2.0; // dx * dy / 2
 
     for (0..mesh.num_faces()) |f| {
@@ -717,7 +765,7 @@ test "barycenters of triangles are at centroids" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 2.0, 2.0);
     defer mesh.deinit(allocator);
 
-    const barycenters = mesh.faces.slice().items(.barycenter);
+    const barycenters = mesh.simplices(2).items(.barycenter);
 
     // Single 2×2 cell split by SW→NE diagonal:
     //   lower triangle: (0,0), (2,0), (2,2) → barycenter (4/3, 2/3)
@@ -736,7 +784,7 @@ test "dual vertex areas sum to total mesh area" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 5, 4, width, height);
     defer mesh.deinit(allocator);
 
-    const dual_areas = mesh.vertices.slice().items(.dual_area);
+    const dual_areas = mesh.vertices.slice().items(.dual_volume);
     var total: f64 = 0;
     for (dual_areas) |a| {
         total += a;
@@ -757,7 +805,7 @@ test "interior vertex dual area equals cell area" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
     defer mesh.deinit(allocator);
 
-    const dual_areas = mesh.vertices.slice().items(.dual_area);
+    const dual_areas = mesh.vertices.slice().items(.dual_volume);
 
     // Interior vertices should each have dual area = dx * dy
     for (1..nx) |i| {
@@ -775,7 +823,7 @@ test "all edges have nonzero dual length" {
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    const dual_lengths = mesh.edges.slice().items(.dual_length);
+    const dual_lengths = mesh.dual_edge_volumes;
 
     for (0..mesh.num_edges()) |e| {
         try testing.expect(dual_lengths[e] > 0.0);
@@ -822,25 +870,25 @@ test "random grid dimensions produce valid meshes (100 trials)" {
         try testing.expectEqual(2 * nx * ny, mesh.num_faces());
 
         // All edge lengths are positive.
-        const lengths = mesh.edges.slice().items(.length);
+        const lengths = mesh.simplices(1).items(.volume);
         for (lengths) |l| {
             try testing.expect(l > 0.0);
         }
 
         // All face areas are positive.
-        const areas = mesh.faces.slice().items(.area);
+        const areas = mesh.simplices(2).items(.volume);
         for (areas) |a| {
             try testing.expect(a > 0.0);
         }
 
         // All dual edge lengths are positive (barycentric dual guarantee).
-        const dual_lengths = mesh.edges.slice().items(.dual_length);
+        const dual_lengths = mesh.dual_edge_volumes;
         for (dual_lengths) |dl| {
             try testing.expect(dl > 0.0);
         }
 
         // All dual vertex areas are positive.
-        const dual_areas = mesh.vertices.slice().items(.dual_area);
+        const dual_areas = mesh.vertices.slice().items(.dual_volume);
         for (dual_areas) |da| {
             try testing.expect(da > 0.0);
         }
@@ -901,7 +949,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             var lap_omega = try laplacian_mod.laplacian(allocator, omega);
             defer lap_omega.deinit(allocator);
 
-            const dual_areas = mesh.vertices.slice().items(.dual_area);
+            const dual_areas = mesh.vertices.slice().items(.dual_volume);
             var inner: f64 = 0;
             for (omega.values, lap_omega.values, dual_areas) |w, lw, area| {
                 inner += w * lw * area;
@@ -933,10 +981,10 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
     var vertices = std.MultiArrayList(M.Vertex){};
     try vertices.ensureTotalCapacity(allocator, 4);
     errdefer vertices.deinit(allocator);
-    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 0 }, .dual_area = 0.25 });
-    vertices.appendAssumeCapacity(.{ .coords = .{ 1, 0, 0 }, .dual_area = 0.25 });
-    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 1, 0 }, .dual_area = 0.25 });
-    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 1 }, .dual_area = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 0 }, .dual_volume = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 1, 0, 0 }, .dual_volume = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 1, 0 }, .dual_volume = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 1 }, .dual_volume = 0.25 });
 
     // -- Edges (6) --
     // Lexicographic: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
@@ -945,7 +993,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .{ 1, 2 }, .{ 1, 3 }, .{ 2, 3 },
     };
 
-    var edges = std.MultiArrayList(M.Edge){};
+    var edges = std.MultiArrayList(M.Simplex(1)){};
     try edges.ensureTotalCapacity(allocator, 6);
     errdefer edges.deinit(allocator);
     for (edge_verts) |ev| {
@@ -953,10 +1001,15 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         const p1 = vertices.slice().items(.coords)[ev[1]];
         edges.appendAssumeCapacity(.{
             .vertices = ev,
-            .length = M.euclidean_distance(p0, p1),
-            .dual_length = 0.1, // placeholder
+            .volume = M.euclidean_distance(p0, p1),
+            .barycenter = M.point_midpoint(p0, p1),
         });
     }
+
+    // Dual edge volumes (placeholder for 3D)
+    const dual_edge_vols = try allocator.alloc(f64, 6);
+    errdefer allocator.free(dual_edge_vols);
+    @memset(dual_edge_vols, 0.1);
 
     // -- ∂₁ (6 edges × 4 vertices) --
     // Each edge row: tail = -1, head = +1.
@@ -981,7 +1034,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .{ 0, 1, 2 }, // opposite v3
     };
 
-    var faces = std.MultiArrayList(M.Face){};
+    var faces = std.MultiArrayList(M.Simplex(2)){};
     try faces.ensureTotalCapacity(allocator, 4);
     errdefer faces.deinit(allocator);
     for (face_verts) |fv| {
@@ -990,7 +1043,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         const p2 = vertices.slice().items(.coords)[fv[2]];
         faces.appendAssumeCapacity(.{
             .vertices = fv,
-            .area = M.triangle_area(p0, p1, p2),
+            .volume = M.triangle_area(p0, p1, p2),
             .barycenter = M.triangle_barycenter(p0, p1, p2),
         });
     }
@@ -1061,10 +1114,14 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
     }
 
     // -- Tets (1) --
-    var tets = std.MultiArrayList(M.Tet){};
+    var tets = std.MultiArrayList(M.Simplex(3)){};
     try tets.ensureTotalCapacity(allocator, 1);
     errdefer tets.deinit(allocator);
-    tets.appendAssumeCapacity(.{ .vertices = .{ 0, 1, 2, 3 }, .volume = 1.0 / 6.0 });
+    tets.appendAssumeCapacity(.{
+        .vertices = .{ 0, 1, 2, 3 },
+        .volume = 1.0 / 6.0,
+        .barycenter = .{ 0.25, 0.25, 0.25 },
+    });
 
     // Whitney mass and preconditioner are placeholders for 3D
     // (Whitney 1-form mass on tets is a different formula, tracked by #82).
@@ -1073,10 +1130,9 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
 
     return .{
         .vertices = vertices,
-        .edges = edges,
-        .faces = faces,
-        .tets = tets,
+        .simplex_lists = .{ edges, faces, tets },
         .boundaries = .{ boundary_1, boundary_2, boundary_3 },
+        .dual_edge_volumes = dual_edge_vols,
         .boundary_edges = &.{},
         .whitney_mass_1 = dummy_mass,
         .preconditioner_1 = &.{},

@@ -132,7 +132,7 @@ test "d₀ on linear function f(x,y) = x" {
     defer result.deinit(allocator);
 
     // Verify: (d₀ω)(e) = x(head) − x(tail) for each edge
-    const edge_verts = mesh.edges.slice().items(.vertices);
+    const edge_verts = mesh.simplices(1).items(.vertices);
     for (result.values, edge_verts) |d_val, ev| {
         const expected = coords[ev[1]][0] - coords[ev[0]][0];
         try testing.expectApproxEqAbs(expected, d_val, 1e-14);

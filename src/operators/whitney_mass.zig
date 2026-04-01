@@ -53,8 +53,8 @@ pub fn assemble_whitney_mass_1(
 
     // Pre-fetch SoA slices for vertices, edges, and faces.
     const coords = mesh.vertices.slice().items(.coords);
-    const mesh_edge_verts = mesh.edges.slice().items(.vertices);
-    const face_verts = mesh.faces.slice().items(.vertices);
+    const mesh_edge_verts = mesh.simplices(1).items(.vertices);
+    const face_verts = mesh.simplices(2).items(.vertices);
 
     // For each triangle, compute the local 3×3 Whitney mass matrix and
     // scatter into the global assembler.

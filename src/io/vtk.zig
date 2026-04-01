@@ -98,7 +98,7 @@ pub fn write(
     // Connectivity: vertex indices for each triangle
     try writer.writeAll("        <DataArray type=\"UInt32\" Name=\"connectivity\" format=\"ascii\">\n");
     {
-        const face_verts = mesh.faces.slice().items(.vertices);
+        const face_verts = mesh.simplices(2).items(.vertices);
         for (face_verts) |verts| {
             try writer.print("          {d} {d} {d}\n", .{ verts[0], verts[1], verts[2] });
         }
@@ -474,7 +474,7 @@ test "vtu triangle connectivity matches mesh face vertices" {
     const conn_end = std.mem.indexOfPos(u8, xml, conn_start, "</DataArray>").?;
     const conn_block = xml[conn_start..conn_end];
 
-    const face_verts = mesh.faces.slice().items(.vertices);
+    const face_verts = mesh.simplices(2).items(.vertices);
     var face_idx: usize = 0;
     var line_iter = std.mem.tokenizeScalar(u8, conn_block, '\n');
     while (line_iter.next()) |line| {

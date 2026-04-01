@@ -173,7 +173,7 @@ test "Δ₀ is positive-semidefinite on random 0-forms (1000 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const dual_areas = mesh.vertices.slice().items(.dual_area);
+    const dual_areas = mesh.vertices.slice().items(.dual_volume);
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_00);
 
     for (0..1000) |_| {
@@ -200,7 +200,7 @@ test "Δ₀ is symmetric in ★₀-weighted inner product (1000 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const dual_areas = mesh.vertices.slice().items(.dual_area);
+    const dual_areas = mesh.vertices.slice().items(.dual_volume);
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_01);
 
     for (0..1000) |_| {
@@ -290,9 +290,8 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const edge_slice = mesh.edges.slice();
-    const lengths = edge_slice.items(.length);
-    const dual_lengths = edge_slice.items(.dual_length);
+    const edge_volumes = mesh.simplices(1).items(.volume);
+    const dual_edge_vols = mesh.dual_edge_volumes;
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_10);
 
     for (0..500) |_| {
@@ -305,8 +304,8 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
 
         // ⟨ω, Δ₁ω⟩_★₁ = Σᵢ ωᵢ · (Δ₁ω)ᵢ · (dual_length[i] / length[i])
         var inner: f64 = 0;
-        for (omega.values, lap_omega.values, lengths, dual_lengths) |w, lw, len, dual_len| {
-            inner += w * lw * (dual_len / len);
+        for (omega.values, lap_omega.values, edge_volumes, dual_edge_vols) |w, lw, vol, dual_vol| {
+            inner += w * lw * (dual_vol / vol);
         }
         try testing.expect(inner >= -1e-8);
     }
@@ -383,7 +382,7 @@ test "Δ₂ of constant 2-form: ⟨Δ₂c, c⟩_★₂ ≥ 0" {
     defer result.deinit(allocator);
 
     // ⟨Δ₂c, c⟩_★₂ = Σ_f c_f · (Δ₂c)_f / area_f
-    const areas = mesh.faces.slice().items(.area);
+    const areas = mesh.simplices(2).items(.volume);
     var inner: f64 = 0;
     for (omega.values, result.values, areas) |w, lw, area| {
         inner += w * lw / area;
@@ -398,7 +397,7 @@ test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const areas = mesh.faces.slice().items(.area);
+    const areas = mesh.simplices(2).items(.volume);
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_20);
 
     for (0..500) |_| {
@@ -424,7 +423,7 @@ test "Δ₂ is symmetric in ★₂-weighted inner product (500 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const areas = mesh.faces.slice().items(.area);
+    const areas = mesh.simplices(2).items(.volume);
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_21);
 
     for (0..500) |_| {
