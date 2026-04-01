@@ -104,7 +104,7 @@ pub const Primal = forms.Primal;
 /// Marker: cochain lives on the dual complex.
 pub const Dual = forms.Dual;
 
-/// Simplicial mesh parameterized on topological dimension.
+/// Simplicial mesh parameterized on embedding dimension `n` and topological dimension `dim`.
 pub const Mesh = topology.Mesh;
 
 /// Exterior derivative dₖ: Ωᵏ → Ωᵏ⁺¹. Maps k-cochains to (k+1)-cochains
