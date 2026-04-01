@@ -909,6 +909,243 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Test helpers — minimal 3D mesh construction
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Build a single-tetrahedron Mesh(3, 3) for testing boundary operator properties.
+///
+/// Vertices: (0,0,0), (1,0,0), (0,1,0), (0,0,1)
+/// Edges (6): all pairs of vertices, lexicographically ordered.
+/// Faces (4): boundary faces of the tet, oriented so ∂₂∂₃ = 0 holds.
+/// Tets (1): the single tetrahedron.
+///
+/// Orientation convention for a tet (v₀, v₁, v₂, v₃):
+///   Face i (opposite vᵢ) gets sign (-1)^i in ∂₃.
+///   Face vertices are ordered by skipping vᵢ from the sorted vertex list.
+///   Each face's boundary edges in ∂₂ are oriented consistently with ∂₁.
+fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
+    const M = Mesh(3, 3);
+
+    // -- Vertices --
+    var vertices = std.MultiArrayList(M.Vertex){};
+    try vertices.ensureTotalCapacity(allocator, 4);
+    errdefer vertices.deinit(allocator);
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 0 }, .dual_area = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 1, 0, 0 }, .dual_area = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 1, 0 }, .dual_area = 0.25 });
+    vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 1 }, .dual_area = 0.25 });
+
+    // -- Edges (6) --
+    // Lexicographic: (0,1), (0,2), (0,3), (1,2), (1,3), (2,3)
+    const edge_verts = [6][2]u32{
+        .{ 0, 1 }, .{ 0, 2 }, .{ 0, 3 },
+        .{ 1, 2 }, .{ 1, 3 }, .{ 2, 3 },
+    };
+
+    var edges = std.MultiArrayList(M.Edge){};
+    try edges.ensureTotalCapacity(allocator, 6);
+    errdefer edges.deinit(allocator);
+    for (edge_verts) |ev| {
+        const p0 = vertices.slice().items(.coords)[ev[0]];
+        const p1 = vertices.slice().items(.coords)[ev[1]];
+        edges.appendAssumeCapacity(.{
+            .vertices = ev,
+            .length = M.euclidean_distance(p0, p1),
+            .dual_length = 0.1, // placeholder
+        });
+    }
+
+    // -- ∂₁ (6 edges × 4 vertices) --
+    // Each edge row: tail = -1, head = +1.
+    var boundary_1 = try BoundaryMatrix.init(allocator, 6, 4, 12);
+    errdefer boundary_1.deinit(allocator);
+    for (0..6) |e| {
+        boundary_1.row_ptr[e] = @intCast(2 * e);
+        boundary_1.col_idx[2 * e] = edge_verts[e][0];
+        boundary_1.values[2 * e] = -1;
+        boundary_1.col_idx[2 * e + 1] = edge_verts[e][1];
+        boundary_1.values[2 * e + 1] = 1;
+    }
+    boundary_1.row_ptr[6] = 12;
+
+    // -- Faces (4) --
+    // Face i is opposite vertex i. Vertices of face i (sorted):
+    //   face 0: (1,2,3), face 1: (0,2,3), face 2: (0,1,3), face 3: (0,1,2)
+    const face_verts = [4][3]u32{
+        .{ 1, 2, 3 }, // opposite v0
+        .{ 0, 2, 3 }, // opposite v1
+        .{ 0, 1, 3 }, // opposite v2
+        .{ 0, 1, 2 }, // opposite v3
+    };
+
+    var faces = std.MultiArrayList(M.Face){};
+    try faces.ensureTotalCapacity(allocator, 4);
+    errdefer faces.deinit(allocator);
+    for (face_verts) |fv| {
+        const p0 = vertices.slice().items(.coords)[fv[0]];
+        const p1 = vertices.slice().items(.coords)[fv[1]];
+        const p2 = vertices.slice().items(.coords)[fv[2]];
+        faces.appendAssumeCapacity(.{
+            .vertices = fv,
+            .area = M.triangle_area(p0, p1, p2),
+            .barycenter = M.triangle_barycenter(p0, p1, p2),
+        });
+    }
+
+    // -- ∂₂ (4 faces × 6 edges) --
+    // For each face (a,b,c), the boundary edges are (a,b), (a,c), (b,c)
+    // with signs from the orientation: +ab, -ac, +bc.
+    //
+    // Edge index lookup: edge (i,j) with i<j → index in lexicographic order.
+    const edge_index = struct {
+        fn f(i: u32, j: u32) u32 {
+            // Lexicographic index for edge (i,j) among 4 vertices.
+            // (0,1)=0, (0,2)=1, (0,3)=2, (1,2)=3, (1,3)=4, (2,3)=5
+            std.debug.assert(i < j);
+            return switch (i) {
+                0 => j - 1,
+                1 => j + 1,
+                2 => 5,
+                else => unreachable,
+            };
+        }
+    }.f;
+
+    var boundary_2 = try BoundaryMatrix.init(allocator, 4, 6, 12);
+    errdefer boundary_2.deinit(allocator);
+    for (0..4) |fi| {
+        const fv = face_verts[fi];
+        // Edges of face (a,b,c): (a,b) +1, (a,c) -1, (b,c) +1
+        const e0 = edge_index(fv[0], fv[1]);
+        const e1 = edge_index(fv[0], fv[2]);
+        const e2 = edge_index(fv[1], fv[2]);
+
+        // Store in sorted column order
+        var cols: [3]u32 = .{ e0, e1, e2 };
+        var vals: [3]i8 = .{ 1, -1, 1 };
+
+        // Sort by column index (insertion sort on 3 elements)
+        if (cols[0] > cols[1]) {
+            std.mem.swap(u32, &cols[0], &cols[1]);
+            std.mem.swap(i8, &vals[0], &vals[1]);
+        }
+        if (cols[1] > cols[2]) {
+            std.mem.swap(u32, &cols[1], &cols[2]);
+            std.mem.swap(i8, &vals[1], &vals[2]);
+        }
+        if (cols[0] > cols[1]) {
+            std.mem.swap(u32, &cols[0], &cols[1]);
+            std.mem.swap(i8, &vals[0], &vals[1]);
+        }
+
+        boundary_2.row_ptr[fi] = @intCast(3 * fi);
+        inline for (0..3) |j| {
+            boundary_2.col_idx[3 * fi + j] = cols[j];
+            boundary_2.values[3 * fi + j] = vals[j];
+        }
+    }
+    boundary_2.row_ptr[4] = 12;
+
+    // -- ∂₃ (1 tet × 4 faces) --
+    // Sign for face i in ∂₃: (-1)^i.
+    var boundary_3 = try BoundaryMatrix.init(allocator, 1, 4, 4);
+    errdefer boundary_3.deinit(allocator);
+    boundary_3.row_ptr[0] = 0;
+    boundary_3.row_ptr[1] = 4;
+    for (0..4) |i| {
+        boundary_3.col_idx[i] = @intCast(i);
+        boundary_3.values[i] = if (i % 2 == 0) @as(i8, 1) else @as(i8, -1);
+    }
+
+    // -- Tets (1) --
+    var tets = std.MultiArrayList(M.Tet){};
+    try tets.ensureTotalCapacity(allocator, 1);
+    errdefer tets.deinit(allocator);
+    tets.appendAssumeCapacity(.{ .vertices = .{ 0, 1, 2, 3 }, .volume = 1.0 / 6.0 });
+
+    // Whitney mass and preconditioner are placeholders for 3D
+    // (Whitney 1-form mass on tets is a different formula, tracked by #82).
+    const dummy_mass = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
+    errdefer dummy_mass.deinit(allocator);
+
+    return .{
+        .vertices = vertices,
+        .edges = edges,
+        .faces = faces,
+        .tets = tets,
+        .boundaries = .{ boundary_1, boundary_2, boundary_3 },
+        .boundary_edges = &.{},
+        .whitney_mass_1 = dummy_mass,
+        .preconditioner_1 = &.{},
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 3D mesh tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "single tet entity counts" {
+    const allocator = testing.allocator;
+    var mesh = try build_single_tet(allocator);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 4), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 6), mesh.num_edges());
+    try testing.expectEqual(@as(u32, 4), mesh.num_faces());
+    try testing.expectEqual(@as(u32, 1), mesh.num_tets());
+}
+
+test "∂₁∂₂ = 0 on single tetrahedron" {
+    // For each face, applying ∂₁ to ∂₂(face) must yield zero at every vertex.
+    // This is the boundary-of-boundary identity for edges → faces.
+    const allocator = testing.allocator;
+    var mesh = try build_single_tet(allocator);
+    defer mesh.deinit(allocator);
+
+    var vertex_sum = try allocator.alloc(i32, mesh.num_vertices());
+    defer allocator.free(vertex_sum);
+
+    for (0..mesh.num_faces()) |f| {
+        @memset(vertex_sum, 0);
+        const face_row = mesh.boundary(2).row(@intCast(f));
+        for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
+            const edge_row = mesh.boundary(1).row(edge_idx);
+            for (edge_row.cols, edge_row.vals) |vert_idx, edge_sign| {
+                vertex_sum[vert_idx] += @as(i32, face_sign) * @as(i32, edge_sign);
+            }
+        }
+        for (vertex_sum) |s| {
+            try testing.expectEqual(@as(i32, 0), s);
+        }
+    }
+}
+
+test "∂₂∂₃ = 0 on single tetrahedron" {
+    // For the single tet, applying ∂₂ to ∂₃(tet) must yield zero at every edge.
+    // This is the boundary-of-boundary identity for faces → tets.
+    const allocator = testing.allocator;
+    var mesh = try build_single_tet(allocator);
+    defer mesh.deinit(allocator);
+
+    var edge_sum = try allocator.alloc(i32, mesh.num_edges());
+    defer allocator.free(edge_sum);
+
+    for (0..mesh.num_tets()) |t| {
+        @memset(edge_sum, 0);
+        const tet_row = mesh.boundary(3).row(@intCast(t));
+        for (tet_row.cols, tet_row.vals) |face_idx, tet_sign| {
+            const face_row = mesh.boundary(2).row(face_idx);
+            for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
+                edge_sum[edge_idx] += @as(i32, tet_sign) * @as(i32, face_sign);
+            }
+        }
+        for (edge_sum) |s| {
+            try testing.expectEqual(@as(i32, 0), s);
+        }
+    }
+}
+
 test "uniform_grid 1×1 is the smallest valid grid" {
     // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
     // This test verifies the smallest valid grid constructs successfully.
