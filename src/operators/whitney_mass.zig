@@ -119,7 +119,7 @@ pub fn assemble_whitney_mass_1(
 
         // Map local edges to global edge indices and orientation signs
         // using the boundary operator ∂₂.
-        const boundary_row = mesh.boundary_2.row(@intCast(face_idx));
+        const boundary_row = mesh.boundary(2).row(@intCast(face_idx));
         std.debug.assert(boundary_row.cols.len == 3);
 
         // boundary_2 row stores edges sorted by global index, which does NOT
@@ -197,7 +197,7 @@ fn triangleArea(comptime dim: usize, v0: [dim]f64, v1: [dim]f64, v2: [dim]f64) f
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 
 test "Whitney mass matrix is square with n_edges dimension" {
     const allocator = testing.allocator;

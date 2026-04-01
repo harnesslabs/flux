@@ -118,7 +118,7 @@ pub fn laplacian(
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {

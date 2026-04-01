@@ -84,7 +84,7 @@ pub fn exterior_derivative(
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 const C0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 const C1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
 const C2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);

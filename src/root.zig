@@ -11,10 +11,10 @@
 //! const flux = @import("flux");
 //!
 //! // Build a mesh
-//! var mesh = try flux.Mesh(2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+//! var mesh = try flux.Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
 //!
 //! // Create a 0-cochain (scalar field on vertices)
-//! var omega = try flux.Cochain(flux.Mesh(2), 0, flux.Primal).init(allocator, &mesh);
+//! var omega = try flux.Cochain(flux.Mesh(2, 2), 0, flux.Primal).init(allocator, &mesh);
 //!
 //! // Apply operators with compile-time type safety
 //! var d_omega = try flux.exterior_derivative(allocator, omega);

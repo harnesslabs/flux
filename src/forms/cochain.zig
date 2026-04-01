@@ -32,14 +32,14 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         if (D != Primal and D != Dual) {
             @compileError("Cochain duality parameter must be Primal or Dual");
         }
-        if (!@hasDecl(MeshType, "dimension")) {
-            @compileError("Cochain requires a Mesh type with a 'dimension' declaration");
+        if (!@hasDecl(MeshType, "topological_dimension")) {
+            @compileError("Cochain requires a Mesh type with a 'topological_dimension' declaration");
         }
-        // A k-cochain on an n-dimensional complex has degree 0 ≤ k ≤ n.
-        if (k < 0 or k > MeshType.dimension) {
+        // A k-cochain on a dim-dimensional complex has degree 0 ≤ k ≤ dim.
+        if (k < 0 or k > MeshType.topological_dimension) {
             @compileError(std.fmt.comptimePrint(
                 "Cochain degree k={d} out of range for {d}-dimensional mesh (must be 0 ≤ k ≤ {d})",
-                .{ k, MeshType.dimension, MeshType.dimension },
+                .{ k, MeshType.topological_dimension, MeshType.topological_dimension },
             ));
         }
     }
@@ -146,7 +146,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 
 test "Cochain(Mesh, 0) has one value per vertex" {
     const allocator = testing.allocator;
@@ -223,8 +223,8 @@ test "primal and dual cochains of the same degree are distinct types" {
 }
 
 test "Cochain degree bounded by mesh dimension" {
-    // Mesh(3) supports 0-, 1-, 2-, and 3-cochains.
-    const Mesh3D = topology.Mesh(3);
+    // Mesh(3, 3) supports 0-, 1-, 2-, and 3-cochains.
+    const Mesh3D = topology.Mesh(3, 3);
     const C0 = Cochain(Mesh3D, 0, Primal);
     const C3 = Cochain(Mesh3D, 3, Primal);
     try testing.expectEqual(@as(comptime_int, 0), C0.degree);

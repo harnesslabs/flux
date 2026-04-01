@@ -1,8 +1,9 @@
 //! Simplicial mesh topology and geometry.
 //!
-//! Provides `Mesh(n)`, a 2D triangulation embedded in ℝⁿ with SoA entity
-//! storage, oriented boundary operators ∂₁ and ∂₂ in CSR format, and
-//! circumcentric dual geometry (dual edge lengths, dual vertex areas).
+//! Provides `Mesh(n, dim)`, a simplicial complex of topological dimension `dim`
+//! embedded in ℝⁿ, with SoA entity storage, oriented boundary operators ∂ₖ
+//! for all 1 ≤ k ≤ dim in CSR format, and geometric data (lengths, areas,
+//! dual volumes).
 
 const std = @import("std");
 const testing = std.testing;
@@ -17,21 +18,29 @@ pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 // Mesh
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Simplicial mesh parameterized on embedding dimension `n`.
+/// Simplicial mesh parameterized on embedding dimension `n` and topological
+/// dimension `dim`.
 ///
-/// Represents a 2D triangulation embedded in ℝⁿ. Topological entities
-/// (vertices, edges, faces) use `std.MultiArrayList` for SoA cache-friendly
-/// layout. Boundary operators ∂₁ and ∂₂ are stored in CSR format.
-pub fn Mesh(comptime n: usize) type {
+/// Represents a `dim`-dimensional simplicial complex embedded in ℝⁿ.
+/// Topological entities (vertices, edges, faces, ...) use `std.MultiArrayList`
+/// for SoA cache-friendly layout. Boundary operators ∂ₖ for 1 ≤ k ≤ dim
+/// are stored in CSR format.
+pub fn Mesh(comptime n: usize, comptime dim: usize) type {
     comptime {
-        if (n < 1) @compileError("Mesh dimension must be at least 1");
+        if (n < 1) @compileError("embedding dimension must be at least 1");
+        if (dim < 2) @compileError("topological dimension must be at least 2");
+        if (dim > 3) @compileError("topological dimension > 3 is not yet supported");
+        if (dim > n) @compileError("topological dimension cannot exceed embedding dimension");
     }
 
     return struct {
         const Self = @This();
 
-        /// Embedding dimension.
+        /// Embedding dimension (ℝⁿ).
         pub const dimension = n;
+
+        /// Topological dimension of the simplicial complex.
+        pub const topological_dimension = dim;
 
         // -- Entity types stored in SoA layout via MultiArrayList --
 
@@ -62,16 +71,25 @@ pub fn Mesh(comptime n: usize) type {
             barycenter: [n]f64,
         };
 
+        /// A tetrahedron with oriented vertex indices and geometric data.
+        /// Only available when `dim >= 3`.
+        pub const Tet = struct {
+            /// Vertex indices `[v0, v1, v2, v3]` in positive orientation.
+            vertices: [4]u32,
+            /// Volume of this tetrahedron.
+            volume: f64,
+        };
+
         // -- Storage --
 
         vertices: std.MultiArrayList(Vertex),
         edges: std.MultiArrayList(Edge),
         faces: std.MultiArrayList(Face),
+        tets: if (dim >= 3) std.MultiArrayList(Tet) else void,
 
-        /// ∂₁: `n_edges × n_vertices`. Row `e` has nonzeros at tail (−1) and head (+1).
-        boundary_1: BoundaryMatrix,
-        /// ∂₂: `n_faces × n_edges`. Row `f` has 3 nonzeros for the oriented boundary edges.
-        boundary_2: BoundaryMatrix,
+        /// Boundary operators ∂ₖ for k = 1..dim, stored as `boundaries[k-1]`.
+        /// ∂₁: edges → vertices, ∂₂: faces → edges, ∂₃: tets → faces.
+        boundaries: [dim]BoundaryMatrix,
 
         /// Indices of edges on the mesh boundary (adjacent to exactly one face).
         /// Precomputed during construction for use by boundary condition routines.
@@ -97,44 +115,61 @@ pub fn Mesh(comptime n: usize) type {
             self.vertices.deinit(allocator);
             self.edges.deinit(allocator);
             self.faces.deinit(allocator);
-            self.boundary_1.deinit(allocator);
-            self.boundary_2.deinit(allocator);
+            if (dim >= 3) self.tets.deinit(allocator);
+            for (&self.boundaries) |*b| b.deinit(allocator);
         }
 
         // -- Accessors --
 
-        /// The topological dimension of this mesh (always 2 for now).
-        pub const topological_dimension = 2;
-
-        /// Return the boundary operator ∂ₖ for the given degree.
+        /// Return the boundary operator ∂ₖ for the given degree (1 ≤ k ≤ dim).
         ///
-        /// ∂₁ maps edges → vertices, ∂₂ maps faces → edges. Stored in
-        /// coboundary orientation (rows indexed by higher-dimensional cells),
-        /// so ∂ₖ also serves as the exterior derivative dₖ₋₁.
+        /// ∂₁ maps edges → vertices, ∂₂ maps faces → edges, ∂₃ maps tets → faces.
+        /// Stored in coboundary orientation (rows indexed by higher-dimensional
+        /// cells), so ∂ₖ also serves as the exterior derivative dₖ₋₁.
         pub fn boundary(self: Self, comptime k: comptime_int) BoundaryMatrix {
+            if (k < 1 or k > dim) {
+                @compileError(std.fmt.comptimePrint(
+                    "no boundary operator ∂_{d} on a {d}-dimensional mesh (need 1 ≤ k ≤ {d})",
+                    .{ k, dim, dim },
+                ));
+            }
+            return self.boundaries[k - 1];
+        }
+
+        /// Number of k-simplices in the mesh (generic entity count accessor).
+        pub fn num_cells(self: Self, comptime k: comptime_int) u32 {
             return switch (k) {
-                1 => self.boundary_1,
-                2 => self.boundary_2,
+                0 => @intCast(self.vertices.len),
+                1 => @intCast(self.edges.len),
+                2 => @intCast(self.faces.len),
+                3 => if (dim >= 3) @intCast(self.tets.len) else @compileError(
+                    "no 3-cells on a mesh with topological dimension < 3",
+                ),
                 else => @compileError(std.fmt.comptimePrint(
-                    "no boundary operator ∂_{d} on a {d}-dimensional mesh",
-                    .{ k, topological_dimension },
+                    "no {d}-cells on a {d}-dimensional mesh",
+                    .{ k, dim },
                 )),
             };
         }
 
         /// Number of vertices in the mesh.
         pub fn num_vertices(self: Self) u32 {
-            return @intCast(self.vertices.len);
+            return self.num_cells(0);
         }
 
         /// Number of edges in the mesh.
         pub fn num_edges(self: Self) u32 {
-            return @intCast(self.edges.len);
+            return self.num_cells(1);
         }
 
         /// Number of faces in the mesh.
         pub fn num_faces(self: Self) u32 {
-            return @intCast(self.faces.len);
+            return self.num_cells(2);
+        }
+
+        /// Number of tetrahedra in the mesh (only for dim ≥ 3).
+        pub fn num_tets(self: Self) u32 {
+            return self.num_cells(3);
         }
 
         // ───────────────────────────────────────────────────────────────────
@@ -142,6 +177,9 @@ pub fn Mesh(comptime n: usize) type {
         // ───────────────────────────────────────────────────────────────────
 
         /// Construct a uniform triangulated rectangular grid on `[0, width] × [0, height]`.
+        ///
+        /// Only available for 2D meshes (`dim = 2`). For 3D meshes, use the
+        /// tetrahedral grid constructor (see #81).
         ///
         /// The rectangle is divided into `nx × ny` rectangular cells, each split
         /// by a SW-to-NE diagonal into two CCW-oriented triangles (`2 * nx * ny` total).
@@ -159,6 +197,9 @@ pub fn Mesh(comptime n: usize) type {
             width: f64,
             height: f64,
         ) !Self {
+            comptime {
+                if (dim != 2) @compileError("uniform_grid is only available for 2D meshes (dim = 2)");
+            }
             if (nx == 0 or ny == 0) @panic("grid dimensions must be positive");
             if (!(width > 0) or !(height > 0)) @panic("domain size must be positive");
 
@@ -459,8 +500,8 @@ pub fn Mesh(comptime n: usize) type {
                 .vertices = vertices,
                 .edges = edges_list,
                 .faces = faces_list,
-                .boundary_1 = boundary_1,
-                .boundary_2 = boundary_2,
+                .tets = {}, // void for dim=2
+                .boundaries = .{ boundary_1, boundary_2 },
                 .boundary_edges = boundary_edge_buf,
                 .whitney_mass_1 = undefined,
                 .preconditioner_1 = undefined,
@@ -562,7 +603,7 @@ pub fn Mesh(comptime n: usize) type {
 
 test "uniform grid entity counts" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 3, 4, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 3, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     try testing.expectEqual(@as(u32, 20), mesh.num_vertices()); // (3+1)*(4+1)
@@ -572,11 +613,11 @@ test "uniform grid entity counts" {
 
 test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     for (0..mesh.num_edges()) |e| {
-        const r = mesh.boundary_1.row(@intCast(e));
+        const r = mesh.boundary(1).row(@intCast(e));
         try testing.expectEqual(@as(usize, 2), r.cols.len);
         // tail = −1, head = +1
         try testing.expectEqual(@as(i8, -1), r.vals[0]);
@@ -588,11 +629,11 @@ test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
 
 test "boundary operator ∂₂ has exactly 3 nonzeros per row" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     for (0..mesh.num_faces()) |f| {
-        const r = mesh.boundary_2.row(@intCast(f));
+        const r = mesh.boundary(2).row(@intCast(f));
         try testing.expectEqual(@as(usize, 3), r.cols.len);
         // columns sorted
         try testing.expect(r.cols[0] < r.cols[1]);
@@ -613,7 +654,7 @@ test "boundary of boundary is zero for 2D triangulations" {
     };
 
     for (sizes) |size| {
-        var mesh = try Mesh(2).uniform_grid(allocator, size[0], size[1], 1.0, 1.0);
+        var mesh = try Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 1.0, 1.0);
         defer mesh.deinit(allocator);
 
         var vertex_sum = try allocator.alloc(i32, mesh.num_vertices());
@@ -622,9 +663,9 @@ test "boundary of boundary is zero for 2D triangulations" {
         for (0..mesh.num_faces()) |f| {
             @memset(vertex_sum, 0);
 
-            const face_row = mesh.boundary_2.row(@intCast(f));
+            const face_row = mesh.boundary(2).row(@intCast(f));
             for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
-                const edge_row = mesh.boundary_1.row(edge_idx);
+                const edge_row = mesh.boundary(1).row(edge_idx);
                 for (edge_row.cols, edge_row.vals) |vert_idx, edge_sign| {
                     vertex_sum[vert_idx] += @as(i32, face_sign) * @as(i32, edge_sign);
                 }
@@ -639,7 +680,7 @@ test "boundary of boundary is zero for 2D triangulations" {
 
 test "edge lengths for unit square 1×1 grid" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const lengths = mesh.edges.slice().items(.length);
@@ -658,7 +699,7 @@ test "edge lengths for unit square 1×1 grid" {
 
 test "face areas for uniform grid" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const areas = mesh.faces.slice().items(.area);
@@ -671,7 +712,7 @@ test "face areas for uniform grid" {
 
 test "barycenters of triangles are at centroids" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 2.0, 2.0);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 2.0, 2.0);
     defer mesh.deinit(allocator);
 
     const barycenters = mesh.faces.slice().items(.barycenter);
@@ -690,7 +731,7 @@ test "dual vertex areas sum to total mesh area" {
     const width: f64 = 3.0;
     const height: f64 = 2.0;
 
-    var mesh = try Mesh(2).uniform_grid(allocator, 5, 4, width, height);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 5, 4, width, height);
     defer mesh.deinit(allocator);
 
     const dual_areas = mesh.vertices.slice().items(.dual_area);
@@ -711,7 +752,7 @@ test "interior vertex dual area equals cell area" {
     const dx = width / @as(f64, @floatFromInt(nx));
     const dy = height / @as(f64, @floatFromInt(ny));
 
-    var mesh = try Mesh(2).uniform_grid(allocator, nx, ny, width, height);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
     defer mesh.deinit(allocator);
 
     const dual_areas = mesh.vertices.slice().items(.dual_area);
@@ -719,7 +760,7 @@ test "interior vertex dual area equals cell area" {
     // Interior vertices should each have dual area = dx * dy
     for (1..nx) |i| {
         for (1..ny) |j| {
-            const idx = Mesh(2).vertex_index(@intCast(i), @intCast(j), ny);
+            const idx = Mesh(2, 2).vertex_index(@intCast(i), @intCast(j), ny);
             try testing.expectApproxEqAbs(dx * dy, dual_areas[idx], 1e-13);
         }
     }
@@ -729,7 +770,7 @@ test "all edges have nonzero dual length" {
     // With barycentric dual, every edge (including diagonals) has nonzero
     // dual length because adjacent triangles have distinct barycenters.
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const dual_lengths = mesh.edges.slice().items(.dual_length);
@@ -739,16 +780,22 @@ test "all edges have nonzero dual length" {
     }
 }
 
-test "Mesh(2) compiles at dimension 2" {
-    // Compile-time check: Mesh(2) is a valid type.
-    const M = Mesh(2);
+test "Mesh(2, 2) compiles at dimension 2" {
+    // Compile-time check: Mesh(2, 2) is a valid type.
+    const M = Mesh(2, 2);
     try testing.expect(M.dimension == 2);
 }
 
-test "Mesh(3) compiles at dimension 3" {
-    // Compile-time check: Mesh(3) is a valid type (future-proofing).
-    const M = Mesh(3);
+test "Mesh(3, 2) compiles — surface in ℝ³" {
+    const M = Mesh(3, 2);
     try testing.expect(M.dimension == 3);
+    try testing.expect(M.topological_dimension == 2);
+}
+
+test "Mesh(3, 3) compiles — volume in ℝ³" {
+    const M = Mesh(3, 3);
+    try testing.expect(M.dimension == 3);
+    try testing.expect(M.topological_dimension == 3);
 }
 
 test "random grid dimensions produce valid meshes (100 trials)" {
@@ -765,7 +812,7 @@ test "random grid dimensions produce valid meshes (100 trials)" {
         const width = rng.random().float(f64) * 99.9 + 0.1; // (0.1, 100.0)
         const height = rng.random().float(f64) * 99.9 + 0.1;
 
-        var mesh = try Mesh(2).uniform_grid(allocator, nx, ny, width, height);
+        var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
         // Entity counts match the grid formulas.
@@ -824,10 +871,10 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
         const width = rng.random().float(f64) * 99.9 + 0.1;
         const height = rng.random().float(f64) * 99.9 + 0.1;
 
-        var mesh = try Mesh(2).uniform_grid(allocator, nx, ny, width, height);
+        var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
-        const PrimalC0 = cochain_mod.Cochain(Mesh(2), 0, cochain_mod.Primal);
+        const PrimalC0 = cochain_mod.Cochain(Mesh(2, 2), 0, cochain_mod.Primal);
 
         // Δ₀(constant) = 0.
         {
@@ -866,7 +913,7 @@ test "uniform_grid 1×1 is the smallest valid grid" {
     // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
     // This test verifies the smallest valid grid constructs successfully.
     const allocator = testing.allocator;
-    var mesh = try Mesh(2).uniform_grid(allocator, 1, 1, 0.001, 0.001);
+    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 0.001, 0.001);
     defer mesh.deinit(allocator);
     try testing.expectEqual(@as(u32, 4), mesh.num_vertices());
     try testing.expectEqual(@as(u32, 2), mesh.num_faces());

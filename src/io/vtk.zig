@@ -36,7 +36,8 @@ pub const DataArraySlice = struct {
 pub fn write(
     writer: anytype,
     comptime n: usize,
-    mesh: topology.Mesh(n),
+    comptime dim: usize,
+    mesh: topology.Mesh(n, dim),
     point_data: []const DataArraySlice,
     cell_data: []const DataArraySlice,
 ) !void {
@@ -163,7 +164,8 @@ fn writeDataArray(writer: anytype, name: []const u8, values: []const f64) !void 
 pub fn project_edges_to_faces(
     allocator: std.mem.Allocator,
     comptime n: usize,
-    mesh: topology.Mesh(n),
+    comptime dim: usize,
+    mesh: topology.Mesh(n, dim),
     edge_values: []const f64,
 ) ![]f64 {
     const num_faces = mesh.num_faces();
@@ -201,18 +203,19 @@ pub fn write_fields(
     allocator: std.mem.Allocator,
     writer: anytype,
     comptime n: usize,
-    mesh: topology.Mesh(n),
+    comptime dim: usize,
+    mesh: topology.Mesh(n, dim),
     e_values: []const f64,
     b_values: []const f64,
 ) !void {
-    const e_projected = try project_edges_to_faces(allocator, n, mesh, e_values);
+    const e_projected = try project_edges_to_faces(allocator, n, dim, mesh, e_values);
     defer allocator.free(e_projected);
 
     const cell_data = [_]DataArraySlice{
         .{ .name = "E_intensity", .values = e_projected },
         .{ .name = "B_flux", .values = b_values },
     };
-    try write(writer, n, mesh, &.{}, &cell_data);
+    try write(writer, n, dim, mesh, &.{}, &cell_data);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -281,13 +284,13 @@ pub fn write_pvd(writer: anytype, entries: []const PvdEntry) !void {
 
 test "vtu output contains valid XML structure for minimal mesh" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -310,13 +313,13 @@ test "vtu output contains valid XML structure for minimal mesh" {
 
 test "vtu vertex coordinates round-trip to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 2, 2, 3.0, 5.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 3.0, 5.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
 
     // Parse back all vertex coordinates from the Points DataArray.
     // The coordinates appear between <DataArray ...Float64...NumberOfComponents="3"...>
@@ -355,7 +358,7 @@ test "vtu vertex coordinates round-trip to machine precision" {
 
 test "vtu 0-form PointData round-trips to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Create a 0-form: f(v) = x² + y at each vertex.
@@ -370,7 +373,7 @@ test "vtu 0-form PointData round-trips to machine precision" {
     defer output.deinit(allocator);
 
     const pd = [_]DataArraySlice{.{ .name = "temperature", .values = values }};
-    try write(output.writer(allocator), 2, mesh, &pd, &.{});
+    try write(output.writer(allocator), 2, 2, mesh, &pd, &.{});
 
     const xml = output.items;
 
@@ -390,7 +393,7 @@ test "vtu 0-form PointData round-trips to machine precision" {
 
 test "vtu 2-form CellData round-trips to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Create a 2-form: assign face index as value (distinct values for verification).
@@ -404,7 +407,7 @@ test "vtu 2-form CellData round-trips to machine precision" {
     defer output.deinit(allocator);
 
     const cd = [_]DataArraySlice{.{ .name = "vorticity", .values = values }};
-    try write(output.writer(allocator), 2, mesh, &.{}, &cd);
+    try write(output.writer(allocator), 2, 2, mesh, &.{}, &cd);
 
     const xml = output.items;
 
@@ -424,7 +427,7 @@ test "vtu 2-form CellData round-trips to machine precision" {
 
 test "vtu with both PointData and CellData" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const point_values = try allocator.alloc(f64, mesh.num_vertices());
@@ -444,7 +447,7 @@ test "vtu with both PointData and CellData" {
 
     const pd = [_]DataArraySlice{.{ .name = "pressure", .values = point_values }};
     const cd = [_]DataArraySlice{.{ .name = "flux", .values = cell_values }};
-    try write(output.writer(allocator), 2, mesh, &pd, &cd);
+    try write(output.writer(allocator), 2, 2, mesh, &pd, &cd);
 
     const xml = output.items;
     try testing.expect(std.mem.indexOf(u8, xml, "<PointData>") != null);
@@ -455,13 +458,13 @@ test "vtu with both PointData and CellData" {
 
 test "vtu triangle connectivity matches mesh face vertices" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -493,13 +496,13 @@ test "vtu triangle connectivity matches mesh face vertices" {
 
 test "vtu all cell types are triangle (type 5)" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 3, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -668,7 +671,7 @@ test "pvd entries reference correct timesteps" {
 
 test "project_edges_to_faces averages absolute edge values per face" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Set each edge value to its index for distinct, verifiable values.
@@ -678,7 +681,7 @@ test "project_edges_to_faces averages absolute edge values per face" {
         v.* = @as(f64, @floatFromInt(i)) + 1.0;
     }
 
-    const face_values = try project_edges_to_faces(allocator, 2, mesh, edge_values);
+    const face_values = try project_edges_to_faces(allocator, 2, 2, mesh, edge_values);
     defer allocator.free(face_values);
 
     // Each face should have exactly 3 edges (triangles).
@@ -701,7 +704,7 @@ test "project_edges_to_faces averages absolute edge values per face" {
 
 test "project_edges_to_faces takes absolute values" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // All negative edge values — projection should use absolute values.
@@ -709,7 +712,7 @@ test "project_edges_to_faces takes absolute values" {
     defer allocator.free(edge_values);
     for (edge_values) |*v| v.* = -3.0;
 
-    const face_values = try project_edges_to_faces(allocator, 2, mesh, edge_values);
+    const face_values = try project_edges_to_faces(allocator, 2, 2, mesh, edge_values);
     defer allocator.free(face_values);
 
     for (face_values) |v| {
@@ -719,7 +722,7 @@ test "project_edges_to_faces takes absolute values" {
 
 test "write_fields produces vtu with E_intensity and B_flux CellData" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Create E (1-form, per-edge) and B (2-form, per-face).
@@ -734,7 +737,7 @@ test "write_fields produces vtu with E_intensity and B_flux CellData" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write_fields(allocator, output.writer(allocator), 2, mesh, e_values, b_values);
+    try write_fields(allocator, output.writer(allocator), 2, 2, mesh, e_values, b_values);
 
     const xml = output.items;
 
@@ -768,7 +771,7 @@ test "vtu 0-form PointData round-trips with random data across grid sizes" {
     };
 
     for (sizes) |size| {
-        var mesh = try topology.Mesh(2).uniform_grid(allocator, size[0], size[1], 3.0, 2.0);
+        var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 3.0, 2.0);
         defer mesh.deinit(allocator);
 
         const values = try allocator.alloc(f64, mesh.num_vertices());
@@ -779,7 +782,7 @@ test "vtu 0-form PointData round-trips with random data across grid sizes" {
         defer output.deinit(allocator);
 
         const pd = [_]DataArraySlice{.{ .name = "random_field", .values = values }};
-        try write(output.writer(allocator), 2, mesh, &pd, &.{});
+        try write(output.writer(allocator), 2, 2, mesh, &pd, &.{});
 
         const parsed = try parseDataArray(allocator, output.items, "random_field");
         defer allocator.free(parsed);
@@ -802,7 +805,7 @@ test "vtu 2-form CellData round-trips with random data across grid sizes" {
     };
 
     for (sizes) |size| {
-        var mesh = try topology.Mesh(2).uniform_grid(allocator, size[0], size[1], 2.0, 1.0);
+        var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 2.0, 1.0);
         defer mesh.deinit(allocator);
 
         const values = try allocator.alloc(f64, mesh.num_faces());
@@ -813,7 +816,7 @@ test "vtu 2-form CellData round-trips with random data across grid sizes" {
         defer output.deinit(allocator);
 
         const cd = [_]DataArraySlice{.{ .name = "random_flux", .values = values }};
-        try write(output.writer(allocator), 2, mesh, &.{}, &cd);
+        try write(output.writer(allocator), 2, 2, mesh, &.{}, &cd);
 
         const parsed = try parseDataArray(allocator, output.items, "random_flux");
         defer allocator.free(parsed);

@@ -154,9 +154,9 @@ test "MeshConcept accepts a type with extra declarations" {
     comptime MeshConcept(ExtendedMesh);
 }
 
-test "MeshConcept accepts the real Mesh(2) type" {
+test "MeshConcept accepts the real Mesh(2, 2) type" {
     const topology = @import("../topology/mesh.zig");
-    comptime MeshConcept(topology.Mesh(2));
+    comptime MeshConcept(topology.Mesh(2, 2));
 }
 
 // ── Negative tests (compile-time rejection) ──────────────────────────────

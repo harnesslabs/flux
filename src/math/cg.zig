@@ -280,7 +280,7 @@ test "CG solves Whitney mass matrix system" {
     const whitney = @import("../operators/whitney_mass.zig");
 
     const allocator = testing.allocator;
-    const Mesh2D = topology.Mesh(2);
+    const Mesh2D = topology.Mesh(2, 2);
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 

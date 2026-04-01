@@ -91,7 +91,7 @@ fn chainFrom(
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 const PrimalC1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
 const PrimalC2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);

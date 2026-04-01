@@ -472,6 +472,7 @@ pub fn Runner(comptime MeshType: type) type {
                 allocator,
                 output.writer(allocator),
                 MeshType.dimension,
+                MeshType.topological_dimension,
                 state.mesh.*,
                 state.E.values,
                 state.B.values,
@@ -512,7 +513,7 @@ pub fn Runner(comptime MeshType: type) type {
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 const MaxwellState = State(Mesh2D);
 
 // ── #37: Simulation state — timestep tracking ─────────────────────────
