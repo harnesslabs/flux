@@ -17,11 +17,29 @@ Early development. See [Projects](https://github.com/harnesslabs/flux/projects) 
 Requires Zig 0.15.2+.
 
 ```sh
-zig build           # compile
-zig build test      # run all tests
-zig build run       # run the CLI
-zig build docs      # generate API docs to zig-out/docs/
+zig build                       # compile library + examples
+zig build test --summary all    # run all tests (library + example integration)
+zig build ci --summary all      # all CI checks: build + test + fmt
+zig build docs                  # generate API docs to zig-out/docs/
 ```
+
+---
+
+## Examples
+
+Physics simulations live in `examples/` and consume flux as a library dependency. Each example is a standalone binary that proves the library API works end-to-end.
+
+### 2D Maxwell electromagnetics
+
+Cavity resonance (TE₁₀ standing wave) and point dipole radiation on a triangulated PEC cavity. Demonstrates the full DEC operator stack: exterior derivative, Whitney/Galerkin Hodge star, symplectic leapfrog integration.
+
+```sh
+zig build example-maxwell2d -- --demo cavity --steps 2000   # standing wave
+zig build example-maxwell2d -- --demo dipole --grid 64      # point source
+zig build example-maxwell2d -- --help                       # all options
+```
+
+The example includes 40 integration tests covering Whitney ★₁ convergence (O(h²) verified), TE₁₀ eigenvalue accuracy, energy conservation over hundreds of timesteps, and PEC boundary correctness.
 
 ---
 
@@ -107,8 +125,8 @@ Five jobs run in parallel on every PR:
 | Job | Command |
 |-----|---------|
 | build | `zig build` |
-| test | `zig build test` |
-| fmt | `zig fmt --check src/ build.zig` |
+| test | `zig build test` (library + example integration tests) |
+| fmt | `zig fmt --check src/ examples/ build.zig` |
 | docs | `zig build docs` |
 | lint | `zig ast-check` on all source files |
 

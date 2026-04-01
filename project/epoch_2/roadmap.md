@@ -29,23 +29,23 @@ with bounded CI checks. No physics-specific code remains in `src/`.
 
 Pre-milestone housekeeping (audit findings — must resolve before M1 feature work):
 - [ ] #3 — Add/fix branch protections (priority/high)
-- [ ] #99 — Harden error handling and safety guards across I/O and mesh (type/bug, priority/high)
-- [ ] #100 — Add missing unit and property tests for core infrastructure (type/test, priority/high)
-- [ ] #101 — Eliminate hot-path allocations in I/O and operators (type/perf, priority/high)
-- [ ] #102 — Clean up naming and comment conventions (type/refactor, priority/high)
+- [x] ~~#99 — Harden error handling and safety guards across I/O and mesh~~ (closed)
+- [x] ~~#100 — Add missing unit and property tests for core infrastructure~~ (closed)
+- [x] ~~#101 — Eliminate hot-path allocations in I/O and operators~~ (closed)
+- [x] ~~#102 — Clean up naming and comment conventions~~ (closed)
 - #39 — d₂B = 0 structural assertion → deferred to M2 (meaningful in dim > 2)
 
 Issues (10):
 - [x] ~~#55 — Investigate barycentric dual~~ (closed: investigation complete, fix tracked by #70)
 - [x] ~~#72 — Cochain carries mesh reference~~ (closed: already implemented since epoch 1, PR #51)
-- [ ] #70 — Whitney/Galerkin mass matrix for ★₁ with convergence rate verification
+- [x] ~~#70 — Whitney/Galerkin mass matrix for ★₁ with convergence rate verification~~ (closed)
 - [ ] #58 — Sparse Laplacian assembly as symmetric sparse stiffness matrix
 - [ ] #48 — Compressed incidence values for CsrMatrix — exploit {−1,0,+1} sparsity
-- [ ] #62 — Comptime TimeStepper interface — enforce integrator contract at compile time
-- [ ] #75 — Comptime Operator and Mesh trait interfaces with compile-time contract checking
-- [ ] #76 — Extract pluggable integrator — leapfrog as generic time stepper parameterized on state type
+- [x] ~~#62 — Comptime TimeStepper interface — enforce integrator contract at compile time~~ (closed)
+- [x] ~~#75 — Comptime Operator and Mesh trait interfaces with compile-time contract checking~~ (closed)
+- [x] ~~#76 — Extract pluggable integrator — leapfrog as generic time stepper parameterized on state type~~ (closed)
 - [ ] #77 — SIMD/vectorized batch operations on cochains (add, scale, negate, inner product)
-- [ ] #78 — Benchmark suite with `zig build bench` and bounded CI regression checks
+- [x] ~~#78 — Benchmark suite with `zig build bench` and bounded CI regression checks~~ (closed)
 - [ ] #79 — Refactor `src/em/` → `examples/maxwell_2d/` consuming flux as a Zig package
 
 ### M2: N-Dimensional Operators + Mesh I/O + Linear Solver

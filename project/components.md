@@ -60,20 +60,19 @@ algebra utilities. Foundation layer with no upward dependencies.
 **Description:** VTK export for visualization. Reads mesh and cochain data,
 writes `.vtu` files.
 
-### em
+### examples/maxwell_2d
 **Domain label:** `domain/em`
-**Owns:** `src/em/`
-**Dependencies:** `src/topology/`, `src/forms/`, `src/operators/`, `src/io/`
-**Description:** Electromagnetics simulation — Maxwell leapfrog integrator,
-field initialization, boundary conditions, source terms. Currently a concrete
-application; targeted for extraction to `examples/` when the trait system exists.
+**Owns:** `examples/maxwell_2d/`
+**Dependencies:** flux library (via package import)
+**Description:** 2D electromagnetic simulation — Maxwell leapfrog integrator,
+cavity resonance and dipole radiation demos, convergence tests. Consumes flux
+as a Zig package dependency, proving the library API end-to-end.
 
 ### cli
 **Domain label:** `domain/build`
 **Owns:** `src/main.zig`
-**Dependencies:** `src/em/`, `src/topology/`, `src/io/`
-**Description:** Command-line interface entry point. Parses arguments, runs
-simulations, controls output.
+**Dependencies:** none (minimal stub)
+**Description:** Placeholder CLI entry point. Directs users to examples.
 
 ### library
 **Domain label:** `domain/build`
@@ -107,14 +106,22 @@ flowchart TD
     forms --> operators
     topology --> io
     forms --> io
-    integrators --> em
-    topology --> em
-    forms --> em
-    operators --> em
-    io --> em
-    em --> cli
-    topology --> cli
-    io --> cli
+
+    subgraph "flux library (src/)"
+        math
+        topology
+        forms
+        operators
+        io
+        integrators
+        concepts
+    end
+
+    subgraph "examples/"
+        maxwell_2d
+    end
+
+    flux_library["flux (package)"] --> maxwell_2d
 ```
 
 ## Usage

@@ -26,12 +26,13 @@
 
 const std = @import("std");
 const testing = std.testing;
-const cochain = @import("../forms/cochain.zig");
-const topology = @import("../topology/mesh.zig");
-const sparse = @import("../math/sparse.zig");
-const exterior_derivative = @import("../operators/exterior_derivative.zig");
-const hodge_star = @import("../operators/hodge_star.zig");
-const leapfrog_mod = @import("../integrators/leapfrog.zig");
+const flux = @import("flux");
+const cochain = flux.forms;
+const topology = flux.topology;
+const sparse = flux.math.sparse;
+const exterior_derivative = flux.operators.exterior_derivative;
+const hodge_star = flux.operators.hodge_star;
+const leapfrog_mod = flux.integrators.leapfrog;
 
 /// Electromagnetic field state on a 2D simplicial mesh.
 ///
@@ -349,7 +350,7 @@ pub fn electromagnetic_energy(
 // Simulation runner
 // ═══════════════════════════════════════════════════════════════════════════
 
-const flux_io = @import("../io/vtk.zig");
+const flux_io = flux.io;
 const std_fs = std.fs;
 
 /// Configuration for the simulation runner.
@@ -1582,7 +1583,7 @@ test "convergence: energy drift bounded for TE₁₀ cavity" {
 
 // ── #62: MaxwellLeapfrog — TimeStepper concept conformance ──────────
 
-const time_stepper = @import("../time_stepper.zig");
+const time_stepper = flux.time_stepper;
 
 test "MaxwellLeapfrog satisfies TimeStepStrategy concept" {
     const Leapfrog = MaxwellLeapfrog(Mesh2D);
