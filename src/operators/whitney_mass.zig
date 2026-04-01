@@ -168,21 +168,21 @@ fn barycentricProduct(i: u8, j: u8) f64 {
     return if (i == j) 1.0 / 6.0 else 1.0 / 12.0;
 }
 
-fn vecSub(comptime dim: usize, a: [dim]f64, b: [dim]f64) [dim]f64 {
-    var result: [dim]f64 = undefined;
-    for (0..dim) |i| result[i] = a[i] - b[i];
+fn vecSub(comptime dimension: usize, a: [dimension]f64, b: [dimension]f64) [dimension]f64 {
+    var result: [dimension]f64 = undefined;
+    for (0..dimension) |i| result[i] = a[i] - b[i];
     return result;
 }
 
-fn vecDot(comptime dim: usize, a: [dim]f64, b: [dim]f64) f64 {
+fn vecDot(comptime dimension: usize, a: [dimension]f64, b: [dimension]f64) f64 {
     var sum: f64 = 0;
-    for (0..dim) |i| sum += a[i] * b[i];
+    for (0..dimension) |i| sum += a[i] * b[i];
     return sum;
 }
 
-fn triangleArea(comptime dim: usize, v0: [dim]f64, v1: [dim]f64, v2: [dim]f64) f64 {
+fn triangleArea(comptime dimension: usize, v0: [dimension]f64, v1: [dimension]f64, v2: [dimension]f64) f64 {
     // 2D: A = ½|det([v1−v0, v2−v0])|
-    if (dim == 2) {
+    if (dimension == 2) {
         const dx1 = v1[0] - v0[0];
         const dy1 = v1[1] - v0[1];
         const dx2 = v2[0] - v0[0];

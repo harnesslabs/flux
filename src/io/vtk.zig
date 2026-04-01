@@ -35,9 +35,9 @@ pub const DataArraySlice = struct {
 /// (Kitware, The VTK User's Guide, 11th Edition).
 pub fn write(
     writer: anytype,
-    comptime n: usize,
-    comptime dim: usize,
-    mesh: topology.Mesh(n, dim),
+    comptime embedding_dimension: usize,
+    comptime topological_dimension: usize,
+    mesh: topology.Mesh(embedding_dimension, topological_dimension),
     point_data: []const DataArraySlice,
     cell_data: []const DataArraySlice,
 ) !void {
@@ -80,7 +80,7 @@ pub fn write(
             // Always write 3 components; pad with zeros for dimensions < 3.
             inline for (0..3) |d| {
                 if (d > 0) try writer.writeByte(' ');
-                if (d < n) {
+                if (d < embedding_dimension) {
                     try writer.print("{e}", .{coord[d]});
                 } else {
                     try writer.writeAll("0e0");
@@ -163,9 +163,9 @@ fn writeDataArray(writer: anytype, name: []const u8, values: []const f64) !void 
 /// Uses the ∂₂ boundary matrix (face → edge incidence) to find each face's edges.
 pub fn project_edges_to_faces(
     allocator: std.mem.Allocator,
-    comptime n: usize,
-    comptime dim: usize,
-    mesh: topology.Mesh(n, dim),
+    comptime embedding_dimension: usize,
+    comptime topological_dimension: usize,
+    mesh: topology.Mesh(embedding_dimension, topological_dimension),
     edge_values: []const f64,
 ) ![]f64 {
     const num_faces = mesh.num_faces();
@@ -202,20 +202,20 @@ pub fn project_edges_to_faces(
 pub fn write_fields(
     allocator: std.mem.Allocator,
     writer: anytype,
-    comptime n: usize,
-    comptime dim: usize,
-    mesh: topology.Mesh(n, dim),
+    comptime embedding_dimension: usize,
+    comptime topological_dimension: usize,
+    mesh: topology.Mesh(embedding_dimension, topological_dimension),
     e_values: []const f64,
     b_values: []const f64,
 ) !void {
-    const e_projected = try project_edges_to_faces(allocator, n, dim, mesh, e_values);
+    const e_projected = try project_edges_to_faces(allocator, embedding_dimension, topological_dimension, mesh, e_values);
     defer allocator.free(e_projected);
 
     const cell_data = [_]DataArraySlice{
         .{ .name = "E_intensity", .values = e_projected },
         .{ .name = "B_flux", .values = b_values },
     };
-    try write(writer, n, dim, mesh, &.{}, &cell_data);
+    try write(writer, embedding_dimension, topological_dimension, mesh, &.{}, &cell_data);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -210,12 +210,12 @@ fn applyDiagonal(
         // ★₂: ratio = 1 / volume[i] (face area)
         2 => {
             const face_volumes = mesh.simplices(2).items(.volume);
-            for (output, input, face_volumes) |*out, in_val, vol| {
+            for (output, input, face_volumes) |*out, in_val, volume| {
                 if (invert) {
-                    out.* = vol * in_val;
+                    out.* = volume * in_val;
                 } else {
-                    std.debug.assert(vol != 0.0);
-                    out.* = in_val / vol;
+                    std.debug.assert(volume != 0.0);
+                    out.* = in_val / volume;
                 }
             }
         },
@@ -321,8 +321,8 @@ test "★₂ scales by 1 / face area" {
     defer result.deinit(allocator);
 
     const face_volumes = mesh.simplices(2).items(.volume);
-    for (result.values, face_volumes) |r, vol| {
-        try testing.expectApproxEqAbs(1.0 / vol, r, 1e-15);
+    for (result.values, face_volumes) |r, volume| {
+        try testing.expectApproxEqAbs(1.0 / volume, r, 1e-15);
     }
 }
 

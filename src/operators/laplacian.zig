@@ -291,7 +291,7 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
     defer mesh.deinit(allocator);
 
     const edge_volumes = mesh.simplices(1).items(.volume);
-    const dual_edge_vols = mesh.dual_edge_volumes;
+    const dual_edge_volumes = mesh.dual_edge_volumes;
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_10);
 
     for (0..500) |_| {
@@ -304,8 +304,8 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
 
         // ⟨ω, Δ₁ω⟩_★₁ = Σᵢ ωᵢ · (Δ₁ω)ᵢ · (dual_length[i] / length[i])
         var inner: f64 = 0;
-        for (omega.values, lap_omega.values, edge_volumes, dual_edge_vols) |w, lw, vol, dual_vol| {
-            inner += w * lw * (dual_vol / vol);
+        for (omega.values, lap_omega.values, edge_volumes, dual_edge_volumes) |w, lw, volume, dual_volume| {
+            inner += w * lw * (dual_volume / volume);
         }
         try testing.expect(inner >= -1e-8);
     }

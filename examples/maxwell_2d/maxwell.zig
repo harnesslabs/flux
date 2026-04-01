@@ -136,11 +136,11 @@ pub fn ampere_step(
 
     // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
     const edge_volumes = state.mesh.simplices(1).items(.volume);
-    const dual_edge_vols = state.mesh.dual_edge_volumes;
+    const dual_edge_volumes = state.mesh.dual_edge_volumes;
 
-    for (state.E.values, d_star_B.values, edge_volumes, dual_edge_vols, state.J.values) |*e, dsb, vol, dual_vol, j| {
-        std.debug.assert(dual_vol > 0.0);
-        e.* += dt * ((vol / dual_vol) * dsb - j);
+    for (state.E.values, d_star_B.values, edge_volumes, dual_edge_volumes, state.J.values) |*e, dsb, volume, dual_volume, j| {
+        std.debug.assert(dual_volume > 0.0);
+        e.* += dt * ((volume / dual_volume) * dsb - j);
     }
 
     // Comptime type assertion: verify the operator chain types are correct.
@@ -737,12 +737,12 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
 
     // ★₁⁻¹(d(★₂B))
     const edge_volumes = mesh.simplices(1).items(.volume);
-    const dual_edge_vols = mesh.dual_edge_volumes;
+    const dual_edge_volumes = mesh.dual_edge_volumes;
 
     const expected_E = try allocator.alloc(f64, state.E.values.len);
     defer allocator.free(expected_E);
-    for (expected_E, state.E.values, d_star_B.values, edge_volumes, dual_edge_vols, state.J.values) |*exp, e, dsb, vol, dual_vol, j| {
-        exp.* = e + dt * ((vol / dual_vol) * dsb - j);
+    for (expected_E, state.E.values, d_star_B.values, edge_volumes, dual_edge_volumes, state.J.values) |*exp, e, dsb, volume, dual_volume, j| {
+        exp.* = e + dt * ((volume / dual_volume) * dsb - j);
     }
 
     try ampere_step(allocator, &state, dt);

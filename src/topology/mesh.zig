@@ -444,8 +444,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             // Dual edge volumes require edge→face adjacency.
             // Each edge borders at most 2 faces; boundary edges border exactly 1.
             // Single scratch allocation: [count | face_0 | face_1], each edge_count u32s.
-            const dual_edge_vols = try allocator.alloc(f64, edge_count);
-            errdefer allocator.free(dual_edge_vols);
+            const dual_edge_volumes = try allocator.alloc(f64, edge_count);
+            errdefer allocator.free(dual_edge_volumes);
             var boundary_edge_buf: []u32 = &.{};
             {
                 const scratch = try allocator.alloc(u32, 3 * edge_count);
@@ -476,13 +476,13 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                 var boundary_count: u32 = 0;
                 for (0..edge_count) |e| {
                     if (edge_face_count[e] == 2) {
-                        dual_edge_vols[e] = euclidean_distance(
+                        dual_edge_volumes[e] = euclidean_distance(
                             barycenters[edge_face_0[e]],
                             barycenters[edge_face_1[e]],
                         );
                     } else if (edge_face_count[e] == 1) {
                         const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                        dual_edge_vols[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
+                        dual_edge_volumes[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
                         boundary_count += 1;
                     } else {
                         return flux.Error.NonManifoldEdge;
@@ -553,7 +553,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                 .vertices = vertices,
                 .simplex_lists = .{ edges_list, faces_list },
                 .boundaries = .{ boundary_1, boundary_2 },
-                .dual_edge_volumes = dual_edge_vols,
+                .dual_edge_volumes = dual_edge_volumes,
                 .boundary_edges = boundary_edge_buf,
                 .whitney_mass_1 = undefined,
                 .preconditioner_1 = undefined,
@@ -566,8 +566,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             errdefer allocator.free(precond);
             {
                 const edge_volumes = edges_list.slice().items(.volume);
-                for (precond, edge_volumes, dual_edge_vols) |*p, vol, dual_vol| {
-                    p.* = dual_vol / vol;
+                for (precond, edge_volumes, dual_edge_volumes) |*p, volume, dual_volume| {
+                    p.* = dual_volume / volume;
                 }
             }
 
@@ -1007,9 +1007,9 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
     }
 
     // Dual edge volumes (placeholder for 3D)
-    const dual_edge_vols = try allocator.alloc(f64, 6);
-    errdefer allocator.free(dual_edge_vols);
-    @memset(dual_edge_vols, 0.1);
+    const dual_edge_volumes = try allocator.alloc(f64, 6);
+    errdefer allocator.free(dual_edge_volumes);
+    @memset(dual_edge_volumes, 0.1);
 
     // -- ∂₁ (6 edges × 4 vertices) --
     // Each edge row: tail = -1, head = +1.
@@ -1132,7 +1132,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .vertices = vertices,
         .simplex_lists = .{ edges, faces, tets },
         .boundaries = .{ boundary_1, boundary_2, boundary_3 },
-        .dual_edge_volumes = dual_edge_vols,
+        .dual_edge_volumes = dual_edge_volumes,
         .boundary_edges = &.{},
         .whitney_mass_1 = dummy_mass,
         .preconditioner_1 = &.{},
