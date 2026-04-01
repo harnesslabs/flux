@@ -66,14 +66,14 @@ pub fn assemble_whitney_mass_1(
 
         // Edge vectors opposite to each vertex.
         // e_opp[i] is the edge vector opposite to vertex i of the triangle.
-        const e_opp = [3][MeshType.dimension]f64{
-            vecSub(MeshType.dimension, v2, v1), // opposite v0: v1 → v2
-            vecSub(MeshType.dimension, v0, v2), // opposite v1: v2 → v0
-            vecSub(MeshType.dimension, v1, v0), // opposite v2: v0 → v1
+        const e_opp = [3][MeshType.embedding_dimension]f64{
+            vecSub(MeshType.embedding_dimension, v2, v1), // opposite v0: v1 → v2
+            vecSub(MeshType.embedding_dimension, v0, v2), // opposite v1: v2 → v0
+            vecSub(MeshType.embedding_dimension, v1, v0), // opposite v2: v0 → v1
         };
 
         // Triangle area (2D: half the cross product magnitude).
-        const area = triangleArea(MeshType.dimension, v0, v1, v2);
+        const area = triangleArea(MeshType.embedding_dimension, v0, v1, v2);
         std.debug.assert(area > 0.0);
 
         // Gradient dot product matrix: G[i][j] = ∇λᵢ · ∇λⱼ = (e_opp[i] · e_opp[j]) / (4A²)
@@ -81,7 +81,7 @@ pub fn assemble_whitney_mass_1(
         var grad_dot: [3][3]f64 = undefined;
         for (0..3) |i| {
             for (0..3) |j| {
-                grad_dot[i][j] = vecDot(MeshType.dimension, e_opp[i], e_opp[j]) / four_area_sq;
+                grad_dot[i][j] = vecDot(MeshType.embedding_dimension, e_opp[i], e_opp[j]) / four_area_sq;
             }
         }
 

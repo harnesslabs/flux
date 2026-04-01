@@ -41,8 +41,8 @@ const leapfrog_mod = flux.integrators.leapfrog;
 /// caller must keep it alive for the lifetime of the state.
 pub fn State(comptime MeshType: type) type {
     comptime {
-        if (!@hasDecl(MeshType, "dimension")) {
-            @compileError("Maxwell State requires a Mesh type with a 'dimension' declaration");
+        if (!@hasDecl(MeshType, "embedding_dimension")) {
+            @compileError("Maxwell State requires a Mesh type with an 'embedding_dimension' declaration");
         }
     }
 
@@ -258,7 +258,7 @@ pub fn PointDipole(comptime MeshType: type) type {
         ///
         /// Finds the edge whose midpoint is nearest to `position` and
         /// caches its index and length for repeated evaluation.
-        pub fn init(mesh: *const MeshType, frequency: f64, amplitude: f64, position: [MeshType.dimension]f64) Self {
+        pub fn init(mesh: *const MeshType, frequency: f64, amplitude: f64, position: [MeshType.embedding_dimension]f64) Self {
             const edge_slice = mesh.edges.slice();
             const edge_verts = edge_slice.items(.vertices);
             const lengths = edge_slice.items(.length);
@@ -272,13 +272,13 @@ pub fn PointDipole(comptime MeshType: type) type {
                 const v1 = coords[edge_verts[e][1]];
 
                 // Edge midpoint.
-                var midpoint: [MeshType.dimension]f64 = undefined;
-                inline for (0..MeshType.dimension) |d| {
+                var midpoint: [MeshType.embedding_dimension]f64 = undefined;
+                inline for (0..MeshType.embedding_dimension) |d| {
                     midpoint[d] = 0.5 * (v0[d] + v1[d]);
                 }
 
                 var dist_sq: f64 = 0;
-                inline for (0..MeshType.dimension) |d| {
+                inline for (0..MeshType.embedding_dimension) |d| {
                     const diff = midpoint[d] - position[d];
                     dist_sq += diff * diff;
                 }
@@ -471,7 +471,7 @@ pub fn Runner(comptime MeshType: type) type {
             try flux_io.write_fields(
                 allocator,
                 output.writer(allocator),
-                MeshType.dimension,
+                MeshType.embedding_dimension,
                 MeshType.topological_dimension,
                 state.mesh.*,
                 state.E.values,
@@ -1255,7 +1255,7 @@ test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
         // possible guarantee: dB = 0 is not checked numerically because
         // it is structurally unrepresentable as a nonzero object.
         comptime {
-            std.debug.assert(MaxwellState.TwoForm.degree == Mesh2D.dimension);
+            std.debug.assert(MaxwellState.TwoForm.degree == Mesh2D.embedding_dimension);
         }
 
         // ── Invariant 2: energy is finite ──

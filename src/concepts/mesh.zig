@@ -9,7 +9,7 @@
 //! (e.g., mesh views, imported meshes) without code duplication.
 //!
 //! Conforming types must declare:
-//!   - `pub const dimension: usize`              — embedding dimension
+//!   - `pub const embedding_dimension: usize`              — embedding dimension
 //!   - `pub const topological_dimension: usize`   — mesh dimension (2 for surfaces)
 //!   - `pub fn num_vertices(self) u32`
 //!   - `pub fn num_edges(self) u32`
@@ -26,7 +26,7 @@ const testing = std.testing;
 /// Validate that `M` satisfies the Mesh concept at compile time.
 ///
 /// A conforming mesh type must declare:
-///   - `pub const dimension: usize`             — embedding dimension ℝⁿ
+///   - `pub const embedding_dimension: usize`             — embedding dimension ℝⁿ
 ///   - `pub const topological_dimension: usize`  — intrinsic dimension (2 for surfaces)
 ///   - `pub fn num_vertices(self) u32`
 ///   - `pub fn num_edges(self) u32`
@@ -36,8 +36,8 @@ const testing = std.testing;
 /// Produces a descriptive `@compileError` on violation.
 pub fn MeshConcept(comptime M: type) void {
     // 1. M must declare an embedding dimension.
-    if (!@hasDecl(M, "dimension")) {
-        @compileError("MeshConcept requires a 'pub const dimension' declaration — " ++
+    if (!@hasDecl(M, "embedding_dimension")) {
+        @compileError("MeshConcept requires a 'pub const embedding_dimension' declaration — " ++
             "the embedding dimension (e.g., 2 for ℝ²)");
     }
 
@@ -91,7 +91,7 @@ pub fn MeshConcept(comptime M: type) void {
 
 /// A minimal conforming mock mesh for testing the concept.
 const MockMesh = struct {
-    pub const dimension = 2;
+    pub const embedding_dimension = 2;
     pub const topological_dimension = 2;
 
     vertex_count: u32,
@@ -129,7 +129,7 @@ test "MeshConcept accepts a conforming type" {
 
 test "MeshConcept accepts a type with extra declarations" {
     const ExtendedMesh = struct {
-        pub const dimension = 3;
+        pub const embedding_dimension = 3;
         pub const topological_dimension = 2;
 
         pub fn num_vertices(_: @This()) u32 {
@@ -161,7 +161,7 @@ test "MeshConcept accepts the real Mesh(2, 2) type" {
 
 // ── Negative tests (compile-time rejection) ──────────────────────────────
 
-test "MeshConcept rejects type missing dimension" {
+test "MeshConcept rejects type missing embedding_dimension" {
     const NoDim = struct {
         pub const topological_dimension = 2;
         pub fn num_vertices(_: @This()) u32 {
@@ -186,7 +186,7 @@ test "MeshConcept rejects type missing dimension" {
 
 test "MeshConcept rejects type missing topological_dimension" {
     const NoTopoDim = struct {
-        pub const dimension = 2;
+        pub const embedding_dimension = 2;
         pub fn num_vertices(_: @This()) u32 {
             return 0;
         }
@@ -209,7 +209,7 @@ test "MeshConcept rejects type missing topological_dimension" {
 
 test "MeshConcept rejects type missing num_vertices" {
     const NoVerts = struct {
-        pub const dimension = 2;
+        pub const embedding_dimension = 2;
         pub const topological_dimension = 2;
         pub fn num_edges(_: @This()) u32 {
             return 0;
@@ -230,7 +230,7 @@ test "MeshConcept rejects type missing num_vertices" {
 
 test "MeshConcept rejects type missing num_edges" {
     const NoEdges = struct {
-        pub const dimension = 2;
+        pub const embedding_dimension = 2;
         pub const topological_dimension = 2;
         pub fn num_vertices(_: @This()) u32 {
             return 0;
@@ -251,7 +251,7 @@ test "MeshConcept rejects type missing num_edges" {
 
 test "MeshConcept rejects type missing boundary" {
     const NoBoundary = struct {
-        pub const dimension = 2;
+        pub const embedding_dimension = 2;
         pub const topological_dimension = 2;
         pub fn num_vertices(_: @This()) u32 {
             return 0;

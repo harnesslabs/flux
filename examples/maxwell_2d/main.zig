@@ -176,7 +176,7 @@ fn writeSnapshot(
     try flux_io.write_fields(
         allocator,
         output.writer(allocator),
-        Mesh2D.dimension,
+        Mesh2D.embedding_dimension,
         Mesh2D.topological_dimension,
         state.mesh.*,
         state.E.values,

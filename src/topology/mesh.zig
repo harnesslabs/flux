@@ -1,9 +1,9 @@
 //! Simplicial mesh topology and geometry.
 //!
-//! Provides `Mesh(n, dim)`, a simplicial complex of topological dimension `dim`
-//! embedded in ℝⁿ, with SoA entity storage, oriented boundary operators ∂ₖ
-//! for all 1 ≤ k ≤ dim in CSR format, and geometric data (lengths, areas,
-//! dual volumes).
+//! Provides `Mesh(embedding_dimension, topological_dimension)`, a simplicial
+//! complex with SoA entity storage, oriented boundary operators ∂ₖ for all
+//! 1 ≤ k ≤ topological_dimension in CSR format, and geometric data (lengths,
+//! areas, dual volumes).
 
 const std = @import("std");
 const testing = std.testing;
@@ -18,13 +18,15 @@ pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 // Mesh
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Simplicial mesh parameterized on embedding dimension `n` and topological
-/// dimension `dim`.
+/// Simplicial mesh parameterized on embedding and topological dimension.
 ///
-/// Represents a `dim`-dimensional simplicial complex embedded in ℝⁿ.
+/// `embedding_dimension`: the ambient space ℝⁿ that vertices live in.
+/// `topological_dimension`: the intrinsic dimension of the simplicial complex
+/// (2 for triangulated surfaces, 3 for tetrahedral volumes).
+///
 /// Topological entities (vertices, edges, faces, ...) use `std.MultiArrayList`
-/// for SoA cache-friendly layout. Boundary operators ∂ₖ for 1 ≤ k ≤ dim
-/// are stored in CSR format.
+/// for SoA cache-friendly layout. Boundary operators ∂ₖ for
+/// 1 ≤ k ≤ topological_dimension are stored in CSR format.
 pub fn Mesh(comptime n: usize, comptime dim: usize) type {
     comptime {
         if (n < 1) @compileError("embedding dimension must be at least 1");
@@ -36,8 +38,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
     return struct {
         const Self = @This();
 
-        /// Embedding dimension (ℝⁿ).
-        pub const dimension = n;
+        /// Embedding dimension — the ambient space ℝⁿ.
+        pub const embedding_dimension = n;
 
         /// Topological dimension of the simplicial complex.
         pub const topological_dimension = dim;
@@ -783,18 +785,18 @@ test "all edges have nonzero dual length" {
 test "Mesh(2, 2) compiles at dimension 2" {
     // Compile-time check: Mesh(2, 2) is a valid type.
     const M = Mesh(2, 2);
-    try testing.expect(M.dimension == 2);
+    try testing.expect(M.embedding_dimension == 2);
 }
 
 test "Mesh(3, 2) compiles — surface in ℝ³" {
     const M = Mesh(3, 2);
-    try testing.expect(M.dimension == 3);
+    try testing.expect(M.embedding_dimension == 3);
     try testing.expect(M.topological_dimension == 2);
 }
 
 test "Mesh(3, 3) compiles — volume in ℝ³" {
     const M = Mesh(3, 3);
-    try testing.expect(M.dimension == 3);
+    try testing.expect(M.embedding_dimension == 3);
     try testing.expect(M.topological_dimension == 3);
 }
 
