@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Style"
+  short_description: "Audit naming, hygiene, and structural consistency"
+  default_prompt: "Audit this codebase for style and hygiene issues, focusing on naming, duplication, stale comments, dead code, formatting, and structural consistency."

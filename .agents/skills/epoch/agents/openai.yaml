@@ -1,0 +1,4 @@
+interface:
+  display_name: "Epoch"
+  short_description: "Plan the next epoch against vision, history, and live repo state"
+  default_prompt: "Plan the next project epoch by grounding in the vision, prior epoch documents, horizons, code structure, and current GitHub state."

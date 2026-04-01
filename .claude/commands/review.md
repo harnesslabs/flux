@@ -1,3 +1,8 @@
+---
+name: review
+description: Review a pull request with emphasis on implementation details, mathematical correctness, type safety, invariants, and scope discipline.
+---
+
 Review a PR for the flux project with mathematical and code correctness scrutiny.
 
 Usage: /review <PR number>

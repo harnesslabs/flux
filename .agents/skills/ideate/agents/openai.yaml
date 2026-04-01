@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ideate"
+  short_description: "Pressure-test raw ideas against the project vision"
+  default_prompt: "Explore raw project ideas, classify them, and pressure-test them against the vision, roadmap, decision log, and current architecture."

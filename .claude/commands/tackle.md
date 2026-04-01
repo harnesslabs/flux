@@ -1,3 +1,8 @@
+---
+name: tackle
+description: Select the highest-priority unblocked issue for the current milestone, work it to a reviewable PR, and stop for review.
+---
+
 Find and work the highest-priority open issue to completion — one issue, one branch, one PR, CI passes, stop for review.
 
 ## Find the issue

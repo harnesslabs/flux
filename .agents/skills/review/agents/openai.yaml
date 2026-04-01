@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review"
+  short_description: "Review a PR for implementation and mathematical correctness"
+  default_prompt: "Review the target pull request with emphasis on implementation details, mathematical correctness, type safety, invariants, and scope discipline."

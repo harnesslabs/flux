@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Tests"
+  short_description: "Audit test coverage, quality, and redundancy"
+  default_prompt: "Audit this codebase's tests for coverage gaps, weak property tests, redundant checks, missing edge cases, and opportunities to promote checks to comptime."

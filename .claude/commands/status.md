@@ -1,3 +1,8 @@
+---
+name: status
+description: Summarize the current epoch, milestone, open work, blockers, and acceptance-criterion status from docs, GitHub state, and tests.
+---
+
 Check the current epoch and milestone status for the flux project.
 
 ## Steps

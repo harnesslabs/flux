@@ -1,0 +1,4 @@
+interface:
+  display_name: "Milestone"
+  short_description: "Plan and create a milestone with well-sized issues"
+  default_prompt: "Plan a project milestone with a concrete acceptance criterion and a set of well-scoped capability-level issues aligned to the roadmap."
