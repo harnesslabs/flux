@@ -189,8 +189,8 @@ fn triangleArea(comptime dimension: usize, v0: [dimension]f64, v1: [dimension]f6
         const dy2 = v2[1] - v0[1];
         return @abs(dx1 * dy2 - dy1 * dx2) / 2.0;
     }
-    // General dim: A = ½||(v1−v0) × (v2−v0)||
-    @compileError("triangleArea not yet implemented for dim > 2");
+    // General topological_dimension: A = ½||(v1−v0) × (v2−v0)||
+    @compileError("triangleArea not yet implemented for topological_dimension > 2");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

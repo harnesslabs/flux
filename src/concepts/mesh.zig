@@ -4,7 +4,8 @@
 //! DEC operators need to function: entity counts, boundary operators, and
 //! topological/embedding dimension metadata.
 //!
-//! This decouples operators from the concrete `topology.Mesh(n)` type,
+//! This decouples operators from the concrete
+//! `topology.Mesh(embedding_dimension, topological_dimension)` type,
 //! enabling dimension-generic operators and alternative mesh implementations
 //! (e.g., mesh views, imported meshes) without code duplication.
 //!

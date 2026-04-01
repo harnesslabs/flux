@@ -47,7 +47,7 @@ pub fn exterior_derivative(
 ) !ExteriorDerivativeResult(@TypeOf(input)) {
     const InputType = @TypeOf(input);
     const k = InputType.degree;
-    const n = InputType.MeshT.topological_dimension;
+    const topological_dimension = InputType.MeshT.topological_dimension;
     const OutputType = ExteriorDerivativeResult(InputType);
 
     var output = try OutputType.init(allocator, input.mesh);
@@ -71,7 +71,7 @@ pub fn exterior_derivative(
         // Dual k-form lives on primal (n−k)-cells; the transpose maps
         // (n−k)-cell values to (n−k−1)-cell values = primal cells for
         // the dual (k+1)-form.
-        const boundary = input.mesh.boundary(n - k);
+        const boundary = input.mesh.boundary(topological_dimension - k);
         std.debug.assert(input.values.len == boundary.n_rows);
 
         boundary.transpose_multiply(input.values, output.values);
@@ -198,7 +198,7 @@ test "dd = 0 for random 0-forms on triangular mesh (1000 trials)" {
 
 test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
     // Property test: for a 2D mesh, d₁ maps 1-forms to 2-forms.
-    // There is no d₂ (since dim = 2), so "dd = 0" for k=1 is vacuously
+    // There is no d₂ (since topological_dimension = 2), so "dd = 0" for k=1 is vacuously
     // true. Instead, we verify the dual identity: d₁ applied to a random
     // 1-form produces a valid 2-cochain, and that d₁ applied to any exact
     // 1-form (one that is d₀ of something) yields zero — which is the

@@ -66,13 +66,13 @@ pub fn solve(
     max_iterations: u32,
     preconditioner: ?Preconditioner,
     preconditioner_context: ?*const anyopaque,
-    /// Scratch space: 4 vectors of length n. Caller allocates to avoid
+    /// Scratch space: 4 vectors of length matrix.n_rows. Caller allocates to avoid
     /// per-solve allocation.
     scratch: Scratch,
 ) SolveResult {
-    const n = matrix.n_rows;
-    std.debug.assert(b.len == n);
-    std.debug.assert(x.len == n);
+    const row_count = matrix.n_rows;
+    std.debug.assert(b.len == row_count);
+    std.debug.assert(x.len == row_count);
 
     const r = scratch.r;
     const z = scratch.z;
@@ -81,7 +81,7 @@ pub fn solve(
 
     // r₀ = b − Ax₀
     sparse.spmv(matrix, x, r);
-    for (0..n) |i| r[i] = b[i] - r[i];
+    for (0..row_count) |i| r[i] = b[i] - r[i];
 
     // Apply preconditioner: z₀ = M⁻¹r₀
     @memcpy(z, r);
@@ -114,7 +114,7 @@ pub fn solve(
         const alpha = rz / p_ap;
 
         // xₖ₊₁ = xₖ + αpₖ, rₖ₊₁ = rₖ − αApₖ
-        for (0..n) |i| {
+        for (0..row_count) |i| {
             x[i] += alpha * p[i];
             r[i] -= alpha * ap[i];
         }
@@ -131,7 +131,7 @@ pub fn solve(
         rz = rz_new;
 
         // pₖ₊₁ = zₖ₊₁ + βpₖ
-        for (0..n) |i| p[i] = z[i] + beta * p[i];
+        for (0..row_count) |i| p[i] = z[i] + beta * p[i];
     }
 
     const final_r_norm = @sqrt(dot(r, r));
@@ -142,21 +142,21 @@ pub fn solve(
     };
 }
 
-/// Scratch space for the CG solver — 4 vectors of length n.
+/// Scratch space for the CG solver — 4 vectors of length `vector_length`.
 pub const Scratch = struct {
     r: []f64,
     z: []f64,
     p: []f64,
     ap: []f64,
 
-    pub fn init(allocator: std.mem.Allocator, n: u32) !Scratch {
-        const r = try allocator.alloc(f64, n);
+    pub fn init(allocator: std.mem.Allocator, vector_length: u32) !Scratch {
+        const r = try allocator.alloc(f64, vector_length);
         errdefer allocator.free(r);
-        const z = try allocator.alloc(f64, n);
+        const z = try allocator.alloc(f64, vector_length);
         errdefer allocator.free(z);
-        const p = try allocator.alloc(f64, n);
+        const p = try allocator.alloc(f64, vector_length);
         errdefer allocator.free(p);
-        const ap = try allocator.alloc(f64, n);
+        const ap = try allocator.alloc(f64, vector_length);
         return .{ .r = r, .z = z, .p = p, .ap = ap };
     }
 
@@ -287,26 +287,26 @@ test "CG solves Whitney mass matrix system" {
     var mass = try whitney.assemble_whitney_mass_1(allocator, &mesh);
     defer mass.deinit(allocator);
 
-    const n = mass.n_rows;
+    const row_count = mass.n_rows;
 
     // Random RHS.
     var rng = std.Random.DefaultPrng.init(0xDEC_C6_00);
-    const b_buf = try allocator.alloc(f64, n);
+    const b_buf = try allocator.alloc(f64, row_count);
     defer allocator.free(b_buf);
     for (b_buf) |*v| v.* = rng.random().float(f64) * 2.0 - 1.0;
 
-    const x_buf = try allocator.alloc(f64, n);
+    const x_buf = try allocator.alloc(f64, row_count);
     defer allocator.free(x_buf);
     @memset(x_buf, 0.0);
 
-    var scratch = try Scratch.init(allocator, n);
+    var scratch = try Scratch.init(allocator, row_count);
     defer scratch.deinit(allocator);
 
     const result = solve(mass, b_buf, x_buf, 1e-10, 1000, null, null, scratch);
     try testing.expect(result.converged);
 
     // Verify: Ax ≈ b.
-    const ax = try allocator.alloc(f64, n);
+    const ax = try allocator.alloc(f64, row_count);
     defer allocator.free(ax);
     sparse.spmv(mass, x_buf, ax);
 

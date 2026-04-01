@@ -35,7 +35,8 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         if (!@hasDecl(MeshType, "topological_dimension")) {
             @compileError("Cochain requires a Mesh type with a 'topological_dimension' declaration");
         }
-        // A k-cochain on a dim-dimensional complex has degree 0 ≤ k ≤ dim.
+        // A k-cochain on a topological_dimension-dimensional complex has
+        // degree 0 ≤ k ≤ topological_dimension.
         if (k < 0 or k > MeshType.topological_dimension) {
             @compileError(std.fmt.comptimePrint(
                 "Cochain degree k={d} out of range for {d}-dimensional mesh (must be 0 ≤ k ≤ {d})",

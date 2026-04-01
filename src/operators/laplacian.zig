@@ -47,15 +47,15 @@ pub fn laplacian(
 
     const MeshType = InputType.MeshT;
     const k = InputType.degree;
-    const n = MeshType.topological_dimension;
+    const topological_dimension = MeshType.topological_dimension;
 
     var result = try InputType.init(allocator, input.mesh);
     errdefer result.deinit(allocator);
 
     // Pre-compute workspace size: one allocation for all temporary vectors.
-    // Term 1 (δd, k < n) needs bk1.n_cols elements.
+    // Term 1 (δd, k < topological_dimension) needs bk1.n_cols elements.
     // Term 2 (dδ, k > 0) needs 2 × bk.n_cols elements.
-    const bk1_cols = if (k < n) input.mesh.boundary(k + 1).n_cols else 0;
+    const bk1_cols = if (k < topological_dimension) input.mesh.boundary(k + 1).n_cols else 0;
     const bk_cols = if (k > 0) input.mesh.boundary(k).n_cols else 0;
     const workspace_len = bk1_cols + 2 * bk_cols;
 
@@ -63,8 +63,8 @@ pub fn laplacian(
     defer allocator.free(workspace);
 
     // ── Term 1 (δd): ★⁻¹_k · D_kᵀ · ★_{k+1} · D_k · ω ─────────────
-    // Exists when k < n, so that d_k is defined.
-    if (k < n) {
+    // Exists when k < topological_dimension, so that d_k is defined.
+    if (k < topological_dimension) {
         // d_k ω = boundary(k+1) · ω
         var d_omega = try exterior_derivative.exterior_derivative(allocator, input);
         defer d_omega.deinit(allocator);
@@ -320,8 +320,8 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    const n = mesh.num_edges();
-    const m1_buf = try allocator.alloc(f64, n);
+    const edge_count = mesh.num_edges();
+    const m1_buf = try allocator.alloc(f64, edge_count);
     defer allocator.free(m1_buf);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_11);

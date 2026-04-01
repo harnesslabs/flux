@@ -34,14 +34,14 @@ pub fn hodge_star(
     comptime validateHodgeStarInput(InputType);
 
     const k = InputType.degree;
-    const n = InputType.MeshT.topological_dimension;
-    const OutputType = cochain.Cochain(InputType.MeshT, n - k, cochain.Dual);
+    const topological_dimension = InputType.MeshT.topological_dimension;
+    const OutputType = cochain.Cochain(InputType.MeshT, topological_dimension - k, cochain.Dual);
 
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
     switch (k) {
-        0, n => applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false),
+        0, topological_dimension => applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false),
         else => sparse.spmv(input.mesh.whitney_mass_1, input.values, output.values),
     }
 
@@ -61,15 +61,15 @@ pub fn hodge_star_inverse(
     comptime validateHodgeStarInverseInput(InputType);
 
     const dual_degree = InputType.degree;
-    const n = InputType.MeshT.topological_dimension;
-    const primal_degree = n - dual_degree;
+    const topological_dimension = InputType.MeshT.topological_dimension;
+    const primal_degree = topological_dimension - dual_degree;
     const OutputType = cochain.Cochain(InputType.MeshT, primal_degree, cochain.Primal);
 
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
     switch (primal_degree) {
-        0, n => applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true),
+        0, topological_dimension => applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true),
         else => {
             // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
             @memset(output.values, 0.0);
@@ -98,13 +98,13 @@ pub fn hodge_star_inverse(
 // ── Return type helpers ──────────────────────────────────────────────────
 
 fn HodgeStarResult(comptime InputType: type) type {
-    const n = InputType.MeshT.topological_dimension;
-    return cochain.Cochain(InputType.MeshT, n - InputType.degree, cochain.Dual);
+    const topological_dimension = InputType.MeshT.topological_dimension;
+    return cochain.Cochain(InputType.MeshT, topological_dimension - InputType.degree, cochain.Dual);
 }
 
 fn HodgeStarInverseResult(comptime InputType: type) type {
-    const n = InputType.MeshT.topological_dimension;
-    return cochain.Cochain(InputType.MeshT, n - InputType.degree, cochain.Primal);
+    const topological_dimension = InputType.MeshT.topological_dimension;
+    return cochain.Cochain(InputType.MeshT, topological_dimension - InputType.degree, cochain.Primal);
 }
 
 // ── Comptime validation ──────────────────────────────────────────────────
@@ -138,9 +138,9 @@ pub fn apply_raw(
     input: []const f64,
     output: []f64,
 ) void {
-    const n = MeshType.topological_dimension;
+    const topological_dimension = MeshType.topological_dimension;
     switch (primal_degree) {
-        0, n => applyDiagonal(MeshType, primal_degree, mesh, input, output, false),
+        0, topological_dimension => applyDiagonal(MeshType, primal_degree, mesh, input, output, false),
         else => sparse.spmv(mesh.whitney_mass_1, input, output),
     }
 }
@@ -155,9 +155,9 @@ pub fn apply_inverse_raw(
     input: []const f64,
     output: []f64,
 ) !void {
-    const n = MeshType.topological_dimension;
+    const topological_dimension = MeshType.topological_dimension;
     switch (primal_degree) {
-        0, n => applyDiagonal(MeshType, primal_degree, mesh, input, output, true),
+        0, topological_dimension => applyDiagonal(MeshType, primal_degree, mesh, input, output, true),
         else => {
             @memset(output, 0.0);
 
@@ -298,8 +298,8 @@ test "★₁ applies Whitney mass matrix (not diagonal)" {
     defer result.deinit(allocator);
 
     // Verify output matches SpMV with the Whitney mass matrix.
-    const n = mesh.num_edges();
-    const expected = try allocator.alloc(f64, n);
+    const edge_count = mesh.num_edges();
+    const expected = try allocator.alloc(f64, edge_count);
     defer allocator.free(expected);
     sparse.spmv(mesh.whitney_mass_1, omega.values, expected);
 

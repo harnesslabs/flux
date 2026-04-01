@@ -19,14 +19,15 @@ pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 // ───────────────────────────────────────────────────────────────────────────
 
 /// Build a tuple type whose field `i` is `MultiArrayList(Simplex(i+1))` for
-/// i = 0..dim-1. This lets us store all k-simplex lists (k = 1..dim) in a
+/// i = 0..topological_dimension-1. This lets us store all k-simplex lists
+/// (k = 1..topological_dimension) in a
 /// single comptime-indexed struct without hardcoded field names.
-fn SimplexListsType(comptime n: usize, comptime dim: usize) type {
-    var fields: [dim]std.builtin.Type.StructField = undefined;
-    for (0..dim) |i| {
+fn SimplexListsType(comptime embedding_dimension: usize, comptime topological_dimension: usize) type {
+    var fields: [topological_dimension]std.builtin.Type.StructField = undefined;
+    for (0..topological_dimension) |i| {
         const k = i + 1;
-        const S = SimplexType(n, dim, k);
-        const MAL = std.MultiArrayList(S);
+        const Simplex = SimplexType(embedding_dimension, topological_dimension, k);
+        const MAL = std.MultiArrayList(Simplex);
         fields[i] = .{
             .name = std.fmt.comptimePrint("{d}", .{i}),
             .type = MAL,
@@ -45,11 +46,11 @@ fn SimplexListsType(comptime n: usize, comptime dim: usize) type {
 
 /// Standalone Simplex type constructor used both by `SimplexListsType` (which
 /// cannot call into the not-yet-defined `Mesh` struct) and by `Mesh.Simplex`.
-fn SimplexType(comptime n: usize, comptime dim: usize, comptime k: usize) type {
+fn SimplexType(comptime embedding_dimension: usize, comptime topological_dimension: usize, comptime k: usize) type {
     if (k < 1) @compileError("Simplex(k) requires k ≥ 1; vertices are stored separately");
-    if (k > dim) @compileError(std.fmt.comptimePrint(
+    if (k > topological_dimension) @compileError(std.fmt.comptimePrint(
         "Simplex({d}) exceeds topological dimension {d}",
-        .{ k, dim },
+        .{ k, topological_dimension },
     ));
     return struct {
         /// Vertex indices defining this oriented k-simplex.
@@ -57,7 +58,7 @@ fn SimplexType(comptime n: usize, comptime dim: usize, comptime k: usize) type {
         /// k-dimensional measure (length for k=1, area for k=2, volume for k=3).
         volume: f64,
         /// Barycenter (centroid) coordinates.
-        barycenter: [n]f64,
+        barycenter: [embedding_dimension]f64,
     };
 }
 
@@ -74,31 +75,32 @@ fn SimplexType(comptime n: usize, comptime dim: usize, comptime k: usize) type {
 /// Topological entities (vertices, edges, faces, ...) use `std.MultiArrayList`
 /// for SoA cache-friendly layout. Boundary operators ∂ₖ for
 /// 1 ≤ k ≤ topological_dimension are stored in CSR format.
-pub fn Mesh(comptime n: usize, comptime dim: usize) type {
+pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_dimension: usize) type {
     comptime {
-        if (n < 1) @compileError("embedding dimension must be at least 1");
-        if (dim < 2) @compileError("topological dimension must be at least 2");
-        if (dim > 3) @compileError("topological dimension > 3 is not yet supported");
-        if (dim > n) @compileError("topological dimension cannot exceed embedding dimension");
+        if (mesh_embedding_dimension < 1) @compileError("embedding dimension must be at least 1");
+        if (mesh_topological_dimension < 2) @compileError("topological dimension must be at least 2");
+        if (mesh_topological_dimension > 3) @compileError("topological dimension > 3 is not yet supported");
+        if (mesh_topological_dimension > mesh_embedding_dimension) @compileError("topological dimension cannot exceed embedding dimension");
     }
 
     return struct {
         const Self = @This();
 
         /// Embedding dimension — the ambient space ℝⁿ.
-        pub const embedding_dimension = n;
+        pub const embedding_dimension = mesh_embedding_dimension;
 
         /// Topological dimension of the simplicial complex.
-        pub const topological_dimension = dim;
+        pub const topological_dimension = mesh_topological_dimension;
 
         // -- Entity types --
 
         /// A 0-simplex (vertex) in the mesh. Carries embedding coordinates and
         /// the volume of its dual cell (Voronoi region).
         pub const Vertex = struct {
-            coords: [n]f64,
+            coords: [mesh_embedding_dimension]f64,
             /// Volume of the dual cell (cotangent-weighted).
-            /// For dim=2 this is an area; for dim=3 a volume. The name is
+            /// For topological_dimension=2 this is an area; for
+            /// topological_dimension=3 a volume. The name is
             /// dimension-agnostic.
             dual_volume: f64,
         };
@@ -106,27 +108,31 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         /// A k-simplex (k ≥ 1) in the mesh, defined by k+1 vertex indices.
         /// Carries its k-dimensional measure ("volume") and barycenter.
         pub fn Simplex(comptime k: usize) type {
-            return SimplexType(n, dim, k);
+            return SimplexType(mesh_embedding_dimension, mesh_topological_dimension, k);
         }
 
-        /// Comptime-generated tuple of `MultiArrayList(Simplex(k))` for k = 1..dim.
+        /// Comptime-generated tuple of `MultiArrayList(Simplex(k))` for
+        /// k = 1..topological_dimension.
         /// Access via `simplices(k)` which returns a SoA slice.
-        const SimplexLists = SimplexListsType(n, dim);
+        const SimplexLists = SimplexListsType(mesh_embedding_dimension, mesh_topological_dimension);
 
         // -- Storage --
 
         vertices: std.MultiArrayList(Vertex),
 
-        /// SoA storage for k-simplices (k = 1..dim). Indexed as `simplex_lists[k-1]`.
+        /// SoA storage for k-simplices (k = 1..topological_dimension).
+        /// Indexed as `simplex_lists[k-1]`.
         /// Use `simplices(k)` for typed access.
         simplex_lists: SimplexLists,
 
-        /// Boundary operators ∂ₖ for k = 1..dim, stored as `boundaries[k-1]`.
+        /// Boundary operators ∂ₖ for k = 1..topological_dimension, stored as
+        /// `boundaries[k-1]`.
         /// ∂₁: edges → vertices, ∂₂: faces → edges, ∂₃: tets → faces.
-        boundaries: [dim]BoundaryMatrix,
+        boundaries: [topological_dimension]BoundaryMatrix,
 
-        /// Dual cell volumes for each 1-simplex (edge). For dim=2 this is the
-        /// dual edge length; for dim=3 the dual face area. Stored separately
+        /// Dual cell volumes for each 1-simplex (edge). For
+        /// topological_dimension=2 this is the dual edge length; for
+        /// topological_dimension=3 the dual face area. Stored separately
         /// from Simplex(1) to avoid every simplex carrying dimension-dependent fields.
         dual_edge_volumes: []f64,
 
@@ -153,7 +159,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             allocator.free(self.boundary_edges);
             allocator.free(self.dual_edge_volumes);
             self.vertices.deinit(allocator);
-            inline for (0..dim) |i| {
+            inline for (0..topological_dimension) |i| {
                 self.simplex_lists[i].deinit(allocator);
             }
             for (&self.boundaries) |*b| b.deinit(allocator);
@@ -161,16 +167,17 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
         // -- Accessors --
 
-        /// Return the boundary operator ∂ₖ for the given degree (1 ≤ k ≤ dim).
+        /// Return the boundary operator ∂ₖ for the given degree
+        /// (1 ≤ k ≤ topological_dimension).
         ///
         /// ∂₁ maps edges → vertices, ∂₂ maps faces → edges, ∂₃ maps tets → faces.
         /// Stored in coboundary orientation (rows indexed by higher-dimensional
         /// cells), so ∂ₖ also serves as the exterior derivative dₖ₋₁.
         pub fn boundary(self: Self, comptime k: comptime_int) BoundaryMatrix {
-            if (k < 1 or k > dim) {
+            if (k < 1 or k > topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no boundary operator ∂_{d} on a {d}-dimensional mesh (need 1 ≤ k ≤ {d})",
-                    .{ k, dim, dim },
+                    .{ k, topological_dimension, topological_dimension },
                 ));
             }
             return self.boundaries[k - 1];
@@ -179,10 +186,10 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         /// SoA slice of k-simplices (k ≥ 1). Returns a `MultiArrayList(Simplex(k)).Slice`
         /// with fields `.vertices`, `.volume`, `.barycenter`.
         pub fn simplices(self: *const Self, comptime k: comptime_int) std.MultiArrayList(Simplex(k)).Slice {
-            if (k < 1 or k > dim) {
+            if (k < 1 or k > topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no {d}-simplices on a {d}-dimensional mesh (need 1 ≤ k ≤ {d})",
-                    .{ k, dim, dim },
+                    .{ k, topological_dimension, topological_dimension },
                 ));
             }
             return self.simplex_lists[k - 1].slice();
@@ -191,10 +198,10 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         /// Number of k-simplices in the mesh (generic entity count accessor).
         pub fn num_cells(self: Self, comptime k: comptime_int) u32 {
             if (k == 0) return @intCast(self.vertices.len);
-            if (k < 0 or k > dim) {
+            if (k < 0 or k > topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no {d}-cells on a {d}-dimensional mesh",
-                    .{ k, dim },
+                    .{ k, topological_dimension },
                 ));
             }
             return @intCast(self.simplex_lists[k - 1].len);
@@ -215,7 +222,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             return self.num_cells(2);
         }
 
-        /// Number of tetrahedra in the mesh (only for dim ≥ 3).
+        /// Number of tetrahedra in the mesh (only for topological_dimension ≥ 3).
         pub fn num_tets(self: Self) u32 {
             return self.num_cells(3);
         }
@@ -226,7 +233,8 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
         /// Construct a uniform triangulated rectangular grid on `[0, width] × [0, height]`.
         ///
-        /// Only available for 2D meshes (`dim = 2`). For 3D meshes, use the
+        /// Only available for 2D meshes (`topological_dimension = 2`). For
+        /// 3D meshes, use the
         /// tetrahedral grid constructor (see #81).
         ///
         /// The rectangle is divided into `nx × ny` rectangular cells, each split
@@ -246,7 +254,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
             height: f64,
         ) !Self {
             comptime {
-                if (dim != 2) @compileError("uniform_grid is only available for 2D meshes (dim = 2)");
+                if (topological_dimension != 2) @compileError("uniform_grid is only available for 2D meshes (topological_dimension = 2)");
             }
             if (nx == 0 or ny == 0) @panic("grid dimensions must be positive");
             if (!(width > 0) or !(height > 0)) @panic("domain size must be positive");
@@ -281,7 +289,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                 const fi: f64 = @floatFromInt(i_u);
                 for (0..ny + 1) |j_u| {
                     const fj: f64 = @floatFromInt(j_u);
-                    var coords: [n]f64 = @splat(0);
+                    var coords: [embedding_dimension]f64 = @splat(0);
                     coords[0] = fi * dx;
                     coords[1] = fj * dy;
                     vertices.appendAssumeCapacity(.{ .coords = coords, .dual_volume = 0 });
@@ -337,7 +345,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
                     const nw = vertex_index(i, j + 1, ny);
                     const ne = vertex_index(i + 1, j + 1, ny);
 
-                    const zero_cc: [n]f64 = @splat(0);
+                    const zero_cc: [embedding_dimension]f64 = @splat(0);
 
                     // Lower-right triangle: SW → SE → NE
                     faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .volume = 0, .barycenter = zero_cc });
@@ -600,22 +608,22 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         // Geometry primitives
         // ───────────────────────────────────────────────────────────────────
 
-        fn distance_squared(a: [n]f64, b: [n]f64) f64 {
+        fn distance_squared(a: [embedding_dimension]f64, b: [embedding_dimension]f64) f64 {
             var sum: f64 = 0;
-            inline for (0..n) |d| {
+            inline for (0..embedding_dimension) |d| {
                 const diff = b[d] - a[d];
                 sum += diff * diff;
             }
             return sum;
         }
 
-        fn euclidean_distance(a: [n]f64, b: [n]f64) f64 {
+        fn euclidean_distance(a: [embedding_dimension]f64, b: [embedding_dimension]f64) f64 {
             return @sqrt(distance_squared(a, b));
         }
 
-        fn point_midpoint(a: [n]f64, b: [n]f64) [n]f64 {
-            var result: [n]f64 = undefined;
-            inline for (0..n) |d| {
+        fn point_midpoint(a: [embedding_dimension]f64, b: [embedding_dimension]f64) [embedding_dimension]f64 {
+            var result: [embedding_dimension]f64 = undefined;
+            inline for (0..embedding_dimension) |d| {
                 result[d] = 0.5 * (a[d] + b[d]);
             }
             return result;
@@ -623,7 +631,7 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
 
         /// Signed area of a 2D triangle (positive for CCW orientation).
         /// Uses only the first two coordinate components.
-        fn signed_triangle_area(p0: [n]f64, p1: [n]f64, p2: [n]f64) f64 {
+        fn signed_triangle_area(p0: [embedding_dimension]f64, p1: [embedding_dimension]f64, p2: [embedding_dimension]f64) f64 {
             const dx1 = p1[0] - p0[0];
             const dy1 = p1[1] - p0[1];
             const dx2 = p2[0] - p0[0];
@@ -632,14 +640,14 @@ pub fn Mesh(comptime n: usize, comptime dim: usize) type {
         }
 
         /// Unsigned area of a 2D triangle. Uses only the first two coordinate components.
-        fn triangle_area(p0: [n]f64, p1: [n]f64, p2: [n]f64) f64 {
+        fn triangle_area(p0: [embedding_dimension]f64, p1: [embedding_dimension]f64, p2: [embedding_dimension]f64) f64 {
             return @abs(signed_triangle_area(p0, p1, p2));
         }
 
         /// Barycenter (centroid) of a triangle: average of its three vertices.
-        fn triangle_barycenter(a: [n]f64, b: [n]f64, c: [n]f64) [n]f64 {
-            var result: [n]f64 = undefined;
-            inline for (0..n) |d| {
+        fn triangle_barycenter(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64) [embedding_dimension]f64 {
+            var result: [embedding_dimension]f64 = undefined;
+            inline for (0..embedding_dimension) |d| {
                 result[d] = (a[d] + b[d] + c[d]) / 3.0;
             }
             return result;
