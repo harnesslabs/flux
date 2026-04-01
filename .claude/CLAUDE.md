@@ -6,6 +6,27 @@ See `project/initial.md` for the full architectural specification.
 
 ---
 
+## Fast Orientation
+
+Assume fresh context. Do **not** start by scanning the whole repository.
+
+Read in this order:
+
+1. This file for workflow rules and project expectations.
+2. `project/components.md` for the codebase map and component boundaries.
+3. Only the artifact that matches the current assignment:
+   - implementation: the current issue/PR, then only the relevant component files
+   - planning: the latest `project/epoch_*/roadmap.md`
+   - design alignment: `project/vision.md` and `project/horizons.md`
+   - decision logging: the current `project/epoch_N/decision_log.md`
+4. Expand scope only when the current artifact proves you need more context.
+
+Default rule: before any exploratory tool call, ask what the **smallest sufficient document or file set** is for the current task.
+
+Do not read unrelated `src/` files "just to learn the repo". Learn the repo through `project/components.md`, then open only the component and direct dependencies that the task actually touches.
+
+---
+
 ## Hard Rules
 
 - **Never merge a PR without explicit user approval.** After opening a PR,

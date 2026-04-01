@@ -31,7 +31,7 @@ Find and work the highest-priority open issue to completion — one issue, one b
 On confirmation:
 
 1. Read the full issue body: `gh issue view <number>`
-2. Identify the **component scope** from `project/components.md` based on the issue's `domain/` label. Load only the source files in that component and its direct dependencies. Do not read unrelated modules.
+2. Identify the **component scope** from `project/components.md` based on the issue's `domain/` label. Name the component and direct dependencies explicitly before opening source files.
 3. Create a branch and immediately open a draft PR:
    ```sh
    git checkout main && git pull
@@ -62,6 +62,7 @@ On confirmation:
    Slug format: lowercase, hyphens, ≤5 words. Example: `42-csr-incidence-matrix`.
 
 4. Read all relevant source files within the component scope before writing any code.
+   Start with the files named in the issue and the component entry in `project/components.md`. Only expand to additional direct dependencies when the current files prove they are needed. Do not read unrelated modules "for context".
 
 ## Phase 1: Tests
 
