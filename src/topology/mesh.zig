@@ -14,8 +14,10 @@ const whitney = @import("../operators/whitney_mass.zig");
 /// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
 pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 
-/// A 0-simplex (vertex) in the mesh. Carries embedding coordinates and
-/// the volume of its dual cell (Voronoi region).
+/// Standalone 0-simplex (vertex) type constructor.
+///
+/// Carries embedding coordinates and the volume of the dual cell
+/// (Voronoi/circumcentric region).
 pub fn Vertex(comptime mesh_embedding_dimension: usize) type {
     return struct {
         coords: [mesh_embedding_dimension]f64,
@@ -27,10 +29,15 @@ pub fn Vertex(comptime mesh_embedding_dimension: usize) type {
     };
 }
 
-/// Standalone Simplex type constructor used both by `SimplexListsType` (which
-/// cannot call into the not-yet-defined `Mesh` struct) and by `Mesh.Simplex`.
-/// A k-simplex (k ≥ 1) in the mesh, defined by k+1 vertex indices.
-fn Simplex(comptime embedding_dimension: usize, comptime topological_dimension: usize, comptime k: usize) type {
+/// Standalone k-simplex type constructor.
+///
+/// Used both by mesh storage internals and by external code that needs the
+/// concrete simplex record type for a given embedding/topological dimension
+/// and simplex degree `k`.
+///
+/// A k-simplex (k ≥ 1) is defined by `k + 1` oriented vertex indices and
+/// carries its k-dimensional measure and barycenter.
+pub fn Simplex(comptime embedding_dimension: usize, comptime topological_dimension: usize, comptime k: usize) type {
     if (k < 1) @compileError("Simplex(k) requires k ≥ 1; vertices are stored separately");
     if (k > topological_dimension) @compileError(std.fmt.comptimePrint(
         "Simplex({d}) exceeds topological dimension {d}",
@@ -50,10 +57,12 @@ fn Simplex(comptime embedding_dimension: usize, comptime topological_dimension: 
 // Comptime simplex storage type
 // ───────────────────────────────────────────────────────────────────────────
 
-/// Build a tuple type whose field `i` is `MultiArrayList(Simplex(i+1))` for
-/// i = 0..topological_dimension-1. This lets us store all k-simplex lists
-/// (k = 1..topological_dimension) in a
-/// single comptime-indexed struct without hardcoded field names.
+/// Build a tuple type whose field `i` is
+/// `MultiArrayList(Simplex(embedding_dimension, topological_dimension, i + 1))`
+/// for `i = 0..topological_dimension-1`.
+///
+/// This lets us store all k-simplex lists (`k = 1..topological_dimension`) in
+/// a single comptime-indexed struct without hardcoded field names.
 fn SimplexListsType(comptime embedding_dimension: usize, comptime topological_dimension: usize) type {
     var fields: [topological_dimension]std.builtin.Type.StructField = undefined;
     for (0..topological_dimension) |i| {
@@ -85,9 +94,12 @@ fn SimplexListsType(comptime embedding_dimension: usize, comptime topological_di
 /// `topological_dimension`: the intrinsic dimension of the simplicial complex
 /// (2 for triangulated surfaces, 3 for tetrahedral volumes).
 ///
-/// Topological entities (vertices, edges, faces, ...) use `std.MultiArrayList`
-/// for SoA cache-friendly layout. Boundary operators ∂ₖ for
-/// 1 ≤ k ≤ topological_dimension are stored in CSR format.
+/// Topological entities use standalone `Vertex(embedding_dimension)` and
+/// `Simplex(embedding_dimension, topological_dimension, k)` record types,
+/// stored in `std.MultiArrayList` for SoA cache-friendly layout.
+///
+/// Boundary operators ∂ₖ for 1 ≤ k ≤ topological_dimension are stored in CSR
+/// format.
 pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_dimension: usize) type {
     comptime {
         if (mesh_embedding_dimension < 1) @compileError("embedding dimension must be at least 1");
@@ -105,8 +117,9 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// Topological dimension of the simplicial complex.
         pub const topological_dimension = mesh_topological_dimension;
 
-        /// Comptime-generated tuple of `MultiArrayList(Simplex(k))` for
-        /// k = 1..topological_dimension.
+        /// Comptime-generated tuple of
+        /// `MultiArrayList(Simplex(mesh_embedding_dimension, mesh_topological_dimension, k))`
+        /// for `k = 1..topological_dimension`.
         /// Access via `simplices(k)` which returns a SoA slice.
         const SimplexLists = SimplexListsType(mesh_embedding_dimension, mesh_topological_dimension);
 
@@ -177,8 +190,11 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return self.boundaries[k - 1];
         }
 
-        /// SoA slice of k-simplices (k ≥ 1). Returns a `MultiArrayList(Simplex(embedding_dimension, topological_dimension, k)).Slice`
-        /// with fields `.vertices`, `.volume`, `.barycenter`.
+        /// SoA slice of k-simplices (`k ≥ 1`).
+        ///
+        /// Returns a
+        /// `std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, k)).Slice`
+        /// with fields `.vertices`, `.volume`, and `.barycenter`.
         pub fn simplices(self: *const Self, comptime k: comptime_int) std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, k)).Slice {
             if (k < 1 or k > topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
