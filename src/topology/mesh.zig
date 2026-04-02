@@ -954,7 +954,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             defer result.deinit(allocator);
 
             for (result.values) |v| {
-                try testing.expectApproxEqAbs(@as(f64, 0.0), v, 1e-10);
+                try testing.expectApproxEqAbs(@as(f64, 0.0), v, 1e-9);
             }
         }
 

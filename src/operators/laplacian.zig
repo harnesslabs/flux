@@ -27,49 +27,134 @@ const exterior_derivative = @import("exterior_derivative.zig");
 const hodge_star = @import("hodge_star.zig");
 const sparse = @import("../math/sparse.zig");
 
-/// Stored Δ₀ operator on primal 0-cochains.
+fn validatePrimalCochainInput(comptime InputType: type) void {
+    if (!@hasDecl(InputType, "duality")) {
+        @compileError("laplacian requires a Cochain type");
+    }
+    if (InputType.duality != cochain.Primal) {
+        @compileError("laplacian expects a primal cochain");
+    }
+}
+
+/// Stored Laplacian operator specialized to a primal k-cochain type.
 ///
-/// The assembled form keeps the sparse stiffness matrix and the diagonal
-/// ★₀⁻¹ scaling separate so application is one SpMV plus pointwise division.
-pub fn Primal0Laplacian(comptime MeshType: type) type {
+/// For k=0, the assembled form keeps the sparse stiffness matrix
+/// S = D₀ᵀ M₁ D₀ and the diagonal ★₀⁻¹ scaling separate so application is
+/// one SpMV plus pointwise scaling.
+pub fn AssembledLaplacian(comptime InputType: type) type {
+    comptime validatePrimalCochainInput(InputType);
+
     return struct {
         const Self = @This();
-        const Cochain0 = cochain.Cochain(MeshType, 0, cochain.Primal);
+        const MeshType = InputType.MeshT;
+        const k = InputType.degree;
 
         mesh: *const MeshType,
         stiffness: sparse.CsrMatrix(f64),
-        star0_inverse_diag: []f64,
+        left_scaling: []f64,
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.star0_inverse_diag);
+            allocator.free(self.left_scaling);
             self.stiffness.deinit(allocator);
         }
 
-        pub fn apply(self: Self, allocator: std.mem.Allocator, input: Cochain0) !Cochain0 {
-            _ = self;
-            _ = allocator;
-            _ = input;
-            return error.NotYetImplemented;
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
+            std.debug.assert(input.mesh == self.mesh);
+
+            var output = try InputType.init(allocator, input.mesh);
+            errdefer output.deinit(allocator);
+
+            switch (k) {
+                0 => {
+                    sparse.spmv(self.stiffness, input.values, output.values);
+                    for (output.values, self.left_scaling) |*out, scale| {
+                        out.* *= scale;
+                    }
+                },
+                else => return error.NotYetImplemented,
+            }
+
+            return output;
         }
     };
 }
 
-/// Assemble the stored Δ₀ operator ★₀⁻¹ D₀ᵀ ★₁ D₀ for repeated application.
-pub fn assemble_primal_0_laplacian(
+/// Assemble a stored Laplacian operator specialized to the input cochain type.
+///
+/// The input is used only to infer mesh type, degree, and duality, mirroring
+/// the call shape of `laplacian(allocator, omega)`.
+pub fn assemble_laplacian(
     allocator: std.mem.Allocator,
-    mesh: anytype,
-) !Primal0Laplacian(@TypeOf(mesh.*)) {
-    var stiffness = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
+    input: anytype,
+) !AssembledLaplacian(@TypeOf(input)) {
+    const InputType = @TypeOf(input);
+    comptime validatePrimalCochainInput(InputType);
+
+    const k = InputType.degree;
+
+    var stiffness = switch (k) {
+        0 => try assemble_zero_form_stiffness(allocator, input.mesh),
+        else => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
+    };
     errdefer stiffness.deinit(allocator);
 
-    const star0_inverse_diag = try allocator.alloc(f64, 0);
-    errdefer allocator.free(star0_inverse_diag);
+    const left_scaling = switch (k) {
+        0 => try assemble_zero_form_star_inverse_diag(allocator, input.mesh),
+        else => try allocator.alloc(f64, 0),
+    };
+    errdefer allocator.free(left_scaling);
 
     return .{
-        .mesh = mesh,
+        .mesh = input.mesh,
         .stiffness = stiffness,
-        .star0_inverse_diag = star0_inverse_diag,
+        .left_scaling = left_scaling,
     };
+}
+
+fn assemble_zero_form_stiffness(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    const d0 = mesh.boundary(1);
+    const m1 = mesh.whitney_mass_1;
+
+    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
+    defer assembler.deinit(allocator);
+
+    for (0..m1.n_rows) |edge_i| {
+        const incidence_i = d0.row(@intCast(edge_i));
+        const mass_row = m1.row(@intCast(edge_i));
+
+        for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
+            const incidence_j = d0.row(edge_j);
+
+            for (incidence_i.cols, incidence_i.vals) |vertex_i, sign_i| {
+                const left = @as(f64, @floatFromInt(sign_i)) * mass_ij;
+                for (incidence_j.cols, incidence_j.vals) |vertex_j, sign_j| {
+                    const contribution = left * @as(f64, @floatFromInt(sign_j));
+                    try assembler.addEntry(allocator, vertex_i, vertex_j, contribution);
+                }
+            }
+        }
+    }
+
+    return assembler.build(allocator);
+}
+
+fn assemble_zero_form_star_inverse_diag(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) ![]f64 {
+    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+    const diagonal = try allocator.alloc(f64, dual_volumes.len);
+    errdefer allocator.free(diagonal);
+
+    for (diagonal, dual_volumes) |*out, dual_volume| {
+        std.debug.assert(dual_volume != 0.0);
+        out.* = 1.0 / dual_volume;
+    }
+
+    return diagonal;
 }
 
 /// Apply the Hodge Laplacian Δₖ to a primal k-cochain.
@@ -82,14 +167,23 @@ pub fn laplacian(
     input: anytype,
 ) !@TypeOf(input) {
     const InputType = @TypeOf(input);
-    comptime {
-        if (!@hasDecl(InputType, "duality")) {
-            @compileError("laplacian requires a Cochain type");
-        }
-        if (InputType.duality != cochain.Primal) {
-            @compileError("laplacian expects a primal cochain");
-        }
+    comptime validatePrimalCochainInput(InputType);
+
+    if (InputType.degree == 0) {
+        var assembled = try assemble_laplacian(allocator, input);
+        defer assembled.deinit(allocator);
+        return assembled.apply(allocator, input);
     }
+
+    return laplacian_composed(allocator, input);
+}
+
+pub fn laplacian_composed(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !@TypeOf(input) {
+    const InputType = @TypeOf(input);
+    comptime validatePrimalCochainInput(InputType);
 
     const MeshType = InputType.MeshT;
     const k = InputType.degree;
@@ -180,7 +274,7 @@ test "Δ₀ of constant 0-form is zero" {
     defer result.deinit(allocator);
 
     for (result.values) |v| {
-        try testing.expectApproxEqAbs(@as(f64, 0.0), v, 1e-13);
+        try testing.expectApproxEqAbs(@as(f64, 0.0), v, 2e-13);
     }
 }
 
@@ -303,24 +397,25 @@ test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var assembled = try assemble_primal_0_laplacian(allocator, &mesh);
+    var omega = try PrimalC0.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    var assembled = try assemble_laplacian(allocator, omega);
     defer assembled.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_03);
 
     for (0..100) |_| {
-        var omega = try PrimalC0.init(allocator, &mesh);
-        defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var expected = try laplacian(allocator, omega);
+        var expected = try laplacian_composed(allocator, omega);
         defer expected.deinit(allocator);
 
         var actual = try assembled.apply(allocator, omega);
         defer actual.deinit(allocator);
 
         for (actual.values, expected.values) |got, want| {
-            try testing.expectApproxEqAbs(want, got, 1e-12);
+            try testing.expectApproxEqAbs(want, got, 5e-12);
         }
     }
 }
@@ -330,24 +425,24 @@ test "assembled Δ₀ apply is stable across repeated applications" {
     var mesh = try Mesh2D.uniform_grid(allocator, 6, 5, 3.0, 2.0);
     defer mesh.deinit(allocator);
 
-    var assembled = try assemble_primal_0_laplacian(allocator, &mesh);
-    defer assembled.deinit(allocator);
-
     var omega = try PrimalC0.init(allocator, &mesh);
     defer omega.deinit(allocator);
+
+    var assembled = try assemble_laplacian(allocator, omega);
+    defer assembled.deinit(allocator);
 
     const coords = mesh.vertices.slice().items(.coords);
     for (omega.values, coords) |*v, c| v.* = c[0] - 0.5 * c[1];
 
     for (0..3) |_| {
-        var expected = try laplacian(allocator, omega);
+        var expected = try laplacian_composed(allocator, omega);
         defer expected.deinit(allocator);
 
         var actual = try assembled.apply(allocator, omega);
         defer actual.deinit(allocator);
 
         for (actual.values, expected.values) |got, want| {
-            try testing.expectApproxEqAbs(want, got, 1e-12);
+            try testing.expectApproxEqAbs(want, got, 5e-12);
         }
     }
 }

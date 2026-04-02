@@ -129,6 +129,12 @@ pub const hodge_star_inverse = operators.hodge_star.hodge_star_inverse;
 /// positive-semidefinite on 0-forms.
 pub const laplacian = operators.laplacian.laplacian;
 
+/// Stored Laplacian operator specialized to a primal cochain type.
+pub const AssembledLaplacian = operators.laplacian.AssembledLaplacian;
+
+/// Assemble a stored Laplacian operator for repeated application.
+pub const assemble_laplacian = operators.laplacian.assemble_laplacian;
+
 /// Apply a sequence of DEC operators with automatic intermediate allocation
 /// management. Degree/duality mismatches are compile errors.
 pub const chain = operators.compose.chain;
