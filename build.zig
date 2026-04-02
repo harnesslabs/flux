@@ -240,6 +240,16 @@ pub fn build(b: *std.Build) void {
     });
     fmt_step.dependOn(&fmt_cmd.step);
 
+    // -- check step --
+    // Compiles the main artifacts without installing or running them.
+    // This is the fast path editors can use for near-live diagnostics.
+    const check_step = b.step("check", "Compile main artifacts without running");
+    check_step.dependOn(&exe.step);
+    check_step.dependOn(&mod_tests.step);
+    check_step.dependOn(&exe_tests.step);
+    check_step.dependOn(&maxwell2d_exe.step);
+    check_step.dependOn(&maxwell2d_tests.step);
+
     // -- ci step --
     // Runs build + test + fmt in one command: `zig build ci`
     const ci_step = b.step("ci", "Run all CI checks (build + test + fmt)");

@@ -13,7 +13,7 @@
 const std = @import("std");
 const flux = @import("flux");
 
-const Mesh2D = flux.Mesh(2);
+const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
 const PrimalC1 = flux.Cochain(Mesh2D, 1, flux.Primal);
 const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);

@@ -53,8 +53,8 @@ pub fn assemble_whitney_mass_1(
 
     // Pre-fetch SoA slices for vertices, edges, and faces.
     const coords = mesh.vertices.slice().items(.coords);
-    const mesh_edge_verts = mesh.edges.slice().items(.vertices);
-    const face_verts = mesh.faces.slice().items(.vertices);
+    const mesh_edge_verts = mesh.simplices(1).items(.vertices);
+    const face_verts = mesh.simplices(2).items(.vertices);
 
     // For each triangle, compute the local 3×3 Whitney mass matrix and
     // scatter into the global assembler.
@@ -66,14 +66,14 @@ pub fn assemble_whitney_mass_1(
 
         // Edge vectors opposite to each vertex.
         // e_opp[i] is the edge vector opposite to vertex i of the triangle.
-        const e_opp = [3][MeshType.dimension]f64{
-            vecSub(MeshType.dimension, v2, v1), // opposite v0: v1 → v2
-            vecSub(MeshType.dimension, v0, v2), // opposite v1: v2 → v0
-            vecSub(MeshType.dimension, v1, v0), // opposite v2: v0 → v1
+        const e_opp = [3][MeshType.embedding_dimension]f64{
+            vecSub(MeshType.embedding_dimension, v2, v1), // opposite v0: v1 → v2
+            vecSub(MeshType.embedding_dimension, v0, v2), // opposite v1: v2 → v0
+            vecSub(MeshType.embedding_dimension, v1, v0), // opposite v2: v0 → v1
         };
 
         // Triangle area (2D: half the cross product magnitude).
-        const area = triangleArea(MeshType.dimension, v0, v1, v2);
+        const area = triangleArea(MeshType.embedding_dimension, v0, v1, v2);
         std.debug.assert(area > 0.0);
 
         // Gradient dot product matrix: G[i][j] = ∇λᵢ · ∇λⱼ = (e_opp[i] · e_opp[j]) / (4A²)
@@ -81,7 +81,7 @@ pub fn assemble_whitney_mass_1(
         var grad_dot: [3][3]f64 = undefined;
         for (0..3) |i| {
             for (0..3) |j| {
-                grad_dot[i][j] = vecDot(MeshType.dimension, e_opp[i], e_opp[j]) / four_area_sq;
+                grad_dot[i][j] = vecDot(MeshType.embedding_dimension, e_opp[i], e_opp[j]) / four_area_sq;
             }
         }
 
@@ -119,7 +119,7 @@ pub fn assemble_whitney_mass_1(
 
         // Map local edges to global edge indices and orientation signs
         // using the boundary operator ∂₂.
-        const boundary_row = mesh.boundary_2.row(@intCast(face_idx));
+        const boundary_row = mesh.boundary(2).row(@intCast(face_idx));
         std.debug.assert(boundary_row.cols.len == 3);
 
         // boundary_2 row stores edges sorted by global index, which does NOT
@@ -168,36 +168,36 @@ fn barycentricProduct(i: u8, j: u8) f64 {
     return if (i == j) 1.0 / 6.0 else 1.0 / 12.0;
 }
 
-fn vecSub(comptime dim: usize, a: [dim]f64, b: [dim]f64) [dim]f64 {
-    var result: [dim]f64 = undefined;
-    for (0..dim) |i| result[i] = a[i] - b[i];
+fn vecSub(comptime dimension: usize, a: [dimension]f64, b: [dimension]f64) [dimension]f64 {
+    var result: [dimension]f64 = undefined;
+    for (0..dimension) |i| result[i] = a[i] - b[i];
     return result;
 }
 
-fn vecDot(comptime dim: usize, a: [dim]f64, b: [dim]f64) f64 {
+fn vecDot(comptime dimension: usize, a: [dimension]f64, b: [dimension]f64) f64 {
     var sum: f64 = 0;
-    for (0..dim) |i| sum += a[i] * b[i];
+    for (0..dimension) |i| sum += a[i] * b[i];
     return sum;
 }
 
-fn triangleArea(comptime dim: usize, v0: [dim]f64, v1: [dim]f64, v2: [dim]f64) f64 {
+fn triangleArea(comptime dimension: usize, v0: [dimension]f64, v1: [dimension]f64, v2: [dimension]f64) f64 {
     // 2D: A = ½|det([v1−v0, v2−v0])|
-    if (dim == 2) {
+    if (dimension == 2) {
         const dx1 = v1[0] - v0[0];
         const dy1 = v1[1] - v0[1];
         const dx2 = v2[0] - v0[0];
         const dy2 = v2[1] - v0[1];
         return @abs(dx1 * dy2 - dy1 * dx2) / 2.0;
     }
-    // General dim: A = ½||(v1−v0) × (v2−v0)||
-    @compileError("triangleArea not yet implemented for dim > 2");
+    // General topological_dimension: A = ½||(v1−v0) × (v2−v0)||
+    @compileError("triangleArea not yet implemented for topological_dimension > 2");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-const Mesh2D = topology.Mesh(2);
+const Mesh2D = topology.Mesh(2, 2);
 
 test "Whitney mass matrix is square with n_edges dimension" {
     const allocator = testing.allocator;

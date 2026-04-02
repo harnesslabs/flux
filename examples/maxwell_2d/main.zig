@@ -13,7 +13,7 @@ const std = @import("std");
 const flux = @import("flux");
 const maxwell = @import("maxwell.zig");
 
-const Mesh2D = flux.Mesh(2);
+const Mesh2D = flux.Mesh(2, 2);
 const MaxwellState = maxwell.State(Mesh2D);
 const PointDipole = maxwell.PointDipole(Mesh2D);
 
@@ -176,7 +176,8 @@ fn writeSnapshot(
     try flux_io.write_fields(
         allocator,
         output.writer(allocator),
-        Mesh2D.dimension,
+        Mesh2D.embedding_dimension,
+        Mesh2D.topological_dimension,
         state.mesh.*,
         state.E.values,
         state.B.values,
