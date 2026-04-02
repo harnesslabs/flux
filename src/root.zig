@@ -107,6 +107,12 @@ pub const Dual = forms.Dual;
 /// Simplicial mesh parameterized on `embedding_dimension` and `topological_dimension`.
 pub const Mesh = topology.Mesh;
 
+/// Standalone vertex record type constructor for a mesh embedding dimension.
+pub const Vertex = topology.Vertex;
+
+/// Standalone k-simplex record type constructor for a given mesh shape.
+pub const Simplex = topology.Simplex;
+
 /// Exterior derivative dₖ: Ωᵏ → Ωᵏ⁺¹. Maps k-cochains to (k+1)-cochains
 /// via the coboundary operator. Works on both primal and dual cochains.
 pub const exterior_derivative = operators.exterior_derivative.exterior_derivative;
