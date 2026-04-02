@@ -73,6 +73,12 @@ const BenchmarkContext = struct {
         errdefer c1_other.deinit(allocator);
         var operator_context = OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
+        try operator_context.withExteriorDerivative(flux.Primal, 0);
+        try operator_context.withExteriorDerivative(flux.Primal, 1);
+        try operator_context.withHodgeStar(0);
+        try operator_context.withHodgeStar(1);
+        try operator_context.withHodgeStar(2);
+        try operator_context.withHodgeStarInverse(1);
         try operator_context.withLaplacian(0);
 
         // Fill with deterministic pseudo-random values.
@@ -125,31 +131,31 @@ fn stdoutWriter() @TypeOf((std.fs.File{ .handle = std.posix.STDOUT_FILENO }).dep
 
 /// d₀: exterior derivative on 0-forms (sparse matrix–vector multiply).
 fn benchExteriorDerivativeD0(ctx: *BenchmarkContext) void {
-    var result = flux.exterior_derivative(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 0).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// d₁: exterior derivative on 1-forms.
 fn benchExteriorDerivativeD1(ctx: *BenchmarkContext) void {
-    var result = flux.exterior_derivative(ctx.allocator, ctx.c1) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 1).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₀: diagonal Hodge star on 0-forms.
 fn benchHodgeStar0(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(0).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₁: Whitney mass matrix SpMV on 1-forms.
 fn benchHodgeStar1(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c1) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(1).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₂: diagonal Hodge star on 2-forms.
 fn benchHodgeStar2(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c2) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(2).apply(ctx.allocator, ctx.c2) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
@@ -161,7 +167,7 @@ fn benchHodgeStarInverse1(ctx: *BenchmarkContext) void {
     var rng = std.Random.DefaultPrng.init(0xDEAD);
     fillRandom(&rng, dual.values);
 
-    var result = flux.hodge_star_inverse(ctx.allocator, dual) catch unreachable;
+    var result = ctx.operator_context.hodgeStarInverse(1).apply(ctx.allocator, dual) catch unreachable;
     result.deinit(ctx.allocator);
 }
 

@@ -41,7 +41,42 @@ fn ExteriorDerivativeResult(comptime InputType: type) type {
     return cochain.Cochain(InputType.MeshT, InputType.degree + 1, InputType.duality);
 }
 
-pub fn exterior_derivative(
+pub fn AssembledExteriorDerivative(comptime InputType: type) type {
+    comptime {
+        if (!@hasDecl(InputType, "duality")) {
+            @compileError("AssembledExteriorDerivative requires a Cochain type");
+        }
+    }
+
+    return struct {
+        const Self = @This();
+
+        mesh: *const InputType.MeshT,
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            _ = self;
+            _ = allocator;
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !ExteriorDerivativeResult(InputType) {
+            std.debug.assert(input.mesh == self.mesh);
+            return apply_exterior_derivative(allocator, input);
+        }
+    };
+}
+
+pub fn assemble_for_degree(
+    comptime MeshType: type,
+    comptime Duality: type,
+    comptime k: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: *const MeshType,
+) !AssembledExteriorDerivative(cochain.Cochain(MeshType, k, Duality)) {
+    _ = allocator;
+    return .{ .mesh = mesh };
+}
+
+pub fn apply_exterior_derivative(
     allocator: std.mem.Allocator,
     input: anytype,
 ) !ExteriorDerivativeResult(@TypeOf(input)) {
@@ -78,6 +113,13 @@ pub fn exterior_derivative(
     }
 
     return output;
+}
+
+pub fn exterior_derivative(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !ExteriorDerivativeResult(@TypeOf(input)) {
+    return apply_exterior_derivative(allocator, input);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
