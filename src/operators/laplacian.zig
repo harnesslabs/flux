@@ -252,6 +252,60 @@ test "Δ₀ kernel is exactly the constant functions on connected mesh" {
     }
 }
 
+test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    var assembled = try assemble_primal_0_laplacian(allocator, &mesh);
+    defer assembled.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xDEC_1A9_03);
+
+    for (0..100) |_| {
+        var omega = try PrimalC0.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+        for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+        var expected = try laplacian(allocator, omega);
+        defer expected.deinit(allocator);
+
+        var actual = try assembled.apply(allocator, omega);
+        defer actual.deinit(allocator);
+
+        for (actual.values, expected.values) |got, want| {
+            try testing.expectApproxEqAbs(want, got, 1e-12);
+        }
+    }
+}
+
+test "assembled Δ₀ apply is stable across repeated applications" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 6, 5, 3.0, 2.0);
+    defer mesh.deinit(allocator);
+
+    var assembled = try assemble_primal_0_laplacian(allocator, &mesh);
+    defer assembled.deinit(allocator);
+
+    var omega = try PrimalC0.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    const coords = mesh.vertices.slice().items(.coords);
+    for (omega.values, coords) |*v, c| v.* = c[0] - 0.5 * c[1];
+
+    for (0..3) |_| {
+        var expected = try laplacian(allocator, omega);
+        defer expected.deinit(allocator);
+
+        var actual = try assembled.apply(allocator, omega);
+        defer actual.deinit(allocator);
+
+        for (actual.values, expected.values) |got, want| {
+            try testing.expectApproxEqAbs(want, got, 1e-12);
+        }
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Δ₁ tests
 // ═══════════════════════════════════════════════════════════════════════════
