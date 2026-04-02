@@ -1,0 +1,4 @@
+interface:
+  display_name: "Retro"
+  short_description: "Review an epoch and reconstruct missing decisions"
+  default_prompt: "Review a completed epoch by comparing plans to outcomes, reconstructing missing architectural decisions, and writing a retrospective."

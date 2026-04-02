@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Perf"
+  short_description: "Audit performance risks in the selected scope"
+  default_prompt: "Audit this codebase for performance issues, focusing on memory layout, allocation patterns, hot loops, sparse operations, and vectorization readiness."

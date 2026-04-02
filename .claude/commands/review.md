@@ -1,3 +1,8 @@
+---
+name: review
+description: Review a pull request with emphasis on implementation details, mathematical correctness, type safety, invariants, and scope discipline.
+---
+
 Review a PR for the flux project with mathematical and code correctness scrutiny.
 
 Usage: /review <PR number>
@@ -12,15 +17,16 @@ Structure your review accordingly: lead with the implementation-detail findings 
 
 ## Gather context
 
-1. Fetch the PR:
+1. Fetch PR metadata and changed file paths first:
    ```sh
-   gh pr view <number> --json number,title,body,labels,headRefName,additions,deletions
-   gh pr diff <number>
+   gh pr view <number> --json number,title,body,labels,headRefName,additions,deletions,files
    ```
 2. Extract the linked issue number from `Closes #N` in the PR body.
 3. Read the full issue: `gh issue view <N>` — get the acceptance criterion and references.
 4. Read the epoch roadmap to understand where this fits: `project/epoch_*/roadmap.md`.
-5. Read `project/components.md` to understand the expected scope. Flag if the PR touches files outside its component scope without justification.
+5. Read `project/components.md` to map the changed files to their expected component scope. Flag if the PR touches files outside that scope without justification.
+6. Read only the changed files and the direct dependency files required to review them.
+7. Fetch targeted diff context for the touched files. Avoid reading the full PR diff unless the PR is small enough that the broad diff is itself the smallest sufficient context.
 
 ## Review lenses
 

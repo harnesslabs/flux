@@ -1,0 +1,4 @@
+interface:
+  display_name: "Status"
+  short_description: "Summarize current epoch, milestone, and acceptance status"
+  default_prompt: "Report current project status from epoch docs, milestone state, open issues, PRs, blocked work, and acceptance-criterion test status."

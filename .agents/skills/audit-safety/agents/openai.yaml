@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Safety"
+  short_description: "Audit safety, invariants, and numerical robustness"
+  default_prompt: "Audit this codebase for safety issues, including assertions, bounds, ownership, cleanup, numerical hazards, and invariant enforcement."

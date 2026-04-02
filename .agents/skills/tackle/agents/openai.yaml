@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tackle"
+  short_description: "Pick the next issue and drive it to a reviewable PR"
+  default_prompt: "Select the highest-priority unblocked issue for the current milestone, scope it correctly, implement it, and stop when it is ready for review."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Decide"
+  short_description: "Record an architectural decision in the current epoch log"
+  default_prompt: "Capture the architectural decision that was just made, including alternatives and rationale, and append it to the current epoch decision log."
