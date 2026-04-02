@@ -25,6 +25,11 @@ Default rule: before any exploratory tool call, ask what the **smallest sufficie
 
 Do not read unrelated `src/` files "just to learn the repo". Learn the repo through `project/components.md`, then open only the component and direct dependencies that the task actually touches.
 
+When designing APIs, prefer **one obvious way** to do something. Do not keep
+parallel convenience and "real" APIs unless there is a concrete current need.
+The project is pre-release; correctness and coherence matter more than
+backward compatibility with transitional interfaces.
+
 ---
 
 ## Hard Rules

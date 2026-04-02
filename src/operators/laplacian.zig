@@ -26,6 +26,7 @@ const topology = @import("../topology/mesh.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 const hodge_star = @import("hodge_star.zig");
 const sparse = @import("../math/sparse.zig");
+const context = @import("context.zig");
 
 fn validatePrimalCochainInput(comptime InputType: type) void {
     if (!@hasDecl(InputType, "duality")) {
@@ -79,33 +80,27 @@ pub fn AssembledLaplacian(comptime InputType: type) type {
     };
 }
 
-/// Assemble a stored Laplacian operator specialized to the input cochain type.
-///
-/// The input is used only to infer mesh type, degree, and duality, mirroring
-/// the call shape of `laplacian(allocator, omega)`.
-pub fn assemble_laplacian(
+/// Assemble a stored Laplacian operator for a fixed mesh and primal degree.
+pub fn assemble_for_degree(
+    comptime MeshType: type,
+    comptime k: comptime_int,
     allocator: std.mem.Allocator,
-    input: anytype,
-) !AssembledLaplacian(@TypeOf(input)) {
-    const InputType = @TypeOf(input);
-    comptime validatePrimalCochainInput(InputType);
-
-    const k = InputType.degree;
-
+    mesh: *const MeshType,
+) !AssembledLaplacian(cochain.Cochain(MeshType, k, cochain.Primal)) {
     var stiffness = switch (k) {
-        0 => try assemble_zero_form_stiffness(allocator, input.mesh),
+        0 => try assemble_zero_form_stiffness(allocator, mesh),
         else => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
     };
     errdefer stiffness.deinit(allocator);
 
     const left_scaling = switch (k) {
-        0 => try assemble_zero_form_star_inverse_diag(allocator, input.mesh),
+        0 => try assemble_zero_form_star_inverse_diag(allocator, mesh),
         else => try allocator.alloc(f64, 0),
     };
     errdefer allocator.free(left_scaling);
 
     return .{
-        .mesh = input.mesh,
+        .mesh = mesh,
         .stiffness = stiffness,
         .left_scaling = left_scaling,
     };
@@ -155,27 +150,6 @@ fn assemble_zero_form_star_inverse_diag(
     }
 
     return diagonal;
-}
-
-/// Apply the Hodge Laplacian Δₖ to a primal k-cochain.
-///
-/// Returns a primal k-cochain of the same degree. The operator is
-/// self-adjoint in the ★-weighted inner product and positive-semidefinite
-/// on 0-forms.
-pub fn laplacian(
-    allocator: std.mem.Allocator,
-    input: anytype,
-) !@TypeOf(input) {
-    const InputType = @TypeOf(input);
-    comptime validatePrimalCochainInput(InputType);
-
-    if (InputType.degree == 0) {
-        var assembled = try assemble_laplacian(allocator, input);
-        defer assembled.deinit(allocator);
-        return assembled.apply(allocator, input);
-    }
-
-    return laplacian_composed(allocator, input);
 }
 
 pub fn laplacian_composed(
@@ -254,6 +228,23 @@ pub fn laplacian_composed(
     return result;
 }
 
+fn apply_laplacian_with_context(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !@TypeOf(input) {
+    const InputType = @TypeOf(input);
+    comptime validatePrimalCochainInput(InputType);
+
+    if (InputType.degree != 0) {
+        return laplacian_composed(allocator, input);
+    }
+
+    var operator_context = context.OperatorContext(InputType.MeshT).init(allocator, input.mesh);
+    defer operator_context.deinit();
+    try operator_context.withLaplacian(InputType.degree);
+    return operator_context.laplacian(InputType.degree).apply(allocator, input);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -270,7 +261,7 @@ test "Δ₀ of constant 0-form is zero" {
     defer omega.deinit(allocator);
     for (omega.values) |*v| v.* = 42.0;
 
-    var result = try laplacian(allocator, omega);
+    var result = try apply_laplacian_with_context(allocator, omega);
     defer result.deinit(allocator);
 
     for (result.values) |v| {
@@ -294,7 +285,7 @@ test "Δ₀ of linear function f(x,y) = x is zero at interior vertices" {
     const coords = mesh.vertices.slice().items(.coords);
     for (omega.values, coords) |*v, c| v.* = c[0];
 
-    var result = try laplacian(allocator, omega);
+    var result = try apply_laplacian_with_context(allocator, omega);
     defer result.deinit(allocator);
 
     // Interior vertices: 1 ≤ i ≤ nx-1, 1 ≤ j ≤ ny-1
@@ -321,7 +312,7 @@ test "Δ₀ is positive-semidefinite on random 0-forms (1000 trials)" {
         defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_omega = try laplacian(allocator, omega);
+        var lap_omega = try apply_laplacian_with_context(allocator, omega);
         defer lap_omega.deinit(allocator);
 
         // ⟨ω, Δ₀ω⟩_★₀ = Σᵢ ωᵢ · (Δ₀ω)ᵢ · dual_area[i]
@@ -352,9 +343,9 @@ test "Δ₀ is symmetric in ★₀-weighted inner product (1000 trials)" {
         for (f_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
         for (g_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_f = try laplacian(allocator, f_form);
+        var lap_f = try apply_laplacian_with_context(allocator, f_form);
         defer lap_f.deinit(allocator);
-        var lap_g = try laplacian(allocator, g_form);
+        var lap_g = try apply_laplacian_with_context(allocator, g_form);
         defer lap_g.deinit(allocator);
 
         var inner_lap_f_g: f64 = 0;
@@ -382,7 +373,7 @@ test "Δ₀ kernel is exactly the constant functions on connected mesh" {
         defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_omega = try laplacian(allocator, omega);
+        var lap_omega = try apply_laplacian_with_context(allocator, omega);
         defer lap_omega.deinit(allocator);
 
         // Non-constant ⟹ ‖Δ₀ω‖ > 0
@@ -400,8 +391,9 @@ test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
     var omega = try PrimalC0.init(allocator, &mesh);
     defer omega.deinit(allocator);
 
-    var assembled = try assemble_laplacian(allocator, omega);
-    defer assembled.deinit(allocator);
+    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withLaplacian(0);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_1A9_03);
 
@@ -411,7 +403,7 @@ test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
         var expected = try laplacian_composed(allocator, omega);
         defer expected.deinit(allocator);
 
-        var actual = try assembled.apply(allocator, omega);
+        var actual = try operator_context.laplacian(0).apply(allocator, omega);
         defer actual.deinit(allocator);
 
         for (actual.values, expected.values) |got, want| {
@@ -428,8 +420,9 @@ test "assembled Δ₀ apply is stable across repeated applications" {
     var omega = try PrimalC0.init(allocator, &mesh);
     defer omega.deinit(allocator);
 
-    var assembled = try assemble_laplacian(allocator, omega);
-    defer assembled.deinit(allocator);
+    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withLaplacian(0);
 
     const coords = mesh.vertices.slice().items(.coords);
     for (omega.values, coords) |*v, c| v.* = c[0] - 0.5 * c[1];
@@ -438,7 +431,7 @@ test "assembled Δ₀ apply is stable across repeated applications" {
         var expected = try laplacian_composed(allocator, omega);
         defer expected.deinit(allocator);
 
-        var actual = try assembled.apply(allocator, omega);
+        var actual = try operator_context.laplacian(0).apply(allocator, omega);
         defer actual.deinit(allocator);
 
         for (actual.values, expected.values) |got, want| {
@@ -470,7 +463,7 @@ test "Δ₁ of exact 1-form d₀f has dδ component zero" {
     var zero_form = try PrimalC1.init(allocator, &mesh);
     defer zero_form.deinit(allocator);
 
-    var result = try laplacian(allocator, zero_form);
+    var result = try apply_laplacian_with_context(allocator, zero_form);
     defer result.deinit(allocator);
 
     for (result.values) |v| {
@@ -494,7 +487,7 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
         defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_omega = try laplacian(allocator, omega);
+        var lap_omega = try apply_laplacian_with_context(allocator, omega);
         defer lap_omega.deinit(allocator);
 
         // ⟨ω, Δ₁ω⟩_★₁ = Σᵢ ωᵢ · (Δ₁ω)ᵢ · (dual_length[i] / length[i])
@@ -530,9 +523,9 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
         for (f_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
         for (g_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_f = try laplacian(allocator, f_form);
+        var lap_f = try apply_laplacian_with_context(allocator, f_form);
         defer lap_f.deinit(allocator);
-        var lap_g = try laplacian(allocator, g_form);
+        var lap_g = try apply_laplacian_with_context(allocator, g_form);
         defer lap_g.deinit(allocator);
 
         // ⟨Δ₁f, g⟩_★₁ = (Δ₁f)ᵀ M₁ g
@@ -573,7 +566,7 @@ test "Δ₂ of constant 2-form: ⟨Δ₂c, c⟩_★₂ ≥ 0" {
     defer omega.deinit(allocator);
     for (omega.values) |*v| v.* = 7.0;
 
-    var result = try laplacian(allocator, omega);
+    var result = try apply_laplacian_with_context(allocator, omega);
     defer result.deinit(allocator);
 
     // ⟨Δ₂c, c⟩_★₂ = Σ_f c_f · (Δ₂c)_f / area_f
@@ -600,7 +593,7 @@ test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {
         defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_omega = try laplacian(allocator, omega);
+        var lap_omega = try apply_laplacian_with_context(allocator, omega);
         defer lap_omega.deinit(allocator);
 
         // ⟨ω, Δ₂ω⟩_★₂ = Σᵢ ωᵢ · (Δ₂ω)ᵢ · (1 / area[i])
@@ -630,9 +623,9 @@ test "Δ₂ is symmetric in ★₂-weighted inner product (500 trials)" {
         for (f_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
         for (g_form.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        var lap_f = try laplacian(allocator, f_form);
+        var lap_f = try apply_laplacian_with_context(allocator, f_form);
         defer lap_f.deinit(allocator);
-        var lap_g = try laplacian(allocator, g_form);
+        var lap_g = try apply_laplacian_with_context(allocator, g_form);
         defer lap_g.deinit(allocator);
 
         var inner_lap_f_g: f64 = 0;

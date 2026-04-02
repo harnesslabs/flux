@@ -54,6 +54,7 @@ pub const math = struct {
 };
 pub const operators = struct {
     pub const compose = @import("operators/compose.zig");
+    pub const context = @import("operators/context.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
@@ -125,15 +126,8 @@ pub const hodge_star = operators.hodge_star.hodge_star;
 /// preconditioned CG solve for 0 < k < n.
 pub const hodge_star_inverse = operators.hodge_star.hodge_star_inverse;
 
-/// Hodge Laplacian Δₖ = dδ + δd on primal k-cochains. Self-adjoint,
-/// positive-semidefinite on 0-forms.
-pub const laplacian = operators.laplacian.laplacian;
-
-/// Stored Laplacian operator specialized to a primal cochain type.
-pub const AssembledLaplacian = operators.laplacian.AssembledLaplacian;
-
-/// Assemble a stored Laplacian operator for repeated application.
-pub const assemble_laplacian = operators.laplacian.assemble_laplacian;
+/// Per-mesh owner of assembled DEC operators requested by a given problem.
+pub const OperatorContext = operators.context.OperatorContext;
 
 /// Apply a sequence of DEC operators with automatic intermediate allocation
 /// management. Degree/duality mismatches are compile errors.

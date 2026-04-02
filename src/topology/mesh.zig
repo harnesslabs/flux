@@ -928,7 +928,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
     //   1. Produce zero for constant functions (Δ₀(const) = 0)
     //   2. Be positive-semidefinite: ⟨ω, Δ₀ω⟩_★₀ ≥ 0
     const allocator = testing.allocator;
-    const laplacian_mod = @import("../operators/laplacian.zig");
+    const context_mod = @import("../operators/context.zig");
     const cochain_mod = @import("../forms/cochain.zig");
 
     var rng = std.Random.DefaultPrng.init(0xE5B_C07_00);
@@ -942,6 +942,10 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
         var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
+        var operator_context = context_mod.OperatorContext(Mesh(2, 2)).init(allocator, &mesh);
+        defer operator_context.deinit();
+        try operator_context.withLaplacian(0);
+
         const PrimalC0 = cochain_mod.Cochain(Mesh(2, 2), 0, cochain_mod.Primal);
 
         // Δ₀(constant) = 0.
@@ -950,7 +954,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = 42.0;
 
-            var result = try laplacian_mod.laplacian(allocator, omega);
+            var result = try operator_context.laplacian(0).apply(allocator, omega);
             defer result.deinit(allocator);
 
             for (result.values) |v| {
@@ -964,7 +968,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-            var lap_omega = try laplacian_mod.laplacian(allocator, omega);
+            var lap_omega = try operator_context.laplacian(0).apply(allocator, omega);
             defer lap_omega.deinit(allocator);
 
             const dual_areas = mesh.vertices.slice().items(.dual_volume);
