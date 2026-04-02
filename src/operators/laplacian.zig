@@ -25,6 +25,52 @@ const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 const hodge_star = @import("hodge_star.zig");
+const sparse = @import("../math/sparse.zig");
+
+/// Stored Δ₀ operator on primal 0-cochains.
+///
+/// The assembled form keeps the sparse stiffness matrix and the diagonal
+/// ★₀⁻¹ scaling separate so application is one SpMV plus pointwise division.
+pub fn Primal0Laplacian(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+        const Cochain0 = cochain.Cochain(MeshType, 0, cochain.Primal);
+
+        mesh: *const MeshType,
+        stiffness: sparse.CsrMatrix(f64),
+        star0_inverse_diag: []f64,
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.star0_inverse_diag);
+            self.stiffness.deinit(allocator);
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: Cochain0) !Cochain0 {
+            _ = self;
+            _ = allocator;
+            _ = input;
+            return error.NotYetImplemented;
+        }
+    };
+}
+
+/// Assemble the stored Δ₀ operator ★₀⁻¹ D₀ᵀ ★₁ D₀ for repeated application.
+pub fn assemble_primal_0_laplacian(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !Primal0Laplacian(@TypeOf(mesh.*)) {
+    var stiffness = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
+    errdefer stiffness.deinit(allocator);
+
+    const star0_inverse_diag = try allocator.alloc(f64, 0);
+    errdefer allocator.free(star0_inverse_diag);
+
+    return .{
+        .mesh = mesh,
+        .stiffness = stiffness,
+        .star0_inverse_diag = star0_inverse_diag,
+    };
+}
 
 /// Apply the Hodge Laplacian Δₖ to a primal k-cochain.
 ///
