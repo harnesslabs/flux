@@ -14,6 +14,38 @@ const whitney = @import("../operators/whitney_mass.zig");
 /// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
 pub const BoundaryMatrix = sparse.CsrMatrix(i8);
 
+/// A 0-simplex (vertex) in the mesh. Carries embedding coordinates and
+/// the volume of its dual cell (Voronoi region).
+pub fn Vertex(comptime mesh_embedding_dimension: usize) type {
+    return struct {
+        coords: [mesh_embedding_dimension]f64,
+        /// Volume of the dual cell (cotangent-weighted).
+        /// For topological_dimension=2 this is an area; for
+        /// topological_dimension=3 a volume. The name is
+        /// dimension-agnostic.
+        dual_volume: f64,
+    };
+}
+
+/// Standalone Simplex type constructor used both by `SimplexListsType` (which
+/// cannot call into the not-yet-defined `Mesh` struct) and by `Mesh.Simplex`.
+/// A k-simplex (k ≥ 1) in the mesh, defined by k+1 vertex indices.
+fn Simplex(comptime embedding_dimension: usize, comptime topological_dimension: usize, comptime k: usize) type {
+    if (k < 1) @compileError("Simplex(k) requires k ≥ 1; vertices are stored separately");
+    if (k > topological_dimension) @compileError(std.fmt.comptimePrint(
+        "Simplex({d}) exceeds topological dimension {d}",
+        .{ k, topological_dimension },
+    ));
+    return struct {
+        /// Vertex indices defining this oriented k-simplex.
+        vertices: [k + 1]u32,
+        /// k-dimensional measure (length for k=1, area for k=2, volume for k=3).
+        volume: f64,
+        /// Barycenter (centroid) coordinates.
+        barycenter: [embedding_dimension]f64,
+    };
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Comptime simplex storage type
 // ───────────────────────────────────────────────────────────────────────────
@@ -26,8 +58,7 @@ fn SimplexListsType(comptime embedding_dimension: usize, comptime topological_di
     var fields: [topological_dimension]std.builtin.Type.StructField = undefined;
     for (0..topological_dimension) |i| {
         const k = i + 1;
-        const Simplex = SimplexType(embedding_dimension, topological_dimension, k);
-        const MAL = std.MultiArrayList(Simplex);
+        const MAL = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, k));
         fields[i] = .{
             .name = std.fmt.comptimePrint("{d}", .{i}),
             .type = MAL,
@@ -42,24 +73,6 @@ fn SimplexListsType(comptime embedding_dimension: usize, comptime topological_di
         .decls = &.{},
         .is_tuple = true,
     } });
-}
-
-/// Standalone Simplex type constructor used both by `SimplexListsType` (which
-/// cannot call into the not-yet-defined `Mesh` struct) and by `Mesh.Simplex`.
-fn SimplexType(comptime embedding_dimension: usize, comptime topological_dimension: usize, comptime k: usize) type {
-    if (k < 1) @compileError("Simplex(k) requires k ≥ 1; vertices are stored separately");
-    if (k > topological_dimension) @compileError(std.fmt.comptimePrint(
-        "Simplex({d}) exceeds topological dimension {d}",
-        .{ k, topological_dimension },
-    ));
-    return struct {
-        /// Vertex indices defining this oriented k-simplex.
-        vertices: [k + 1]u32,
-        /// k-dimensional measure (length for k=1, area for k=2, volume for k=3).
-        volume: f64,
-        /// Barycenter (centroid) coordinates.
-        barycenter: [embedding_dimension]f64,
-    };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -92,25 +105,6 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// Topological dimension of the simplicial complex.
         pub const topological_dimension = mesh_topological_dimension;
 
-        // -- Entity types --
-
-        /// A 0-simplex (vertex) in the mesh. Carries embedding coordinates and
-        /// the volume of its dual cell (Voronoi region).
-        pub const Vertex = struct {
-            coords: [mesh_embedding_dimension]f64,
-            /// Volume of the dual cell (cotangent-weighted).
-            /// For topological_dimension=2 this is an area; for
-            /// topological_dimension=3 a volume. The name is
-            /// dimension-agnostic.
-            dual_volume: f64,
-        };
-
-        /// A k-simplex (k ≥ 1) in the mesh, defined by k+1 vertex indices.
-        /// Carries its k-dimensional measure ("volume") and barycenter.
-        pub fn Simplex(comptime k: usize) type {
-            return SimplexType(mesh_embedding_dimension, mesh_topological_dimension, k);
-        }
-
         /// Comptime-generated tuple of `MultiArrayList(Simplex(k))` for
         /// k = 1..topological_dimension.
         /// Access via `simplices(k)` which returns a SoA slice.
@@ -118,7 +112,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
 
         // -- Storage --
 
-        vertices: std.MultiArrayList(Vertex),
+        vertices: std.MultiArrayList(Vertex(mesh_embedding_dimension)),
 
         /// SoA storage for k-simplices (k = 1..topological_dimension).
         /// Indexed as `simplex_lists[k-1]`.
@@ -183,9 +177,9 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return self.boundaries[k - 1];
         }
 
-        /// SoA slice of k-simplices (k ≥ 1). Returns a `MultiArrayList(Simplex(k)).Slice`
+        /// SoA slice of k-simplices (k ≥ 1). Returns a `MultiArrayList(Simplex(embedding_dimension, topological_dimension, k)).Slice`
         /// with fields `.vertices`, `.volume`, `.barycenter`.
-        pub fn simplices(self: *const Self, comptime k: comptime_int) std.MultiArrayList(Simplex(k)).Slice {
+        pub fn simplices(self: *const Self, comptime k: comptime_int) std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, k)).Slice {
             if (k < 1 or k > topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no {d}-simplices on a {d}-dimensional mesh (need 1 ≤ k ≤ {d})",
@@ -271,15 +265,15 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
 
             // -- Allocate entity storage --
 
-            var vertices = std.MultiArrayList(Vertex){};
+            var vertices = std.MultiArrayList(Vertex(embedding_dimension)){};
             try vertices.ensureTotalCapacity(allocator, vertex_count);
             errdefer vertices.deinit(allocator);
 
-            var edges_list = std.MultiArrayList(Simplex(1)){};
+            var edges_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 1)){};
             try edges_list.ensureTotalCapacity(allocator, edge_count);
             errdefer edges_list.deinit(allocator);
 
-            var faces_list = std.MultiArrayList(Simplex(2)){};
+            var faces_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 2)){};
             try faces_list.ensureTotalCapacity(allocator, face_count);
             errdefer faces_list.deinit(allocator);
 
@@ -986,7 +980,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
     const M = Mesh(3, 3);
 
     // -- Vertices --
-    var vertices = std.MultiArrayList(M.Vertex){};
+    var vertices = std.MultiArrayList(Vertex(M.embedding_dimension)){};
     try vertices.ensureTotalCapacity(allocator, 4);
     errdefer vertices.deinit(allocator);
     vertices.appendAssumeCapacity(.{ .coords = .{ 0, 0, 0 }, .dual_volume = 0.25 });
@@ -1001,7 +995,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .{ 1, 2 }, .{ 1, 3 }, .{ 2, 3 },
     };
 
-    var edges = std.MultiArrayList(M.Simplex(1)){};
+    var edges = std.MultiArrayList(Simplex(M.embedding_dimension, M.topological_dimension, 1)){};
     try edges.ensureTotalCapacity(allocator, 6);
     errdefer edges.deinit(allocator);
     for (edge_verts) |ev| {
@@ -1042,7 +1036,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .{ 0, 1, 2 }, // opposite v3
     };
 
-    var faces = std.MultiArrayList(M.Simplex(2)){};
+    var faces = std.MultiArrayList(Simplex(M.embedding_dimension, M.topological_dimension, 2)){};
     try faces.ensureTotalCapacity(allocator, 4);
     errdefer faces.deinit(allocator);
     for (face_verts) |fv| {
@@ -1122,7 +1116,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
     }
 
     // -- Tets (1) --
-    var tets = std.MultiArrayList(M.Simplex(3)){};
+    var tets = std.MultiArrayList(Simplex(M.embedding_dimension, M.topological_dimension, 3)){};
     try tets.ensureTotalCapacity(allocator, 1);
     errdefer tets.deinit(allocator);
     tets.appendAssumeCapacity(.{
