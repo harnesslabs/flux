@@ -103,14 +103,25 @@ jobs:
           python3 -c "
           import json, sys
 
-          base = {b['name']: b for b in json.load(open('/tmp/base-bench.json'))['benchmarks']}
-          pr   = {b['name']: b for b in json.load(open('/tmp/pr-bench.json'))['benchmarks']}
+          base_doc = json.load(open('/tmp/base-bench.json'))
+          pr_doc = json.load(open('/tmp/pr-bench.json'))
+          base_version = base_doc.get('suite_version', 1)
+          pr_version = pr_doc.get('suite_version', 1)
+          base = {b['name']: b for b in base_doc['benchmarks']}
+          pr   = {b['name']: b for b in pr_doc['benchmarks']}
 
           def fmt_ns(ns):
               if ns < 1_000:       return f'{ns} ns'
               if ns < 1_000_000:   return f'{ns/1e3:.1f} µs'
               if ns < 1e9:         return f'{ns/1e6:.2f} ms'
               return f'{ns/1e9:.3f} s'
+
+          if base_version != pr_version:
+              with open('/tmp/bench-comment.md', 'w') as f:
+                  f.write('## ⚡ Benchmark Report\n\n')
+                  f.write(f'Benchmark comparison skipped: base suite version is `{base_version}` and PR suite version is `{pr_version}`.\n\n')
+                  f.write('This PR changes benchmark methodology, so base-vs-PR microbenchmark numbers are not directly comparable. Fresh baselines will be generated after merge.\n')
+              sys.exit(0)
 
           rows = []
           has_regression = False
@@ -143,7 +154,16 @@ jobs:
                   f.write('🟢 **Improvements only** — no regressions.\n')
           " && HAS_NOTABLE=true || HAS_NOTABLE=false
 
-          if [ "$HAS_NOTABLE" = "false" ]; then
+          if grep -q "Benchmark comparison skipped" /tmp/bench-comment.md 2>/dev/null; then
+            PREV=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              --jq '.[] | select(.body | startswith("## ⚡ Benchmark")) | .id' 2>/dev/null | head -1)
+            if [ -n "$PREV" ]; then
+              gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${PREV}" \
+                -F body=@/tmp/bench-comment.md
+            else
+              gh pr comment "${PR_NUMBER}" --body-file /tmp/bench-comment.md
+            fi
+          elif [ "$HAS_NOTABLE" = "false" ]; then
             echo "No notable benchmark changes (all within ±20%)"
             # Delete any previous bench comment to keep the PR clean.
             PREV=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \

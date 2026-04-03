@@ -13,6 +13,7 @@
 const std = @import("std");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
+const benchmark_suite_version: u32 = 2;
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -514,6 +515,7 @@ const Baseline = struct {
 };
 
 const BaselineFile = struct {
+    suite_version: u32 = 1,
     mesh_size: []const u8,
     iterations: u32,
     benchmarks: []const Baseline,
@@ -540,6 +542,7 @@ fn writeBaselines(results: []const BenchmarkResult) !void {
 
     const writer = file.deprecatedWriter();
     try writer.writeAll("{\n");
+    try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
     try writer.writeAll("  \"benchmarks\": [\n");
@@ -568,6 +571,7 @@ fn printTable(
     try writer.print("  flux benchmark suite — {d}x{d} mesh, {d} iterations\n", .{
         grid_nx, grid_ny, measured_iterations,
     });
+    try writer.print("  suite version: {d}\n", .{benchmark_suite_version});
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
 
     if (baselines != null) {
@@ -664,6 +668,7 @@ fn printDuration(writer: anytype, ns: u64) !void {
 
 fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.writeAll("{\n");
+    try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
     try writer.writeAll("  \"benchmarks\": [\n");
@@ -777,7 +782,12 @@ pub fn main() !void {
     // Check for regressions if requested.
     if (check_mode) {
         if (baseline_list) |bl| {
-            if (checkRegressions(&results, bl)) {
+            if (parsed_baselines.?.value.suite_version != benchmark_suite_version) {
+                try stderr.print(
+                    "  SKIP: benchmark suite version mismatch (baseline {d}, current {d})\n\n",
+                    .{ parsed_baselines.?.value.suite_version, benchmark_suite_version },
+                );
+            } else if (checkRegressions(&results, bl)) {
                 try stderr.print("  FAIL: one or more benchmarks regressed >{d:.0}%\n\n", .{regression_threshold * 100.0});
                 std.process.exit(1);
             } else {
