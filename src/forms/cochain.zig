@@ -339,6 +339,97 @@ test "inner product and norm" {
     try testing.expectApproxEqAbs(@as(f64, 30.0), a.norm_squared(), 1e-15);
 }
 
+test "SIMD add kernel matches scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51ADADD0);
+
+    const lengths = [_]usize{ 1, 2, 3, 5, 7, 9, 15, 17, 31 };
+    for (lengths) |len| {
+        const lhs_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(lhs_scalar);
+        const lhs_simd = try allocator.alloc(f64, len);
+        defer allocator.free(lhs_simd);
+        const rhs = try allocator.alloc(f64, len);
+        defer allocator.free(rhs);
+
+        for (0..len) |i| {
+            const left = rng.random().float(f64) * 200.0 - 100.0;
+            const right = rng.random().float(f64) * 200.0 - 100.0;
+            lhs_scalar[i] = left;
+            lhs_simd[i] = left;
+            rhs[i] = right;
+        }
+
+        addAssignScalar(lhs_scalar, rhs);
+        addAssignSimd(lhs_simd, rhs);
+
+        for (lhs_scalar, lhs_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+    }
+}
+
+test "SIMD scale and negate kernels match scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51AD5CA1);
+
+    const lengths = [_]usize{ 1, 4, 6, 8, 10, 13, 16, 19, 33 };
+    for (lengths) |len| {
+        const scale_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(scale_scalar);
+        const scale_simd = try allocator.alloc(f64, len);
+        defer allocator.free(scale_simd);
+        const negate_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(negate_scalar);
+        const negate_simd = try allocator.alloc(f64, len);
+        defer allocator.free(negate_simd);
+
+        const alpha = rng.random().float(f64) * 20.0 - 10.0;
+
+        for (0..len) |i| {
+            const value = rng.random().float(f64) * 200.0 - 100.0;
+            scale_scalar[i] = value;
+            scale_simd[i] = value;
+            negate_scalar[i] = value;
+            negate_simd[i] = value;
+        }
+
+        scaleInPlaceScalar(scale_scalar, alpha);
+        scaleInPlaceSimd(scale_simd, alpha);
+        negateInPlaceScalar(negate_scalar);
+        negateInPlaceSimd(negate_simd);
+
+        for (scale_scalar, scale_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+        for (negate_scalar, negate_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+    }
+}
+
+test "SIMD inner product kernel matches scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51ADD071);
+
+    const lengths = [_]usize{ 1, 2, 5, 7, 11, 16, 18, 29, 65 };
+    for (lengths) |len| {
+        const lhs = try allocator.alloc(f64, len);
+        defer allocator.free(lhs);
+        const rhs = try allocator.alloc(f64, len);
+        defer allocator.free(rhs);
+
+        for (0..len) |i| {
+            lhs[i] = rng.random().float(f64) * 200.0 - 100.0;
+            rhs[i] = rng.random().float(f64) * 200.0 - 100.0;
+        }
+
+        const expected = innerProductScalar(lhs, rhs);
+        const actual = innerProductSimd(lhs, rhs);
+        try testing.expectApproxEqAbs(expected, actual, 1e-12);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Property tests: cochain arithmetic
 // ═══════════════════════════════════════════════════════════════════════════
