@@ -12,12 +12,14 @@
 
 const std = @import("std");
 const flux = @import("flux");
+const maxwell = @import("maxwell_example");
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
 const PrimalC1 = flux.Cochain(Mesh2D, 1, flux.Primal);
 const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);
 const OperatorContext2D = flux.OperatorContext(Mesh2D);
+const MaxwellState2D = maxwell.State(Mesh2D);
 const ArithmeticMesh = struct {
     pub const topological_dimension = 2;
 
@@ -50,6 +52,9 @@ const measured_iterations: u32 = 100;
 const arithmetic_scale_factor: f64 = 1.000001;
 const arithmetic_case_lengths = [_]u32{ 1024, 16 * 1024, 128 * 1024 };
 const arithmetic_case_labels = [_][]const u8{ "1k", "16k", "128k" };
+const cavity_grid: u32 = 256;
+const cavity_domain: f64 = 1.0;
+const cavity_courant: f64 = 0.1;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -115,6 +120,8 @@ const BenchmarkContext = struct {
     c0_other: PrimalC0,
     c1_other: PrimalC1,
     arithmetic_cases: [arithmetic_case_lengths.len]ArithmeticCase,
+    cavity_mesh: *Mesh2D,
+    cavity_state: MaxwellState2D,
     operator_context: *OperatorContext2D,
 
     fn init(allocator: std.mem.Allocator, mesh: *Mesh2D) !BenchmarkContext {
@@ -137,6 +144,13 @@ const BenchmarkContext = struct {
             arithmetic_cases[i] = try ArithmeticCase.init(allocator, len);
             arithmetic_cases_initialized = i + 1;
         }
+        const cavity_mesh = try allocator.create(Mesh2D);
+        errdefer allocator.destroy(cavity_mesh);
+        cavity_mesh.* = try Mesh2D.uniform_grid(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
+        errdefer cavity_mesh.deinit(allocator);
+        var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
+        errdefer cavity_state.deinit(allocator);
+        maxwell.project_te10_b(cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
         try operator_context.withExteriorDerivative(flux.Primal, 0);
@@ -164,12 +178,17 @@ const BenchmarkContext = struct {
             .c0_other = c0_other,
             .c1_other = c1_other,
             .arithmetic_cases = arithmetic_cases,
+            .cavity_mesh = cavity_mesh,
+            .cavity_state = cavity_state,
             .operator_context = operator_context,
         };
     }
 
     fn deinit(self: *BenchmarkContext) void {
         self.operator_context.deinit();
+        self.cavity_state.deinit(self.allocator);
+        self.cavity_mesh.deinit(self.allocator);
+        self.allocator.destroy(self.cavity_mesh);
         for (&self.arithmetic_cases) |*arithmetic_case| {
             arithmetic_case.deinit(self.allocator);
         }
@@ -185,6 +204,10 @@ fn fillRandom(rng: *std.Random.DefaultPrng, values: []f64) void {
     for (values) |*v| {
         v.* = rng.random().float(f64) * 200.0 - 100.0;
     }
+}
+
+fn cavityDt() f64 {
+    return cavity_courant * (cavity_domain / @as(f64, @floatFromInt(cavity_grid)));
 }
 
 fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
@@ -298,6 +321,11 @@ fn benchCochainNegate(ctx: *BenchmarkContext) void {
 fn benchCochainInnerProduct(ctx: *BenchmarkContext) void {
     const result = ctx.c0.inner_product(ctx.c0_other);
     std.mem.doNotOptimizeAway(result);
+}
+
+fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
+    maxwell.leapfrog_step(ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
+    maxwell.apply_pec_boundary(&ctx.cavity_state);
 }
 
 fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
@@ -439,6 +467,7 @@ const base_benchmarks = [_]BenchmarkDef{
     .{ .name = "cochain_scale", .run = benchCochainScale },
     .{ .name = "cochain_negate", .run = benchCochainNegate },
     .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct },
+    .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
 
 const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;

@@ -221,6 +221,14 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseFast,
             .imports = &.{
                 .{ .name = "flux", .module = mod },
+                .{ .name = "maxwell_example", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/maxwell_2d/maxwell.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                    .imports = &.{
+                        .{ .name = "flux", .module = mod },
+                    },
+                }) },
             },
         }),
     });
