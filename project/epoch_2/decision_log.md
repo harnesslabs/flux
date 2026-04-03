@@ -134,3 +134,47 @@ live in `src/integrators/`. The issue suggested `src/operators/` as an alternati
 **Rationale:** Separate directory keeps the spatial/temporal distinction clear and
 gives a natural home for future integrators (backward Euler for #93 heat equation,
 Strang splitting from horizons).
+
+## 2026-04-01: Assembled Laplacian is a standalone operator object, not mesh-owned cache
+
+**Decision:** Represent the pre-assembled scalar Laplacian as an explicit
+operator value in `src/operators/laplacian.zig` with its own lifetime:
+`assemble_primal_0_laplacian(allocator, mesh) -> Primal0Laplacian(MeshType)`.
+The object owns the stiffness matrix `S = D₀ᵀ M₁ D₀` and the diagonal `★₀⁻¹`
+data needed for application.
+
+**Alternatives considered:**
+1. Add a Laplacian cache field directly to `Mesh`: rejected because it pushes
+   solver/operator cache policy into topology ownership, making `Mesh` harder
+   to evolve toward mesh views and alternate operator families.
+2. Hide assembly inside `laplacian(...)` and rebuild every call: rejected
+   because it does not satisfy the issue's repeated-application goal and keeps
+   allocation cost on the hot path.
+
+**Rationale:** A standalone operator object makes ownership explicit, keeps the
+topology layer focused on mesh data, and leaves room for multiple assembled
+operators over the same mesh (scalar Laplacian, vector Laplacian, metric
+variants, solver preconditioners) without mutating mesh state. This is closer
+to the compositional-operator direction in `horizons.md` than embedding caches
+inside the mesh itself.
+
+## 2026-04-02: Assembled operators live in `OperatorContext`, not as standalone public wrappers
+
+**Decision:** Introduce `OperatorContext(MeshType)` as the owner of assembled
+DEC operators for one mesh and one problem. The context exposes
+`withLaplacian(k)` and `laplacian(k)`; the previously-added public Laplacian
+convenience wrappers are removed instead of kept in parallel.
+
+**Alternatives considered:**
+1. Keep standalone public wrappers alongside the context: rejected because it
+   creates two ways to express the same operation, and the one-shot path hides
+   assembly cost in exactly the place hot-loop code should be explicit.
+2. Move caches directly onto `Mesh`: rejected again because topology/geometry
+   ownership and problem-specific operator assembly are different concerns.
+
+**Rationale:** The mesh owns reusable geometric facts; the operator context owns
+only the assembled state actually required by the current system. This keeps the
+API honest about setup cost, avoids parallel interfaces in a pre-release codebase,
+and gives the future PDE/system builder a natural home: the builder requests the
+operators it needs from the context instead of mutating the mesh or relying on
+hidden convenience assembly.

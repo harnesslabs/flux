@@ -22,11 +22,75 @@ const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const conjugate_gradient = @import("../math/cg.zig");
 
+pub fn AssembledHodgeStar(comptime InputType: type) type {
+    comptime validateHodgeStarInput(InputType);
+
+    return struct {
+        const Self = @This();
+
+        mesh: *const InputType.MeshT,
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            _ = self;
+            _ = allocator;
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !HodgeStarResult(InputType) {
+            std.debug.assert(input.mesh == self.mesh);
+            return apply_hodge_star(allocator, input);
+        }
+    };
+}
+
+pub fn AssembledHodgeStarInverse(comptime InputType: type) type {
+    comptime validateHodgeStarInverseInput(InputType);
+
+    return struct {
+        const Self = @This();
+
+        mesh: *const InputType.MeshT,
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            _ = self;
+            _ = allocator;
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !HodgeStarInverseResult(InputType) {
+            std.debug.assert(input.mesh == self.mesh);
+            return apply_hodge_star_inverse(allocator, input);
+        }
+    };
+}
+
+pub fn assemble_for_degree(
+    comptime MeshType: type,
+    comptime primal_degree: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: *const MeshType,
+) !AssembledHodgeStar(cochain.Cochain(MeshType, primal_degree, cochain.Primal)) {
+    _ = allocator;
+    return .{ .mesh = mesh };
+}
+
+pub fn assemble_inverse_for_degree(
+    comptime MeshType: type,
+    comptime primal_degree: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: *const MeshType,
+) !AssembledHodgeStarInverse(cochain.Cochain(
+    MeshType,
+    MeshType.topological_dimension - primal_degree,
+    cochain.Dual,
+)) {
+    _ = allocator;
+    return .{ .mesh = mesh };
+}
+
 /// Apply the Hodge star ★ₖ to a primal k-cochain, returning a dual (n−k)-cochain.
 ///
 /// For k=0 and k=n, this is a diagonal scaling by dual mesh volumes.
 /// For k=1, this applies the Whitney mass matrix M₁ via SpMV.
-pub fn hodge_star(
+pub fn apply_hodge_star(
     allocator: std.mem.Allocator,
     input: anytype,
 ) !HodgeStarResult(@TypeOf(input)) {
@@ -53,7 +117,7 @@ pub fn hodge_star(
 ///
 /// For k=0 and k=n, this is the element-wise reciprocal of the diagonal.
 /// For k=1, this solves M₁ x = b via preconditioned conjugate gradient.
-pub fn hodge_star_inverse(
+pub fn apply_hodge_star_inverse(
     allocator: std.mem.Allocator,
     input: anytype,
 ) !HodgeStarInverseResult(@TypeOf(input)) {
@@ -93,6 +157,20 @@ pub fn hodge_star_inverse(
     }
 
     return output;
+}
+
+pub fn hodge_star(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !HodgeStarResult(@TypeOf(input)) {
+    return apply_hodge_star(allocator, input);
+}
+
+pub fn hodge_star_inverse(
+    allocator: std.mem.Allocator,
+    input: anytype,
+) !HodgeStarInverseResult(@TypeOf(input)) {
+    return apply_hodge_star_inverse(allocator, input);
 }
 
 // ── Return type helpers ──────────────────────────────────────────────────

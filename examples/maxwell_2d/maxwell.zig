@@ -30,8 +30,6 @@ const flux = @import("flux");
 const cochain = flux.forms;
 const topology = flux.topology;
 const sparse = flux.math.sparse;
-const exterior_derivative = flux.operators.exterior_derivative;
-const hodge_star = flux.operators.hodge_star;
 const leapfrog_mod = flux.integrators.leapfrog;
 
 /// Electromagnetic field state on a 2D simplicial mesh.
@@ -60,6 +58,8 @@ pub fn State(comptime MeshType: type) type {
         J: OneForm,
         /// The mesh this state is defined on.
         mesh: *const MeshType,
+        /// Assembled operator owner for this Maxwell system.
+        operators: *flux.OperatorContext(MeshType),
         /// Discrete timestep counter (number of completed leapfrog steps).
         timestep: u64,
 
@@ -74,11 +74,26 @@ pub fn State(comptime MeshType: type) type {
             var J = try OneForm.init(allocator, mesh);
             errdefer J.deinit(allocator);
 
-            return .{ .E = E, .B = B, .J = J, .mesh = mesh, .timestep = 0 };
+            const operators = try flux.OperatorContext(MeshType).init(allocator, mesh);
+            errdefer operators.deinit();
+            try operators.withExteriorDerivative(cochain.Primal, 1);
+            try operators.withExteriorDerivative(cochain.Dual, 0);
+            try operators.withHodgeStar(1);
+            try operators.withHodgeStar(2);
+
+            return .{
+                .E = E,
+                .B = B,
+                .J = J,
+                .mesh = mesh,
+                .operators = operators,
+                .timestep = 0,
+            };
         }
 
         /// Free all field storage.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.operators.deinit();
             self.J.deinit(allocator);
             self.B.deinit(allocator);
             self.E.deinit(allocator);
@@ -99,7 +114,7 @@ pub fn faraday_step(
     state: anytype,
     dt: f64,
 ) !void {
-    var dE = try exterior_derivative.exterior_derivative(allocator, state.E);
+    var dE = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, state.E);
     defer dE.deinit(allocator);
 
     dE.scale(dt);
@@ -127,11 +142,11 @@ pub fn ampere_step(
     dt: f64,
 ) !void {
     // Step 1: ★₂(B) — primal 2-form → dual 0-form.
-    var star_B = try hodge_star.hodge_star(allocator, state.B);
+    var star_B = try state.operators.hodgeStar(2).apply(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // Step 2: d(★₂B) — dual 0-form → dual 1-form.
-    var d_star_B = try exterior_derivative.exterior_derivative(allocator, star_B);
+    var d_star_B = try state.operators.exteriorDerivative(cochain.Dual, 0).apply(allocator, star_B);
     defer d_star_B.deinit(allocator);
 
     // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
@@ -323,11 +338,11 @@ pub fn electromagnetic_energy(
     state: anytype,
 ) !f64 {
     // ★₁(E): primal 1-form → dual 1-form.
-    var star_E = try hodge_star.hodge_star(allocator, state.E);
+    var star_E = try state.operators.hodgeStar(1).apply(allocator, state.E);
     defer star_E.deinit(allocator);
 
     // ★₂(B): primal 2-form → dual 0-form.
-    var star_B = try hodge_star.hodge_star(allocator, state.B);
+    var star_B = try state.operators.hodgeStar(2).apply(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // ⟨E, ★₁E⟩ = Σᵢ Eᵢ · (★₁E)ᵢ
@@ -647,7 +662,7 @@ test "faraday_step is B -= dt * d(E)" {
 
     // Compute expected: B_old - dt * d(E)
     const dt: f64 = 0.025;
-    var dE = try exterior_derivative.exterior_derivative(allocator, state.E);
+    var dE = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, state.E);
     defer dE.deinit(allocator);
 
     const expected_B = try allocator.alloc(f64, state.B.values.len);
@@ -728,11 +743,11 @@ test "ampere_step is E += dt * (★₁⁻¹ d ★₂ B − J)" {
     const dt: f64 = 0.025;
 
     // ★₂(B)
-    var star_B = try hodge_star.hodge_star(allocator, state.B);
+    var star_B = try state.operators.hodgeStar(2).apply(allocator, state.B);
     defer star_B.deinit(allocator);
 
     // d(★₂B)
-    var d_star_B = try exterior_derivative.exterior_derivative(allocator, star_B);
+    var d_star_B = try state.operators.exteriorDerivative(cochain.Dual, 0).apply(allocator, star_B);
     defer d_star_B.deinit(allocator);
 
     // ★₁⁻¹(d(★₂B))
@@ -1397,6 +1412,11 @@ fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_time
 fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_length: f64) !f64 {
     var mesh = try Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
     defer mesh.deinit(allocator);
+    const operator_context = try flux.OperatorContext(Mesh2D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withExteriorDerivative(cochain.Primal, 1);
+    try operator_context.withHodgeStar(1);
+    try operator_context.withHodgeStar(2);
 
     // Project the TE₁₀ E-mode at t = π/(2ω) where sin(ωt) = 1,
     // so E(edge) = sin(πx/L) · dy (maximum amplitude snapshot).
@@ -1405,14 +1425,14 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
     project_te10_e(&mesh, E.values, domain_length / 2.0, domain_length);
 
     // dE (primal 2-form).
-    var dE = try exterior_derivative.exterior_derivative(allocator, E);
+    var dE = try operator_context.exteriorDerivative(cochain.Primal, 1).apply(allocator, E);
     defer dE.deinit(allocator);
 
     // Energy-based Rayleigh quotient: ω² = ⟨dE, ★₂dE⟩ / ⟨E, ★₁E⟩
     // ★₂ is diagonal (exact for faces), ★₁ uses the Whitney mass matrix.
 
     // Numerator: ⟨dE, ★₂dE⟩
-    var star_dE = try hodge_star.hodge_star(allocator, dE);
+    var star_dE = try operator_context.hodgeStar(2).apply(allocator, dE);
     defer star_dE.deinit(allocator);
     var numerator: f64 = 0.0;
     for (dE.values, star_dE.values) |de, sde| {
@@ -1420,7 +1440,7 @@ fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_len
     }
 
     // Denominator: ⟨E, ★₁E⟩ (Whitney mass matrix via hodge_star)
-    var star_E = try hodge_star.hodge_star(allocator, E);
+    var star_E = try operator_context.hodgeStar(1).apply(allocator, E);
     defer star_E.deinit(allocator);
     var denominator: f64 = 0.0;
     for (E.values, star_E.values) |e, se| {

@@ -17,6 +17,7 @@ const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
 const PrimalC1 = flux.Cochain(Mesh2D, 1, flux.Primal);
 const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);
+const OperatorContext2D = flux.OperatorContext(Mesh2D);
 
 // ── Configuration ───────────────────────────────────────────────────────
 
@@ -57,6 +58,7 @@ const BenchmarkContext = struct {
     // Secondary cochains for binary operations.
     c0_other: PrimalC0,
     c1_other: PrimalC1,
+    operator_context: *OperatorContext2D,
 
     fn init(allocator: std.mem.Allocator, mesh: *Mesh2D) !BenchmarkContext {
         var c0 = try PrimalC0.init(allocator, mesh);
@@ -69,6 +71,15 @@ const BenchmarkContext = struct {
         errdefer c0_other.deinit(allocator);
         var c1_other = try PrimalC1.init(allocator, mesh);
         errdefer c1_other.deinit(allocator);
+        const operator_context = try OperatorContext2D.init(allocator, mesh);
+        errdefer operator_context.deinit();
+        try operator_context.withExteriorDerivative(flux.Primal, 0);
+        try operator_context.withExteriorDerivative(flux.Primal, 1);
+        try operator_context.withHodgeStar(0);
+        try operator_context.withHodgeStar(1);
+        try operator_context.withHodgeStar(2);
+        try operator_context.withHodgeStarInverse(1);
+        try operator_context.withLaplacian(0);
 
         // Fill with deterministic pseudo-random values.
         var rng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
@@ -86,10 +97,12 @@ const BenchmarkContext = struct {
             .c2 = c2,
             .c0_other = c0_other,
             .c1_other = c1_other,
+            .operator_context = operator_context,
         };
     }
 
     fn deinit(self: *BenchmarkContext) void {
+        self.operator_context.deinit();
         self.c1_other.deinit(self.allocator);
         self.c0_other.deinit(self.allocator);
         self.c2.deinit(self.allocator);
@@ -118,31 +131,31 @@ fn stdoutWriter() @TypeOf((std.fs.File{ .handle = std.posix.STDOUT_FILENO }).dep
 
 /// d₀: exterior derivative on 0-forms (sparse matrix–vector multiply).
 fn benchExteriorDerivativeD0(ctx: *BenchmarkContext) void {
-    var result = flux.exterior_derivative(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 0).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// d₁: exterior derivative on 1-forms.
 fn benchExteriorDerivativeD1(ctx: *BenchmarkContext) void {
-    var result = flux.exterior_derivative(ctx.allocator, ctx.c1) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 1).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₀: diagonal Hodge star on 0-forms.
 fn benchHodgeStar0(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(0).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₁: Whitney mass matrix SpMV on 1-forms.
 fn benchHodgeStar1(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c1) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(1).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₂: diagonal Hodge star on 2-forms.
 fn benchHodgeStar2(ctx: *BenchmarkContext) void {
-    var result = flux.hodge_star(ctx.allocator, ctx.c2) catch unreachable;
+    var result = ctx.operator_context.hodgeStar(2).apply(ctx.allocator, ctx.c2) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
@@ -154,13 +167,19 @@ fn benchHodgeStarInverse1(ctx: *BenchmarkContext) void {
     var rng = std.Random.DefaultPrng.init(0xDEAD);
     fillRandom(&rng, dual.values);
 
-    var result = flux.hodge_star_inverse(ctx.allocator, dual) catch unreachable;
+    var result = ctx.operator_context.hodgeStarInverse(1).apply(ctx.allocator, dual) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
-/// Δ₀: full Laplacian on 0-forms (d, ★, transpose multiply, ★⁻¹ pipeline).
+/// Δ₀: repeated application via a reused assembled operator.
 fn benchLaplacian0(ctx: *BenchmarkContext) void {
-    var result = flux.laplacian(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.laplacian(0).apply(ctx.allocator, ctx.c0) catch unreachable;
+    result.deinit(ctx.allocator);
+}
+
+/// Δ₀: reference composed path without stored assembly.
+fn benchLaplacian0Composed(ctx: *BenchmarkContext) void {
+    var result = flux.operators.laplacian.laplacian_composed(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
@@ -192,6 +211,7 @@ const all_benchmarks = [_]BenchmarkDef{
     .{ .name = "hodge_star_2", .run = benchHodgeStar2 },
     .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1 },
     .{ .name = "laplacian_0", .run = benchLaplacian0 },
+    .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed },
     .{ .name = "cochain_add", .run = benchCochainAdd },
     .{ .name = "cochain_scale", .run = benchCochainScale },
     .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct },

@@ -12,13 +12,15 @@
 //!
 //! // Build a mesh
 //! var mesh = try flux.Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+//! const operators = try flux.OperatorContext(flux.Mesh(2, 2)).init(allocator, &mesh);
+//! defer operators.deinit();
+//! try operators.withExteriorDerivative(flux.Primal, 0);
 //!
 //! // Create a 0-cochain (scalar field on vertices)
 //! var omega = try flux.Cochain(flux.Mesh(2, 2), 0, flux.Primal).init(allocator, &mesh);
 //!
 //! // Apply operators with compile-time type safety
-//! var d_omega = try flux.exterior_derivative(allocator, omega);
-//! var star_d  = try flux.hodge_star(allocator, d_omega);
+//! var d_omega = try operators.exteriorDerivative(flux.Primal, 0).apply(allocator, omega);
 //! ```
 //!
 //! ## Modules
@@ -53,7 +55,9 @@ pub const math = struct {
     pub const cg = @import("math/cg.zig");
 };
 pub const operators = struct {
+    pub const codifferential = @import("operators/codifferential.zig");
     pub const compose = @import("operators/compose.zig");
+    pub const context = @import("operators/context.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
@@ -113,21 +117,8 @@ pub const Vertex = topology.Vertex;
 /// Standalone k-simplex record type constructor for a given mesh shape.
 pub const Simplex = topology.Simplex;
 
-/// Exterior derivative dₖ: Ωᵏ → Ωᵏ⁺¹. Maps k-cochains to (k+1)-cochains
-/// via the coboundary operator. Works on both primal and dual cochains.
-pub const exterior_derivative = operators.exterior_derivative.exterior_derivative;
-
-/// Hodge star ★ₖ: primal Ωᵏ → dual Ωⁿ⁻ᵏ. Diagonal for k=0,n; Whitney
-/// mass matrix (SpMV) for 0 < k < n.
-pub const hodge_star = operators.hodge_star.hodge_star;
-
-/// Inverse Hodge star ★⁻¹: dual Ωⁿ⁻ᵏ → primal Ωᵏ. Diagonal for k=0,n;
-/// preconditioned CG solve for 0 < k < n.
-pub const hodge_star_inverse = operators.hodge_star.hodge_star_inverse;
-
-/// Hodge Laplacian Δₖ = dδ + δd on primal k-cochains. Self-adjoint,
-/// positive-semidefinite on 0-forms.
-pub const laplacian = operators.laplacian.laplacian;
+/// Per-mesh owner of assembled DEC operators requested by a given problem.
+pub const OperatorContext = operators.context.OperatorContext;
 
 /// Apply a sequence of DEC operators with automatic intermediate allocation
 /// management. Degree/duality mismatches are compile errors.

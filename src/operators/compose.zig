@@ -169,11 +169,15 @@ test "codifferential δ₁ via chain matches manual ★⁻¹ ∘ d ∘ ★" {
 
 test "δd via chain matches laplacian on 0-forms" {
     // Δ₀ = δd = ★⁻¹ ∘ d ∘ ★ ∘ d (dδ vanishes for k=0).
-    // Verify the chain produces the same result as the laplacian module.
-    const laplacian_mod = @import("laplacian.zig");
+    // Verify the chain produces the same result as the assembled context path.
+    const context_mod = @import("context.zig");
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
+
+    const operator_context = try context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withLaplacian(0);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_C049);
 
@@ -182,8 +186,8 @@ test "δd via chain matches laplacian on 0-forms" {
         defer omega.deinit(allocator);
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-        // Via laplacian module
-        var lap = try laplacian_mod.laplacian(allocator, omega);
+        // Via assembled operator context
+        var lap = try operator_context.laplacian(0).apply(allocator, omega);
         defer lap.deinit(allocator);
 
         // Via chain: d → ★ → d̃ → ★⁻¹ (which is ★⁻¹ ∘ d̃ ∘ ★ ∘ d = δd)
