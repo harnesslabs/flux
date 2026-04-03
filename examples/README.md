@@ -3,6 +3,8 @@
 2D electromagnetic simulations demonstrating the flux Maxwell solver on
 triangulated PEC cavities.
 
+![TE10 cavity animation](../assets/cavity-512-grid-10000-steps.png)
+
 ---
 
 ## Quick start
@@ -20,12 +22,13 @@ materially slower on larger grids.
 Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-sh/uv)):
 
 ```sh
-uv run tools/visualize.py output --field B_flux --output animation.gif
 uv run tools/visualize.py output --field B_flux --output animation.png
+uv run tools/visualize.py output --field B_flux --output animation.gif
 ```
 
-Use `.gif` for broad compatibility. Use `.png` or `.apng` for APNG output with
-full color; GIF is limited to a 256-color palette and will show more banding.
+APNG is now the default recommendation because it preserves full color. Use
+`.gif` only when you specifically need GIF compatibility; GIF is limited to a
+256-color palette and will show more banding.
 
 ---
 
@@ -87,10 +90,10 @@ steps per period.
 
 ## Visualization tools
 
-### tools/visualize.py — animated GIF
+### tools/visualize.py — animated APNG/GIF
 
-Parses VTK `.vtu` files and renders an animated GIF with matplotlib. No
-ParaView needed — `uv` handles dependencies automatically.
+Parses VTK `.vtu` files and renders an animation with matplotlib. No ParaView
+needed — `uv` handles dependencies automatically.
 
 ```sh
 uv run tools/visualize.py <input_dir> [options]
@@ -99,7 +102,7 @@ uv run tools/visualize.py <input_dir> [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--field` | `B_flux` | Which CellData array to plot |
-| `--output` | `<dir>/animation.gif` | Output animation path; `.gif` writes GIF, `.png`/`.apng` writes full-color APNG |
+| `--output` | `<dir>/animation.png` | Output animation path; `.png`/`.apng` writes full-color APNG, `.gif` writes palette-limited GIF |
 | `--fps` | 12 | Frames per second |
 
 Available fields:

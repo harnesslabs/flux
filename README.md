@@ -6,6 +6,8 @@ The central abstraction is the **operator on a function space**: a map between t
 
 See [`project/vision.md`](project/vision.md) for the full design philosophy.
 
+![TE10 cavity animation](assets/cavity-512-grid-10000-steps.png)
+
 ## Status
 
 Early development. See [Projects](https://github.com/harnesslabs/flux/projects) for the current epoch roadmap.
@@ -43,6 +45,12 @@ zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
 ```
 
 The example includes 40 integration tests covering Whitney ★₁ convergence (O(h²) verified), TE₁₀ eigenvalue accuracy, energy conservation over hundreds of timesteps, and PEC boundary correctness.
+
+Generate a polished full-color animation with:
+
+```sh
+uv run tools/visualize.py output --field B_flux --output animation.png
+```
 
 ---
 

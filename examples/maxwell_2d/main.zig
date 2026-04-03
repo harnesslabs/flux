@@ -539,7 +539,7 @@ fn printUsage() void {
         \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --grid 16 --courant 0.2
         \\
         \\  visualization:
-        \\    uv run tools/visualize.py output --field B_flux --output anim.gif
+        \\    uv run tools/visualize.py output --field B_flux --output animation.png
         \\
     , .{});
 }

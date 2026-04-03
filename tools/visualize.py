@@ -133,7 +133,7 @@ def main():
     parser.add_argument("--field", default="B_flux",
                         help="CellData field to plot (default: B_flux)")
     parser.add_argument("--output", default=None,
-                        help="Output animation path (default: <input_dir>/animation.gif; use .png or .apng for full-color APNG)")
+                        help="Output animation path (default: <input_dir>/animation.png; use .gif for palette-limited GIF)")
     parser.add_argument("--fps", type=int, default=12, help="Frames per second")
     args = parser.parse_args()
 
@@ -175,7 +175,7 @@ def main():
         frames.append(img)
 
     # Save animation.
-    output_path = args.output or str(Path(args.input_dir) / "animation.gif")
+    output_path = args.output or str(Path(args.input_dir) / "animation.png")
     save_animation(frames, output_path, args.fps)
     fmt = output_format(output_path)
     if fmt == "gif":
