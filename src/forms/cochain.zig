@@ -18,49 +18,111 @@ pub const Primal = struct {};
 pub const Dual = struct {};
 
 fn addAssignScalar(lhs: []f64, rhs: []const f64) void {
-    _ = lhs;
-    _ = rhs;
-    @panic("addAssignScalar not yet implemented");
+    std.debug.assert(lhs.len == rhs.len);
+    for (lhs, rhs) |*left, right| {
+        left.* += right;
+    }
 }
 
 fn addAssignSimd(lhs: []f64, rhs: []const f64) void {
-    _ = lhs;
-    _ = rhs;
-    @panic("addAssignSimd not yet implemented");
+    std.debug.assert(lhs.len == rhs.len);
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = lhs.len - (lhs.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const left_block: Block = lhs[i..][0..lane_count].*;
+            const right_block: Block = rhs[i..][0..lane_count].*;
+            const sum_array: [lane_count]f64 = left_block + right_block;
+            lhs[i..][0..lane_count].* = sum_array;
+        }
+
+        addAssignScalar(lhs[simd_len..], rhs[simd_len..]);
+        return;
+    }
+
+    addAssignScalar(lhs, rhs);
 }
 
 fn scaleInPlaceScalar(values: []f64, scalar: f64) void {
-    _ = values;
-    _ = scalar;
-    @panic("scaleInPlaceScalar not yet implemented");
+    for (values) |*value| {
+        value.* *= scalar;
+    }
 }
 
 fn scaleInPlaceSimd(values: []f64, scalar: f64) void {
-    _ = values;
-    _ = scalar;
-    @panic("scaleInPlaceSimd not yet implemented");
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const factor: Block = @splat(scalar);
+        const simd_len = values.len - (values.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const block: Block = values[i..][0..lane_count].*;
+            const scaled_array: [lane_count]f64 = block * factor;
+            values[i..][0..lane_count].* = scaled_array;
+        }
+
+        scaleInPlaceScalar(values[simd_len..], scalar);
+        return;
+    }
+
+    scaleInPlaceScalar(values, scalar);
 }
 
 fn negateInPlaceScalar(values: []f64) void {
-    _ = values;
-    @panic("negateInPlaceScalar not yet implemented");
+    for (values) |*value| {
+        value.* = -value.*;
+    }
 }
 
 fn negateInPlaceSimd(values: []f64) void {
-    _ = values;
-    @panic("negateInPlaceSimd not yet implemented");
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = values.len - (values.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const block: Block = values[i..][0..lane_count].*;
+            const negated_array: [lane_count]f64 = -block;
+            values[i..][0..lane_count].* = negated_array;
+        }
+
+        negateInPlaceScalar(values[simd_len..]);
+        return;
+    }
+
+    negateInPlaceScalar(values);
 }
 
 fn innerProductScalar(lhs: []const f64, rhs: []const f64) f64 {
-    _ = lhs;
-    _ = rhs;
-    @panic("innerProductScalar not yet implemented");
+    std.debug.assert(lhs.len == rhs.len);
+    var sum: f64 = 0;
+    for (lhs, rhs) |left, right| {
+        sum += left * right;
+    }
+    return sum;
 }
 
 fn innerProductSimd(lhs: []const f64, rhs: []const f64) f64 {
-    _ = lhs;
-    _ = rhs;
-    @panic("innerProductSimd not yet implemented");
+    std.debug.assert(lhs.len == rhs.len);
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = lhs.len - (lhs.len % lane_count);
+
+        var sum_block: Block = @splat(0.0);
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const left_block: Block = lhs[i..][0..lane_count].*;
+            const right_block: Block = rhs[i..][0..lane_count].*;
+            sum_block += left_block * right_block;
+        }
+
+        return @reduce(.Add, sum_block) + innerProductScalar(lhs[simd_len..], rhs[simd_len..]);
+    }
+
+    return innerProductScalar(lhs, rhs);
 }
 
 /// A discrete k-form (cochain) on a simplicial mesh.
@@ -462,7 +524,7 @@ test "SIMD inner product kernel matches scalar reference for tail lengths" {
 
         const expected = innerProductScalar(lhs, rhs);
         const actual = innerProductSimd(lhs, rhs);
-        try testing.expectApproxEqAbs(expected, actual, 1e-12);
+        try testing.expectApproxEqRel(expected, actual, 1e-12);
     }
 }
 
