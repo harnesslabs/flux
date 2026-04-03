@@ -59,7 +59,7 @@ pub fn State(comptime MeshType: type) type {
         /// The mesh this state is defined on.
         mesh: *const MeshType,
         /// Assembled operator owner for this Maxwell system.
-        operators: flux.OperatorContext(MeshType),
+        operators: *flux.OperatorContext(MeshType),
         /// Discrete timestep counter (number of completed leapfrog steps).
         timestep: u64,
 
@@ -74,7 +74,7 @@ pub fn State(comptime MeshType: type) type {
             var J = try OneForm.init(allocator, mesh);
             errdefer J.deinit(allocator);
 
-            var operators = flux.OperatorContext(MeshType).init(allocator, mesh);
+            const operators = try flux.OperatorContext(MeshType).init(allocator, mesh);
             errdefer operators.deinit();
             try operators.withExteriorDerivative(cochain.Primal, 1);
             try operators.withExteriorDerivative(cochain.Dual, 0);
@@ -1412,7 +1412,7 @@ fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_time
 fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_length: f64) !f64 {
     var mesh = try Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
     defer mesh.deinit(allocator);
-    var operator_context = flux.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try flux.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withExteriorDerivative(cochain.Primal, 1);
     try operator_context.withHodgeStar(1);

@@ -175,7 +175,7 @@ test "δd via chain matches laplacian on 0-forms" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var operator_context = context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 

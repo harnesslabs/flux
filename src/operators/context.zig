@@ -4,7 +4,9 @@
 //! only the assembled operator state actually requested by a given problem.
 
 const std = @import("std");
+const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
+const topology = @import("../topology/mesh.zig");
 const codifferential_mod = @import("codifferential.zig");
 const exterior_derivative_mod = @import("exterior_derivative.zig");
 const hodge_star_mod = @import("hodge_star.zig");
@@ -87,8 +89,8 @@ fn CodifferentialSlotsType(comptime MeshType: type) type {
 
 /// Per-mesh owner of assembled DEC operators.
 ///
-/// The context is the explicit efficient path: callers request only the
-/// operators they need, then reuse them for repeated application.
+/// The public API is a heap-allocated handle so downstream structs can store a
+/// pointer rather than duplicating ownership by value.
 pub fn OperatorContext(comptime MeshType: type) type {
     const LaplacianSlots = LaplacianSlotsType(MeshType);
     const ExteriorDerivativePrimalSlots = ExteriorDerivativeSlotsType(MeshType, cochain.Primal);
@@ -109,8 +111,11 @@ pub fn OperatorContext(comptime MeshType: type) type {
         codifferentials: CodifferentialSlots,
         laplacians: LaplacianSlots,
 
-        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) Self {
-            return .{
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !*Self {
+            const self = try allocator.create(Self);
+            errdefer allocator.destroy(self);
+
+            self.* = .{
                 .allocator = allocator,
                 .mesh = mesh,
                 .exterior_derivative_primal = std.mem.zeroes(ExteriorDerivativePrimalSlots),
@@ -120,6 +125,7 @@ pub fn OperatorContext(comptime MeshType: type) type {
                 .codifferentials = std.mem.zeroes(CodifferentialSlots),
                 .laplacians = std.mem.zeroes(LaplacianSlots),
             };
+            return self;
         }
 
         pub fn deinit(self: *Self) void {
@@ -135,10 +141,9 @@ pub fn OperatorContext(comptime MeshType: type) type {
                 if (self.codifferentials[k]) |*op| op.deinit(self.allocator);
             }
             inline for (0..MeshType.topological_dimension + 1) |k| {
-                if (self.laplacians[k]) |*op| {
-                    op.deinit(self.allocator);
-                }
+                if (self.laplacians[k]) |*op| op.deinit(self.allocator);
             }
+            self.allocator.destroy(self);
         }
 
         pub fn withExteriorDerivative(self: *Self, comptime Duality: type, comptime k: comptime_int) !void {
@@ -313,4 +318,33 @@ pub fn OperatorContext(comptime MeshType: type) type {
             return &self.laplacians[k].?;
         }
     };
+}
+
+const Mesh2D = topology.Mesh(2, 2);
+
+test "OperatorContext deinit releases assembled operator storage" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    {
+        var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+        defer mesh.deinit(allocator);
+
+        const operator_context = try OperatorContext(Mesh2D).init(allocator, &mesh);
+        defer operator_context.deinit();
+
+        try operator_context.withExteriorDerivative(cochain.Primal, 0);
+        try operator_context.withExteriorDerivative(cochain.Primal, 1);
+        try operator_context.withExteriorDerivative(cochain.Dual, 0);
+        try operator_context.withHodgeStar(0);
+        try operator_context.withHodgeStar(1);
+        try operator_context.withHodgeStar(2);
+        try operator_context.withHodgeStarInverse(1);
+        try operator_context.withCodifferential(1);
+        try operator_context.withLaplacian(0);
+        try operator_context.withLaplacian(1);
+        try operator_context.withLaplacian(2);
+    }
+
+    try testing.expect(gpa.deinit() == .ok);
 }

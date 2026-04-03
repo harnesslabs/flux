@@ -12,7 +12,7 @@
 //!
 //! // Build a mesh
 //! var mesh = try flux.Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
-//! var operators = flux.OperatorContext(flux.Mesh(2, 2)).init(allocator, &mesh);
+//! const operators = try flux.OperatorContext(flux.Mesh(2, 2)).init(allocator, &mesh);
 //! defer operators.deinit();
 //! try operators.withExteriorDerivative(flux.Primal, 0);
 //!

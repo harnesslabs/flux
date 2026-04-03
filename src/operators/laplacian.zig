@@ -241,7 +241,7 @@ test "Δ₀ of constant 0-form is zero" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -266,7 +266,7 @@ test "Δ₀ of linear function f(x,y) = x is zero at interior vertices" {
     const ny: u32 = 4;
     var mesh = try Mesh2D.uniform_grid(allocator, nx, ny, 3.0, 2.0);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -294,7 +294,7 @@ test "Δ₀ is positive-semidefinite on random 0-forms (1000 trials)" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -324,7 +324,7 @@ test "Δ₀ is symmetric in ★₀-weighted inner product (1000 trials)" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -362,7 +362,7 @@ test "Δ₀ kernel is exactly the constant functions on connected mesh" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -391,7 +391,7 @@ test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
     var omega = try PrimalC0.init(allocator, &mesh);
     defer omega.deinit(allocator);
 
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -420,7 +420,7 @@ test "assembled Δ₀ apply is stable across repeated applications" {
     var omega = try PrimalC0.init(allocator, &mesh);
     defer omega.deinit(allocator);
 
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(0);
 
@@ -458,7 +458,7 @@ test "Δ₁ of exact 1-form d₀f has dδ component zero" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(1);
 
@@ -480,7 +480,7 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(1);
 
@@ -513,7 +513,7 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
 
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(1);
 
@@ -570,7 +570,7 @@ test "Δ₂ of constant 2-form: ⟨Δ₂c, c⟩_★₂ ≥ 0" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(2);
 
@@ -596,7 +596,7 @@ test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(2);
 
@@ -625,7 +625,7 @@ test "Δ₂ is symmetric in ★₂-weighted inner product (500 trials)" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
-    var operator_context = context.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withLaplacian(2);
 

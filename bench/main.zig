@@ -58,7 +58,7 @@ const BenchmarkContext = struct {
     // Secondary cochains for binary operations.
     c0_other: PrimalC0,
     c1_other: PrimalC1,
-    operator_context: OperatorContext2D,
+    operator_context: *OperatorContext2D,
 
     fn init(allocator: std.mem.Allocator, mesh: *Mesh2D) !BenchmarkContext {
         var c0 = try PrimalC0.init(allocator, mesh);
@@ -71,7 +71,7 @@ const BenchmarkContext = struct {
         errdefer c0_other.deinit(allocator);
         var c1_other = try PrimalC1.init(allocator, mesh);
         errdefer c1_other.deinit(allocator);
-        var operator_context = OperatorContext2D.init(allocator, mesh);
+        const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
         try operator_context.withExteriorDerivative(flux.Primal, 0);
         try operator_context.withExteriorDerivative(flux.Primal, 1);

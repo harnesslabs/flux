@@ -942,7 +942,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
         var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
-        var operator_context = context_mod.OperatorContext(Mesh(2, 2)).init(allocator, &mesh);
+        const operator_context = try context_mod.OperatorContext(Mesh(2, 2)).init(allocator, &mesh);
         defer operator_context.deinit();
         try operator_context.withLaplacian(0);
 
