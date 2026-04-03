@@ -13,7 +13,10 @@
 const std = @import("std");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
+/// Version of the benchmark result file schema.
 const benchmark_suite_version: u32 = 2;
+/// Version for microbenchmarks whose timing method changed after batching.
+const small_cochain_method_version: u32 = 2;
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -68,10 +71,12 @@ const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
     repetitions: u32 = 1,
+    version: u32 = 1,
 };
 
 const BenchmarkResult = struct {
     name: []const u8,
+    version: u32,
     median_ns: u64,
     min_ns: u64,
     max_ns: u64,
@@ -466,10 +471,30 @@ const base_benchmarks = [_]BenchmarkDef{
     .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1 },
     .{ .name = "laplacian_0", .run = benchLaplacian0 },
     .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed },
-    .{ .name = "cochain_add", .run = benchCochainAdd, .repetitions = small_cochain_repetitions },
-    .{ .name = "cochain_scale", .run = benchCochainScale, .repetitions = small_cochain_repetitions },
-    .{ .name = "cochain_negate", .run = benchCochainNegate, .repetitions = small_cochain_repetitions },
-    .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct, .repetitions = small_cochain_repetitions },
+    .{
+        .name = "cochain_add",
+        .run = benchCochainAdd,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_scale",
+        .run = benchCochainScale,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_negate",
+        .run = benchCochainNegate,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_inner_product",
+        .run = benchCochainInnerProduct,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
 
@@ -500,6 +525,7 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
 
     return .{
         .name = def.name,
+        .version = def.version,
         .median_ns = timings[measured_iterations / 2],
         .min_ns = timings[0],
         .max_ns = timings[measured_iterations - 1],
@@ -511,6 +537,7 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
 
 const Baseline = struct {
     name: []const u8,
+    version: u32 = 1,
     median_ns: u64,
 };
 
@@ -548,7 +575,10 @@ fn writeBaselines(results: []const BenchmarkResult) !void {
     try writer.writeAll("  \"benchmarks\": [\n");
 
     for (results, 0..) |r, i| {
-        try writer.print("    {{\"name\": \"{s}\", \"median_ns\": {d}}}", .{ r.name, r.median_ns });
+        try writer.print(
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}}}",
+            .{ r.name, r.version, r.median_ns },
+        );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
         } else {
@@ -587,7 +617,7 @@ fn printTable(
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
 
     for (results) |r| {
-        const baseline_ns = if (baselines) |bl| findBaseline(bl, r.name) else null;
+        const baseline = if (baselines) |bl| findBaseline(bl, r.name) else null;
 
         try writer.print("  {s:<30} ", .{r.name});
         try printDuration(writer, r.median_ns);
@@ -596,17 +626,21 @@ fn printTable(
         try writer.writeAll("  ");
         try printDuration(writer, r.max_ns);
 
-        if (baseline_ns) |base| {
-            const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base));
-            const pct = (ratio - 1.0) * 100.0;
-            if (pct > regression_threshold * 100.0) {
-                try writer.print("  +{d:.1}% REGRESSED", .{pct});
-            } else if (pct < -5.0) {
-                try writer.print("  {d:.1}% faster", .{-pct});
-            } else if (pct >= 0) {
-                try writer.print("  +{d:.1}%", .{pct});
+        if (baseline) |base| {
+            if (base.version != r.version) {
+                try writer.print("  method v{d}→v{d}", .{ base.version, r.version });
             } else {
-                try writer.print("  {d:.1}%", .{pct});
+                const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
+                const pct = (ratio - 1.0) * 100.0;
+                if (pct > regression_threshold * 100.0) {
+                    try writer.print("  +{d:.1}% REGRESSED", .{pct});
+                } else if (pct < -5.0) {
+                    try writer.print("  {d:.1}% faster", .{-pct});
+                } else if (pct >= 0) {
+                    try writer.print("  +{d:.1}%", .{pct});
+                } else {
+                    try writer.print("  {d:.1}%", .{pct});
+                }
             }
         }
 
@@ -675,8 +709,8 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
-            .{ r.name, r.median_ns, r.min_ns, r.max_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
+            .{ r.name, r.version, r.median_ns, r.min_ns, r.max_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -689,9 +723,9 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.writeAll("}\n");
 }
 
-fn findBaseline(baselines: []const Baseline, name: []const u8) ?u64 {
+fn findBaseline(baselines: []const Baseline, name: []const u8) ?Baseline {
     for (baselines) |b| {
-        if (std.mem.eql(u8, b.name, name)) return b.median_ns;
+        if (std.mem.eql(u8, b.name, name)) return b;
     }
     return null;
 }
@@ -702,12 +736,13 @@ fn checkRegressions(results: []const BenchmarkResult, baselines: []const Baselin
 
     for (results) |r| {
         const base = findBaseline(baselines, r.name) orelse continue;
-        const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base));
+        if (base.version != r.version) continue;
+        const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
         if (ratio > 1.0 + regression_threshold) {
             stderr.print("  REGRESSION: {s} — {d:.1}% slower (baseline: ", .{
                 r.name, (ratio - 1.0) * 100.0,
             }) catch {};
-            printDuration(stderr, base) catch {};
+            printDuration(stderr, base.median_ns) catch {};
             stderr.writeAll(", current: ") catch {};
             printDuration(stderr, r.median_ns) catch {};
             stderr.writeAll(")\n") catch {};
@@ -782,12 +817,7 @@ pub fn main() !void {
     // Check for regressions if requested.
     if (check_mode) {
         if (baseline_list) |bl| {
-            if (parsed_baselines.?.value.suite_version != benchmark_suite_version) {
-                try stderr.print(
-                    "  SKIP: benchmark suite version mismatch (baseline {d}, current {d})\n\n",
-                    .{ parsed_baselines.?.value.suite_version, benchmark_suite_version },
-                );
-            } else if (checkRegressions(&results, bl)) {
+            if (checkRegressions(&results, bl)) {
                 try stderr.print("  FAIL: one or more benchmarks regressed >{d:.0}%\n\n", .{regression_threshold * 100.0});
                 std.process.exit(1);
             } else {
