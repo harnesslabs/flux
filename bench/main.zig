@@ -55,6 +55,7 @@ const arithmetic_case_labels = [_][]const u8{ "1k", "16k", "128k" };
 const cavity_grid: u32 = 256;
 const cavity_domain: f64 = 1.0;
 const cavity_courant: f64 = 0.1;
+const small_cochain_repetitions: u32 = 64;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -65,6 +66,7 @@ const BenchmarkFn = *const fn (*BenchmarkContext) void;
 const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
+    repetitions: u32 = 1,
 };
 
 const BenchmarkResult = struct {
@@ -463,10 +465,10 @@ const base_benchmarks = [_]BenchmarkDef{
     .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1 },
     .{ .name = "laplacian_0", .run = benchLaplacian0 },
     .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed },
-    .{ .name = "cochain_add", .run = benchCochainAdd },
-    .{ .name = "cochain_scale", .run = benchCochainScale },
-    .{ .name = "cochain_negate", .run = benchCochainNegate },
-    .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct },
+    .{ .name = "cochain_add", .run = benchCochainAdd, .repetitions = small_cochain_repetitions },
+    .{ .name = "cochain_scale", .run = benchCochainScale, .repetitions = small_cochain_repetitions },
+    .{ .name = "cochain_negate", .run = benchCochainNegate, .repetitions = small_cochain_repetitions },
+    .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct, .repetitions = small_cochain_repetitions },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
 
@@ -477,15 +479,19 @@ const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;
 fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     // Warmup — let branch predictors and caches settle.
     for (0..warmup_iterations) |_| {
-        def.run(ctx);
+        for (0..def.repetitions) |_| {
+            def.run(ctx);
+        }
     }
 
     // Measured iterations.
     var timings: [measured_iterations]u64 = undefined;
     for (&timings) |*t| {
         var timer = std.time.Timer.start() catch unreachable;
-        def.run(ctx);
-        t.* = timer.read();
+        for (0..def.repetitions) |_| {
+            def.run(ctx);
+        }
+        t.* = @divFloor(timer.read(), def.repetitions);
     }
 
     // Sort for median/min/max.
