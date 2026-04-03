@@ -7,16 +7,25 @@ triangulated PEC cavities.
 
 ## Quick start
 
+For realistic throughput numbers, run the example in `ReleaseFast`:
+
 ```sh
-zig build run                     # run default dipole simulation
-zig build run -- --help           # see all options
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
 ```
+
+The default `zig build` mode is `Debug`, which is useful for development but
+materially slower on larger grids.
 
 Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-sh/uv)):
 
 ```sh
 uv run tools/visualize.py output --field B_flux --output animation.gif
+uv run tools/visualize.py output --field B_flux --output animation.png
 ```
+
+Use `.gif` for broad compatibility. Use `.png` or `.apng` for APNG output with
+full color; GIF is limited to a 256-color palette and will show more banding.
 
 ---
 
@@ -24,8 +33,8 @@ uv run tools/visualize.py output --field B_flux --output animation.gif
 
 | Demo | What it does | Example |
 |------|-------------|---------|
-| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build run` |
-| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build run -- --demo cavity` |
+| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole` |
+| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity` |
 
 ---
 
@@ -90,7 +99,7 @@ uv run tools/visualize.py <input_dir> [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--field` | `B_flux` | Which CellData array to plot |
-| `--output` | `<dir>/animation.gif` | Output GIF path |
+| `--output` | `<dir>/animation.gif` | Output animation path; `.gif` writes GIF, `.png`/`.apng` writes full-color APNG |
 | `--fps` | 12 | Frames per second |
 
 Available fields:

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Visualize flux VTK output as an animated GIF.
+"""Visualize flux VTK output as an animation.
 
 Usage:
     uv run tools/visualize.py /tmp/flux-cavity
     uv run tools/visualize.py /tmp/flux-dipole --field B_flux
     uv run tools/visualize.py /tmp/flux-cavity --output cavity.gif --fps 15
+    uv run tools/visualize.py /tmp/flux-cavity --output cavity.png
 """
 # /// script
 # requires-python = ">=3.10"
@@ -89,13 +90,50 @@ def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
     return Image.open(buf).copy()
 
 
+def output_format(output_path: str) -> str:
+    """Infer animation format from the output filename."""
+    suffix = Path(output_path).suffix.lower()
+    if suffix == ".gif":
+        return "gif"
+    if suffix in {".png", ".apng"}:
+        return "apng"
+    raise ValueError(
+        f"Unsupported output extension '{suffix}'. Use .gif for GIF or .png/.apng for APNG."
+    )
+
+
+def save_animation(frames: list[Image.Image], output_path: str, fps: int) -> None:
+    """Save frames as either GIF or APNG."""
+    duration_ms = int(1000 / fps)
+    fmt = output_format(output_path)
+
+    if fmt == "gif":
+        frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=duration_ms,
+            loop=0,
+        )
+        return
+
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration_ms,
+        loop=0,
+        format="PNG",
+    )
+
+
 def main():
-    parser = argparse.ArgumentParser(description="Visualize flux VTK output as GIF")
+    parser = argparse.ArgumentParser(description="Visualize flux VTK output as GIF or APNG")
     parser.add_argument("input_dir", help="Directory containing .vtu files")
     parser.add_argument("--field", default="B_flux",
                         help="CellData field to plot (default: B_flux)")
     parser.add_argument("--output", default=None,
-                        help="Output GIF path (default: <input_dir>/animation.gif)")
+                        help="Output animation path (default: <input_dir>/animation.gif; use .png or .apng for full-color APNG)")
     parser.add_argument("--fps", type=int, default=12, help="Frames per second")
     args = parser.parse_args()
 
@@ -136,12 +174,18 @@ def main():
         img = render_frame(data, args.field, -vabs, vabs, i + 1, len(vtu_files))
         frames.append(img)
 
-    # Save GIF.
+    # Save animation.
     output_path = args.output or str(Path(args.input_dir) / "animation.gif")
-    duration_ms = int(1000 / args.fps)
-    frames[0].save(output_path, save_all=True, append_images=frames[1:],
-                   duration=duration_ms, loop=0)
-    print(f"\nSaved {output_path} ({len(frames)} frames, {args.fps} fps)")
+    save_animation(frames, output_path, args.fps)
+    fmt = output_format(output_path)
+    if fmt == "gif":
+        print("\nSaved {path} ({frames} frames, {fps} fps, GIF palette up to 256 colors)".format(
+            path=output_path, frames=len(frames), fps=args.fps
+        ))
+    else:
+        print("\nSaved {path} ({frames} frames, {fps} fps, full-color APNG)".format(
+            path=output_path, frames=len(frames), fps=args.fps
+        ))
 
 
 if __name__ == "__main__":
