@@ -65,4 +65,9 @@ Date: YYYY-MM-DD
 
 All findings should be filed as issues, not auto-fixed. Performance changes require benchmarking to verify improvement, which means they need their own PR with before/after measurements.
 
+Benchmark hygiene is part of the audit:
+- Flag apples-to-oranges comparisons where a benchmark method changed without a per-benchmark `version` bump.
+- Flag unnecessary whole-suite invalidation when only one benchmark row changed methodology.
+- Prefer durable evidence: unchanged benchmark rows for base-vs-PR comparisons, plus same-run comparison benchmarks when a new benchmark is introduced.
+
 Ask the user which findings warrant issues.
