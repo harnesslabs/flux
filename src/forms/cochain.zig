@@ -17,6 +17,52 @@ pub const Primal = struct {};
 /// compile time via these marker types.
 pub const Dual = struct {};
 
+fn addAssignScalar(lhs: []f64, rhs: []const f64) void {
+    _ = lhs;
+    _ = rhs;
+    @panic("addAssignScalar not yet implemented");
+}
+
+fn addAssignSimd(lhs: []f64, rhs: []const f64) void {
+    _ = lhs;
+    _ = rhs;
+    @panic("addAssignSimd not yet implemented");
+}
+
+fn scaleInPlaceScalar(values: []f64, scalar: f64) void {
+    _ = values;
+    _ = scalar;
+    @panic("scaleInPlaceScalar not yet implemented");
+}
+
+fn scaleInPlaceSimd(values: []f64, scalar: f64) void {
+    _ = values;
+    _ = scalar;
+    @panic("scaleInPlaceSimd not yet implemented");
+}
+
+fn negateInPlaceScalar(values: []f64) void {
+    _ = values;
+    @panic("negateInPlaceScalar not yet implemented");
+}
+
+fn negateInPlaceSimd(values: []f64) void {
+    _ = values;
+    @panic("negateInPlaceSimd not yet implemented");
+}
+
+fn innerProductScalar(lhs: []const f64, rhs: []const f64) f64 {
+    _ = lhs;
+    _ = rhs;
+    @panic("innerProductScalar not yet implemented");
+}
+
+fn innerProductSimd(lhs: []const f64, rhs: []const f64) f64 {
+    _ = lhs;
+    _ = rhs;
+    @panic("innerProductSimd not yet implemented");
+}
+
 /// A discrete k-form (cochain) on a simplicial mesh.
 ///
 /// In DEC, a k-cochain assigns a real value to every k-cell of the mesh:
@@ -97,9 +143,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         /// Pointwise addition: self += other.
         pub fn add(self: *Self, other: Self) void {
             std.debug.assert(self.values.len == other.values.len);
-            for (self.values, other.values) |*a, b| {
-                a.* += b;
-            }
+            addAssignSimd(self.values, other.values);
         }
 
         /// Pointwise subtraction: self -= other.
@@ -112,16 +156,12 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
 
         /// Scalar multiplication: self *= scalar.
         pub fn scale(self: *Self, scalar: f64) void {
-            for (self.values) |*v| {
-                v.* *= scalar;
-            }
+            scaleInPlaceSimd(self.values, scalar);
         }
 
         /// Negate all coefficients in place: self = -self.
         pub fn negate(self: *Self) void {
-            for (self.values) |*v| {
-                v.* = -v.*;
-            }
+            negateInPlaceSimd(self.values);
         }
 
         /// L² inner product: ⟨self, other⟩ = Σᵢ selfᵢ · otherᵢ.
@@ -129,11 +169,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         /// version will come with the Hodge star in M2.
         pub fn inner_product(self: Self, other: Self) f64 {
             std.debug.assert(self.values.len == other.values.len);
-            var sum: f64 = 0;
-            for (self.values, other.values) |a, b| {
-                sum += a * b;
-            }
-            return sum;
+            return innerProductSimd(self.values, other.values);
         }
 
         /// Squared L² norm: ‖self‖² = ⟨self, self⟩.
