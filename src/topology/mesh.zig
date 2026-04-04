@@ -1207,6 +1207,121 @@ test "single tet entity counts" {
     try testing.expectEqual(@as(u32, 1), mesh.num_tets());
 }
 
+test "uniform tetrahedral grid 1x1x1 entity counts" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 8), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 19), mesh.num_edges());
+    try testing.expectEqual(@as(u32, 18), mesh.num_faces());
+    try testing.expectEqual(@as(u32, 6), mesh.num_tets());
+}
+
+test "uniform tetrahedral grid boundary of boundary is zero" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh(3, 3).uniform_tetrahedral_grid(allocator, 2, 2, 1, 2.0, 2.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var vertex_sum = try allocator.alloc(i32, mesh.num_vertices());
+    defer allocator.free(vertex_sum);
+
+    for (0..mesh.num_faces()) |f| {
+        @memset(vertex_sum, 0);
+        const face_row = mesh.boundary(2).row(@intCast(f));
+        for (face_row.cols, 0..) |edge_idx, face_entry_idx| {
+            const face_sign = face_row.sign(face_entry_idx);
+            const edge_row = mesh.boundary(1).row(edge_idx);
+            for (edge_row.cols, 0..) |vertex_idx, edge_entry_idx| {
+                const edge_sign = edge_row.sign(edge_entry_idx);
+                vertex_sum[vertex_idx] += @as(i32, face_sign) * @as(i32, edge_sign);
+            }
+        }
+        for (vertex_sum) |sum| {
+            try testing.expectEqual(@as(i32, 0), sum);
+        }
+    }
+
+    var edge_sum = try allocator.alloc(i32, mesh.num_edges());
+    defer allocator.free(edge_sum);
+
+    for (0..mesh.num_tets()) |t| {
+        @memset(edge_sum, 0);
+        const tet_row = mesh.boundary(3).row(@intCast(t));
+        for (tet_row.cols, 0..) |face_idx, tet_entry_idx| {
+            const tet_sign = tet_row.sign(tet_entry_idx);
+            const face_row = mesh.boundary(2).row(face_idx);
+            for (face_row.cols, 0..) |edge_idx, face_entry_idx| {
+                const face_sign = face_row.sign(face_entry_idx);
+                edge_sum[edge_idx] += @as(i32, tet_sign) * @as(i32, face_sign);
+            }
+        }
+        for (edge_sum) |sum| {
+            try testing.expectEqual(@as(i32, 0), sum);
+        }
+    }
+}
+
+test "uniform tetrahedral grid Euler characteristic is one for random boxes" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x7E7_3D81);
+
+    for (0..25) |_| {
+        const nx: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 4));
+        const ny: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 4));
+        const nz: u32 = @intCast(rng.random().intRangeAtMost(u32, 1, 4));
+
+        var mesh = try Mesh(3, 3).uniform_tetrahedral_grid(allocator, nx, ny, nz, 1.0, 1.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        const chi = @as(i64, mesh.num_vertices()) -
+            @as(i64, mesh.num_edges()) +
+            @as(i64, mesh.num_faces()) -
+            @as(i64, mesh.num_tets());
+        try testing.expectEqual(@as(i64, 1), chi);
+    }
+}
+
+test "uniform tetrahedral grid geometric measures are positive and conservative" {
+    const allocator = testing.allocator;
+    const width = 2.0;
+    const height = 1.5;
+    const depth = 0.75;
+
+    var mesh = try Mesh(3, 3).uniform_tetrahedral_grid(allocator, 2, 3, 4, width, height, depth);
+    defer mesh.deinit(allocator);
+
+    const edge_lengths = mesh.simplices(1).items(.volume);
+    for (edge_lengths) |length| {
+        try testing.expect(length > 0.0);
+    }
+
+    const face_areas = mesh.simplices(2).items(.volume);
+    for (face_areas) |area| {
+        try testing.expect(area > 0.0);
+    }
+
+    const tet_volumes = mesh.simplices(3).items(.volume);
+    var total_tet_volume: f64 = 0.0;
+    for (tet_volumes) |tet_volume| {
+        try testing.expect(tet_volume > 0.0);
+        total_tet_volume += tet_volume;
+    }
+    try testing.expectApproxEqAbs(width * height * depth, total_tet_volume, 1e-12);
+
+    const dual_vertex_volumes = mesh.vertices.slice().items(.dual_volume);
+    var total_dual_vertex_volume: f64 = 0.0;
+    for (dual_vertex_volumes) |dual_volume| {
+        try testing.expect(dual_volume > 0.0);
+        total_dual_vertex_volume += dual_volume;
+    }
+    try testing.expectApproxEqAbs(width * height * depth, total_dual_vertex_volume, 1e-12);
+
+    for (mesh.dual_edge_volumes) |dual_face_area| {
+        try testing.expect(dual_face_area > 0.0);
+    }
+}
+
 test "∂₁∂₂ = 0 on single tetrahedron" {
     // For each face, applying ∂₁ to ∂₂(face) must yield zero at every vertex.
     // This is the boundary-of-boundary identity for edges → faces.
