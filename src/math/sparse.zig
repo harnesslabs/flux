@@ -313,6 +313,10 @@ pub const PackedIncidenceMatrix = struct {
         const row_arity: u8 = boundary_degree + 1;
         std.debug.assert(row_arity >= 2 and row_arity <= 4);
 
+        if (boundary_degree >= 3) {
+            return fromCsr(allocator, matrix);
+        }
+
         const row_ptr = try allocator.dupe(u32, matrix.row_ptr);
         errdefer allocator.free(row_ptr);
         const col_idx = try allocator.dupe(u32, matrix.col_idx);
