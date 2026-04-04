@@ -171,24 +171,112 @@ pub const PackedIncidenceSigns = struct {
     }
 };
 
-/// Prototype CSR variant for incidence matrices with packed sign storage.
+/// Packed per-row sign codes for fixed-arity incidence rows.
+pub const PackedRowSignPatterns = struct {
+    bytes: []u8,
+    len_rows: u32,
+    bits_per_row: u8,
+
+    pub fn bytesForRows(row_count: u32, bits_per_row: u8) usize {
+        return @intCast(@divFloor(@as(u64, row_count) * bits_per_row + 7, 8));
+    }
+
+    pub fn init(allocator: std.mem.Allocator, row_count: u32, bits_per_row: u8) !PackedRowSignPatterns {
+        std.debug.assert(bits_per_row >= 1 and bits_per_row <= 8);
+        const byte_count = bytesForRows(row_count, bits_per_row);
+        const bytes = try allocator.alloc(u8, byte_count);
+        @memset(bytes, 0);
+        return .{
+            .bytes = bytes,
+            .len_rows = row_count,
+            .bits_per_row = bits_per_row,
+        };
+    }
+
+    pub fn deinit(self: *PackedRowSignPatterns, allocator: std.mem.Allocator) void {
+        allocator.free(self.bytes);
+    }
+
+    pub fn set(self: PackedRowSignPatterns, row_idx: u32, code: u8) void {
+        std.debug.assert(row_idx < self.len_rows);
+        const bits_per_row: u4 = @intCast(self.bits_per_row);
+        std.debug.assert(code < (@as(u16, 1) << bits_per_row));
+
+        const start_bit = @as(u64, row_idx) * self.bits_per_row;
+        const byte_idx: usize = @intCast(@divFloor(start_bit, 8));
+        const shift: u3 = @intCast(@mod(start_bit, 8));
+        const widened = (@as(u16, code) << shift);
+        self.bytes[byte_idx] |= @truncate(widened);
+        if (shift + self.bits_per_row > 8) {
+            self.bytes[byte_idx + 1] |= @truncate(widened >> 8);
+        }
+    }
+
+    pub fn get(self: PackedRowSignPatterns, row_idx: u32) u8 {
+        std.debug.assert(row_idx < self.len_rows);
+
+        const start_bit = @as(u64, row_idx) * self.bits_per_row;
+        const byte_idx: usize = @intCast(@divFloor(start_bit, 8));
+        const shift: u3 = @intCast(@mod(start_bit, 8));
+
+        var widened: u16 = self.bytes[byte_idx];
+        if (shift + self.bits_per_row > 8) {
+            widened |= @as(u16, self.bytes[byte_idx + 1]) << 8;
+        }
+
+        const bits_per_row: u4 = @intCast(self.bits_per_row);
+        const mask: u16 = (@as(u16, 1) << bits_per_row) - 1;
+        return @truncate((widened >> shift) & mask);
+    }
+};
+
+/// CSR variant for incidence matrices with specialized sign encodings.
 pub const PackedIncidenceMatrix = struct {
+    const RowPatternSelector = struct {
+        selectors: PackedRowSignPatterns,
+        zero_mask: u8,
+        one_mask: u8,
+
+        fn deinit(self: *RowPatternSelector, allocator: std.mem.Allocator) void {
+            self.selectors.deinit(allocator);
+        }
+
+        fn mask(self: RowPatternSelector, row_idx: u32) u8 {
+            return if (self.selectors.get(row_idx) == 0) self.zero_mask else self.one_mask;
+        }
+    };
+
+    const Encoding = union(enum) {
+        generic: PackedIncidenceSigns,
+        row_selector: RowPatternSelector,
+        row_patterns: PackedRowSignPatterns,
+        canonical_edge: void,
+    };
+
     pub const Row = struct {
         cols: []const u32,
+        row_idx: u32,
         start: u32,
-        signs: PackedIncidenceSigns,
+        row_arity: u8,
+        encoding: Encoding,
 
         pub fn sign(self: Row, local_idx: usize) i8 {
             std.debug.assert(local_idx < self.cols.len);
-            return self.signs.get(self.start + @as(u32, @intCast(local_idx)));
+            return switch (self.encoding) {
+                .generic => |signs| signs.get(self.start + @as(u32, @intCast(local_idx))),
+                .row_selector => |selector| signFromMask(selector.mask(self.row_idx), local_idx),
+                .row_patterns => |patterns| signFromMask(patterns.get(self.row_idx), local_idx),
+                .canonical_edge => if (local_idx == 0) -1 else 1,
+            };
         }
     };
 
     row_ptr: []u32,
     col_idx: []u32,
-    signs: PackedIncidenceSigns,
+    encoding: Encoding,
     n_rows: u32,
     n_cols: u32,
+    row_arity: u8,
 
     pub fn fromCsr(allocator: std.mem.Allocator, matrix: CsrMatrix(i8)) !PackedIncidenceMatrix {
         const row_ptr = try allocator.dupe(u32, matrix.row_ptr);
@@ -210,16 +298,111 @@ pub const PackedIncidenceMatrix = struct {
         return .{
             .row_ptr = row_ptr,
             .col_idx = col_idx,
-            .signs = signs,
+            .encoding = .{ .generic = signs },
             .n_rows = matrix.n_rows,
             .n_cols = matrix.n_cols,
+            .row_arity = 0,
+        };
+    }
+
+    pub fn fromBoundaryCsr(
+        allocator: std.mem.Allocator,
+        boundary_degree: u8,
+        matrix: CsrMatrix(i8),
+    ) !PackedIncidenceMatrix {
+        const row_arity: u8 = boundary_degree + 1;
+        std.debug.assert(row_arity >= 2 and row_arity <= 4);
+
+        const row_ptr = try allocator.dupe(u32, matrix.row_ptr);
+        errdefer allocator.free(row_ptr);
+        const col_idx = try allocator.dupe(u32, matrix.col_idx);
+        errdefer allocator.free(col_idx);
+
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            std.debug.assert(row_view.cols.len == row_arity);
+        }
+
+        if (row_arity == 2 and allRowsCanonicalEdge(matrix)) {
+            return .{
+                .row_ptr = row_ptr,
+                .col_idx = col_idx,
+                .encoding = .{ .canonical_edge = {} },
+                .n_rows = matrix.n_rows,
+                .n_cols = matrix.n_cols,
+                .row_arity = row_arity,
+            };
+        }
+
+        var first_mask: u8 = 0;
+        var second_mask: ?u8 = null;
+        var has_more_than_two_masks = false;
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            const mask = positiveMaskFromValues(row_view.vals);
+            if (row_idx_usize == 0) {
+                first_mask = mask;
+            } else if (mask != first_mask) {
+                if (second_mask == null) {
+                    second_mask = mask;
+                } else if (mask != second_mask.?) {
+                    has_more_than_two_masks = true;
+                    break;
+                }
+            }
+        }
+
+        if (!has_more_than_two_masks) {
+            var selectors = try PackedRowSignPatterns.init(allocator, matrix.n_rows, 1);
+            errdefer selectors.deinit(allocator);
+
+            for (0..matrix.n_rows) |row_idx_usize| {
+                const row_view = matrix.row(@intCast(row_idx_usize));
+                const mask = positiveMaskFromValues(row_view.vals);
+                selectors.set(@intCast(row_idx_usize), if (mask == first_mask) 0 else 1);
+            }
+
+            return .{
+                .row_ptr = row_ptr,
+                .col_idx = col_idx,
+                .encoding = .{ .row_selector = .{
+                    .selectors = selectors,
+                    .zero_mask = first_mask,
+                    .one_mask = second_mask orelse first_mask,
+                } },
+                .n_rows = matrix.n_rows,
+                .n_cols = matrix.n_cols,
+                .row_arity = row_arity,
+            };
+        }
+
+        var patterns = try PackedRowSignPatterns.init(allocator, matrix.n_rows, row_arity);
+        errdefer patterns.deinit(allocator);
+
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            patterns.set(@intCast(row_idx_usize), positiveMaskFromValues(row_view.vals));
+        }
+
+        return .{
+            .row_ptr = row_ptr,
+            .col_idx = col_idx,
+            .encoding = .{ .row_patterns = patterns },
+            .n_rows = matrix.n_rows,
+            .n_cols = matrix.n_cols,
+            .row_arity = row_arity,
         };
     }
 
     pub fn deinit(self: *PackedIncidenceMatrix, allocator: std.mem.Allocator) void {
         allocator.free(self.row_ptr);
         allocator.free(self.col_idx);
-        self.signs.deinit(allocator);
+        switch (self.encoding) {
+            .generic => |*signs| signs.deinit(allocator),
+            .row_selector => |*selector| selector.deinit(allocator),
+            .row_patterns => |*patterns| patterns.deinit(allocator),
+            .canonical_edge => {},
+        }
     }
 
     pub fn row(self: PackedIncidenceMatrix, r: u32) Row {
@@ -227,25 +410,252 @@ pub const PackedIncidenceMatrix = struct {
         const end = self.row_ptr[r + 1];
         return .{
             .cols = self.col_idx[start..end],
+            .row_idx = r,
             .start = start,
-            .signs = self.signs,
+            .row_arity = self.row_arity,
+            .encoding = self.encoding,
         };
+    }
+
+    pub fn multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
+        std.debug.assert(input_vals.len == self.n_cols);
+        std.debug.assert(output.len == self.n_rows);
+
+        switch (self.encoding) {
+            .generic => |signs| {
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const row_view = self.row(@intCast(row_idx_usize));
+                    var sum: f64 = 0;
+                    for (row_view.cols, 0..) |col, entry_offset| {
+                        const sign = signs.get(row_view.start + @as(u32, @intCast(entry_offset)));
+                        sum += if (sign == 1) input_vals[col] else -input_vals[col];
+                    }
+                    output[row_idx] = sum;
+                }
+            },
+            .canonical_edge => {
+                std.debug.assert(self.row_arity == 2);
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const start: usize = self.row_ptr[row_idx];
+                    output[row_idx] = -input_vals[self.col_idx[start]] + input_vals[self.col_idx[start + 1]];
+                }
+            },
+            .row_selector => |selector| switch (self.row_arity) {
+                2 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum2(input_vals, self.col_idx[start .. start + 2], selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                3 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum3(input_vals, self.col_idx[start .. start + 3], selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                4 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum4(input_vals, self.col_idx[start .. start + 4], selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                else => unreachable,
+            },
+            .row_patterns => |patterns| switch (self.row_arity) {
+                2 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum2(input_vals, self.col_idx[start .. start + 2], patterns.get(@intCast(row_idx_usize)));
+                    }
+                },
+                3 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum3(input_vals, self.col_idx[start .. start + 3], patterns.get(@intCast(row_idx_usize)));
+                    }
+                },
+                4 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        output[row_idx] = signedRowSum4(input_vals, self.col_idx[start .. start + 4], patterns.get(@intCast(row_idx_usize)));
+                    }
+                },
+                else => unreachable,
+            },
+        }
     }
 
     pub fn transpose_multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
         std.debug.assert(input_vals.len == self.n_rows);
         std.debug.assert(output.len == self.n_cols);
 
-        for (0..self.n_rows) |row_idx_usize| {
-            const row_idx: usize = row_idx_usize;
-            const row_view = self.row(@intCast(row_idx_usize));
-            const input_value = input_vals[row_idx];
+        switch (self.encoding) {
+            .generic => |signs| {
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const row_view = self.row(@intCast(row_idx_usize));
+                    const input_value = input_vals[row_idx];
 
-            for (row_view.cols, 0..) |col, entry_offset| {
-                const sign = row_view.sign(entry_offset);
-                output[col] += if (sign == 1) input_value else -input_value;
+                    for (row_view.cols, 0..) |col, entry_offset| {
+                        const sign = signs.get(row_view.start + @as(u32, @intCast(entry_offset)));
+                        output[col] += if (sign == 1) input_value else -input_value;
+                    }
+                }
+            },
+            .canonical_edge => {
+                std.debug.assert(self.row_arity == 2);
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const start: usize = self.row_ptr[row_idx];
+                    const input_value = input_vals[row_idx];
+                    output[self.col_idx[start]] -= input_value;
+                    output[self.col_idx[start + 1]] += input_value;
+                }
+            },
+            .row_selector => |selector| switch (self.row_arity) {
+                2 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        accumulateSignedRow2(output, self.col_idx[start .. start + 2], input_value, selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                3 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        accumulateSignedRow3(output, self.col_idx[start .. start + 3], input_value, selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                4 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        accumulateSignedRow4(output, self.col_idx[start .. start + 4], input_value, selector.mask(@intCast(row_idx_usize)));
+                    }
+                },
+                else => unreachable,
+            },
+            .row_patterns => |patterns| switch (self.row_arity) {
+                2 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        const mask = patterns.get(@intCast(row_idx_usize));
+                        accumulateSignedRow2(output, self.col_idx[start .. start + 2], input_value, mask);
+                    }
+                },
+                3 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        const mask = patterns.get(@intCast(row_idx_usize));
+                        accumulateSignedRow3(output, self.col_idx[start .. start + 3], input_value, mask);
+                    }
+                },
+                4 => {
+                    for (0..self.n_rows) |row_idx_usize| {
+                        const row_idx: usize = row_idx_usize;
+                        const start: usize = self.row_ptr[row_idx];
+                        const input_value = input_vals[row_idx];
+                        const mask = patterns.get(@intCast(row_idx_usize));
+                        accumulateSignedRow4(output, self.col_idx[start .. start + 4], input_value, mask);
+                    }
+                },
+                else => unreachable,
+            },
+        }
+    }
+
+    pub fn signBytes(self: PackedIncidenceMatrix) usize {
+        return switch (self.encoding) {
+            .generic => |signs| signs.bytes.len,
+            .row_selector => |selector| selector.selectors.bytes.len,
+            .row_patterns => |patterns| patterns.bytes.len,
+            .canonical_edge => 0,
+        };
+    }
+
+    fn allRowsCanonicalEdge(matrix: CsrMatrix(i8)) bool {
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            if (row_view.cols.len != 2) return false;
+            if (row_view.vals[0] != -1 or row_view.vals[1] != 1) return false;
+        }
+        return true;
+    }
+
+    fn positiveMaskFromValues(values: []const i8) u8 {
+        var mask: u8 = 0;
+        for (values, 0..) |value, idx| {
+            std.debug.assert(value == -1 or value == 1);
+            if (value == 1) {
+                mask |= @as(u8, 1) << @as(u3, @intCast(idx));
             }
         }
+        return mask;
+    }
+
+    fn signFromMask(mask: u8, local_idx: usize) i8 {
+        const bit: u3 = @intCast(local_idx);
+        return if ((mask & (@as(u8, 1) << bit)) != 0) 1 else -1;
+    }
+
+    fn signedValue(mask: u8, local_idx: usize, input_value: f64) f64 {
+        return if (signFromMask(mask, local_idx) == 1) input_value else -input_value;
+    }
+
+    fn accumulateSignedRow2(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+    }
+
+    fn signedRowSum2(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]);
+    }
+
+    fn accumulateSignedRow3(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+        output[cols[2]] += signedValue(mask, 2, input_value);
+    }
+
+    fn signedRowSum3(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]) +
+            signedInput(mask, 2, input_vals[cols[2]]);
+    }
+
+    fn accumulateSignedRow4(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+        output[cols[2]] += signedValue(mask, 2, input_value);
+        output[cols[3]] += signedValue(mask, 3, input_value);
+    }
+
+    fn signedRowSum4(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]) +
+            signedInput(mask, 2, input_vals[cols[2]]) +
+            signedInput(mask, 3, input_vals[cols[3]]);
+    }
+
+    fn signedInput(mask: u8, local_idx: usize, value: f64) f64 {
+        return if (signFromMask(mask, local_idx) == 1) value else -value;
     }
 };
 

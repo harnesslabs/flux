@@ -92,16 +92,7 @@ pub fn apply_exterior_derivative(
         // Primal: dₖ(ω) = boundary(k+1) · ω
         const boundary = input.mesh.boundary(k + 1);
         std.debug.assert(input.values.len == boundary.n_cols);
-
-        for (0..boundary.n_rows) |row_idx| {
-            const r = boundary.row(@intCast(row_idx));
-            var sum: f64 = 0;
-            for (r.cols, 0..) |col, entry_idx| {
-                const sign = r.sign(entry_idx);
-                sum += @as(f64, @floatFromInt(sign)) * input.values[col];
-            }
-            output.values[row_idx] = sum;
-        }
+        boundary.multiply(input.values, output.values);
     } else {
         // Dual: d̃ₖ(ω) = boundary(n−k)ᵀ · ω
         // Dual k-form lives on primal (n−k)-cells; the transpose maps

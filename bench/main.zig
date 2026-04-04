@@ -376,126 +376,26 @@ fn buildBoundary2Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.ma
     return boundary;
 }
 
-const Boundary1ImplicitSigns = struct {
-    cols: [][2]u32,
-    n_cols: u32,
+fn buildBoundary3LikeMatrix(allocator: std.mem.Allocator, row_count: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const col_count: u32 = row_count + 3;
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, row_count, col_count, 4 * row_count);
+    errdefer boundary.deinit(allocator);
 
-    fn fromCsr(allocator: std.mem.Allocator, matrix: flux.math.sparse.CsrMatrix(i8)) !Boundary1ImplicitSigns {
-        std.debug.assert(matrix.nnz() == 2 * matrix.n_rows);
-
-        const cols = try allocator.alloc([2]u32, matrix.n_rows);
-        errdefer allocator.free(cols);
-
-        for (0..matrix.n_rows) |row_idx_usize| {
-            const row_idx: u32 = @intCast(row_idx_usize);
-            const row = matrix.row(row_idx);
-            std.debug.assert(row.cols.len == 2);
-            std.debug.assert(row.vals[0] == -1);
-            std.debug.assert(row.vals[1] == 1);
-            cols[row_idx_usize] = .{ row.cols[0], row.cols[1] };
-        }
-
-        return .{
-            .cols = cols,
-            .n_cols = matrix.n_cols,
-        };
+    for (0..row_count) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const start = 4 * row_idx;
+        boundary.row_ptr[row_idx] = start;
+        boundary.col_idx[start + 0] = row_idx;
+        boundary.values[start + 0] = 1;
+        boundary.col_idx[start + 1] = row_idx + 1;
+        boundary.values[start + 1] = -1;
+        boundary.col_idx[start + 2] = row_idx + 2;
+        boundary.values[start + 2] = 1;
+        boundary.col_idx[start + 3] = row_idx + 3;
+        boundary.values[start + 3] = -1;
     }
-
-    fn deinit(self: *Boundary1ImplicitSigns, allocator: std.mem.Allocator) void {
-        allocator.free(self.cols);
-    }
-
-    fn transpose_multiply(self: Boundary1ImplicitSigns, input_vals: []const f64, output: []f64) void {
-        std.debug.assert(input_vals.len == self.cols.len);
-        std.debug.assert(output.len == self.n_cols);
-
-        for (self.cols, input_vals) |cols, value| {
-            output[cols[0]] -= value;
-            output[cols[1]] += value;
-        }
-    }
-
-    fn valueBytes(self: Boundary1ImplicitSigns) usize {
-        _ = self;
-        return 0;
-    }
-};
-
-const Boundary2RowBitSigns = struct {
-    cols: [][3]u32,
-    row_sign_bits: []u8,
-    n_cols: u32,
-
-    fn fromCsr(allocator: std.mem.Allocator, matrix: flux.math.sparse.CsrMatrix(i8)) !Boundary2RowBitSigns {
-        std.debug.assert(matrix.nnz() == 3 * matrix.n_rows);
-
-        const cols = try allocator.alloc([3]u32, matrix.n_rows);
-        errdefer allocator.free(cols);
-        const row_sign_bits = try allocator.alloc(u8, flux.math.sparse.PackedIncidenceSigns.bytesForEntries(matrix.n_rows));
-        errdefer allocator.free(row_sign_bits);
-        @memset(row_sign_bits, 0);
-
-        for (0..matrix.n_rows) |row_idx_usize| {
-            const row_idx: u32 = @intCast(row_idx_usize);
-            const row = matrix.row(row_idx);
-            std.debug.assert(row.cols.len == 3);
-            std.debug.assert(row.cols[0] < row.cols[1]);
-            std.debug.assert(row.cols[1] < row.cols[2]);
-            std.debug.assert(row.vals[0] == row.vals[1]);
-            std.debug.assert(row.vals[2] == -row.vals[0]);
-
-            cols[row_idx_usize] = .{ row.cols[0], row.cols[1], row.cols[2] };
-            if (row.vals[0] == 1) {
-                setPackedBit(row_sign_bits, row_idx);
-            }
-        }
-
-        return .{
-            .cols = cols,
-            .row_sign_bits = row_sign_bits,
-            .n_cols = matrix.n_cols,
-        };
-    }
-
-    fn deinit(self: *Boundary2RowBitSigns, allocator: std.mem.Allocator) void {
-        allocator.free(self.row_sign_bits);
-        allocator.free(self.cols);
-    }
-
-    fn transpose_multiply(self: Boundary2RowBitSigns, input_vals: []const f64, output: []f64) void {
-        std.debug.assert(input_vals.len == self.cols.len);
-        std.debug.assert(output.len == self.n_cols);
-
-        for (self.cols, input_vals, 0..) |cols, value, row_idx| {
-            const positive_first_two = getPackedBit(self.row_sign_bits, @intCast(row_idx));
-            const signed_value = if (positive_first_two) value else -value;
-
-            output[cols[0]] += signed_value;
-            output[cols[1]] += signed_value;
-            output[cols[2]] -= signed_value;
-        }
-    }
-
-    fn valueBytes(self: Boundary2RowBitSigns) usize {
-        return self.row_sign_bits.len;
-    }
-};
-
-fn packedBitMask(bit_idx: u32) u8 {
-    const shift: u3 = @intCast(@mod(bit_idx, 8));
-    return @as(u8, 1) << shift;
-}
-
-fn packedByteIndex(bit_idx: u32) usize {
-    return @intCast(@divFloor(bit_idx, 8));
-}
-
-fn setPackedBit(bits: []u8, bit_idx: u32) void {
-    bits[packedByteIndex(bit_idx)] |= packedBitMask(bit_idx);
-}
-
-fn getPackedBit(bits: []const u8, bit_idx: u32) bool {
-    return (bits[packedByteIndex(bit_idx)] & packedBitMask(bit_idx)) != 0;
+    boundary.row_ptr[row_count] = 4 * row_count;
+    return boundary;
 }
 
 fn timeDenseTransposeMultiply(
@@ -530,11 +430,10 @@ fn compareIncidenceTransposeMultiply(
     allocator: std.mem.Allocator,
     name: []const u8,
     matrix: flux.math.sparse.CsrMatrix(i8),
-    specialized_matrix: anytype,
-    specialized_value_bytes: usize,
+    specialized_matrix: flux.math.sparse.PackedIncidenceMatrix,
 ) !IncidenceComparisonResult {
-    var packed_matrix = try flux.math.sparse.PackedIncidenceMatrix.fromCsr(allocator, matrix);
-    defer packed_matrix.deinit(allocator);
+    var generic_matrix = try flux.math.sparse.PackedIncidenceMatrix.fromCsr(allocator, matrix);
+    defer generic_matrix.deinit(allocator);
 
     const input = try allocator.alloc(f64, matrix.n_rows);
     defer allocator.free(input);
@@ -552,13 +451,13 @@ fn compareIncidenceTransposeMultiply(
         @memset(dense_output, 0.0);
         matrix.transpose_multiply(input, dense_output);
         @memset(generic_output, 0.0);
-        packed_matrix.transpose_multiply(input, generic_output);
+        generic_matrix.transpose_multiply(input, generic_output);
         @memset(specialized_output, 0.0);
         specialized_matrix.transpose_multiply(input, specialized_output);
     }
 
     const dense_median_ns = try timeDenseTransposeMultiply(matrix, input, dense_output);
-    const generic_packed_median_ns = try timeSpecializedTransposeMultiply(packed_matrix, input, generic_output);
+    const generic_packed_median_ns = try timeSpecializedTransposeMultiply(generic_matrix, input, generic_output);
     const specialized_median_ns = try timeSpecializedTransposeMultiply(specialized_matrix, input, specialized_output);
 
     for (dense_output, generic_output) |expected, actual| {
@@ -572,39 +471,49 @@ fn compareIncidenceTransposeMultiply(
         .name = name,
         .nnz = matrix.nnz(),
         .dense_value_bytes = matrix.values.len * @sizeOf(i8),
-        .generic_packed_value_bytes = packed_matrix.signs.bytes.len,
-        .specialized_value_bytes = specialized_value_bytes,
+        .generic_packed_value_bytes = generic_matrix.signBytes(),
+        .specialized_value_bytes = specialized_matrix.signBytes(),
         .dense_median_ns = dense_median_ns,
         .generic_packed_median_ns = generic_packed_median_ns,
         .specialized_median_ns = specialized_median_ns,
     };
 }
 
-fn runIncidenceComparisonBenchmarks(allocator: std.mem.Allocator) ![2]IncidenceComparisonResult {
-    var results: [2]IncidenceComparisonResult = undefined;
+fn runIncidenceComparisonBenchmarks(allocator: std.mem.Allocator) ![3]IncidenceComparisonResult {
+    var results: [3]IncidenceComparisonResult = undefined;
 
     var boundary1 = try buildBoundary1Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
     defer boundary1.deinit(allocator);
-    var boundary1_specialized = try Boundary1ImplicitSigns.fromCsr(allocator, boundary1);
+    var boundary1_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 1, boundary1);
     defer boundary1_specialized.deinit(allocator);
     results[0] = try compareIncidenceTransposeMultiply(
         allocator,
         "boundary_1_transpose_multiply",
         boundary1,
         boundary1_specialized,
-        boundary1_specialized.valueBytes(),
     );
 
     var boundary2 = try buildBoundary2Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
     defer boundary2.deinit(allocator);
-    var boundary2_specialized = try Boundary2RowBitSigns.fromCsr(allocator, boundary2);
+    var boundary2_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 2, boundary2);
     defer boundary2_specialized.deinit(allocator);
     results[1] = try compareIncidenceTransposeMultiply(
         allocator,
         "boundary_2_transpose_multiply",
         boundary2,
         boundary2_specialized,
-        boundary2_specialized.valueBytes(),
+    );
+
+    const boundary3_rows: u32 = incidence_grid_nx * incidence_grid_ny;
+    var boundary3 = try buildBoundary3LikeMatrix(allocator, boundary3_rows);
+    defer boundary3.deinit(allocator);
+    var boundary3_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 3, boundary3);
+    defer boundary3_specialized.deinit(allocator);
+    results[2] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_3_like_transpose_multiply",
+        boundary3,
+        boundary3_specialized,
     );
 
     return results;

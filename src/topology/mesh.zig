@@ -382,7 +382,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
                 }
                 boundary_1_dense.row_ptr[edge_count] = 2 * edge_count;
 
-                boundary_1 = try BoundaryMatrix.fromCsr(allocator, boundary_1_dense);
+                boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, boundary_1_dense);
                 boundary_1_dense.deinit(allocator);
             }
             errdefer boundary_1.deinit(allocator);
@@ -432,7 +432,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
                 }
                 boundary_2_dense.row_ptr[face_count] = 3 * face_count;
 
-                boundary_2 = try BoundaryMatrix.fromCsr(allocator, boundary_2_dense);
+                boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, boundary_2_dense);
                 boundary_2_dense.deinit(allocator);
             }
             errdefer boundary_2.deinit(allocator);
@@ -1060,7 +1060,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
             boundary_1_dense.values[2 * e + 1] = 1;
         }
         boundary_1_dense.row_ptr[6] = 12;
-        boundary_1 = try BoundaryMatrix.fromCsr(allocator, boundary_1_dense);
+        boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, boundary_1_dense);
         boundary_1_dense.deinit(allocator);
     }
     errdefer boundary_1.deinit(allocator);
@@ -1144,7 +1144,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
             }
         }
         boundary_2_dense.row_ptr[4] = 12;
-        boundary_2 = try BoundaryMatrix.fromCsr(allocator, boundary_2_dense);
+        boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, boundary_2_dense);
         boundary_2_dense.deinit(allocator);
     }
     errdefer boundary_2.deinit(allocator);
@@ -1161,7 +1161,7 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
             boundary_3_dense.col_idx[i] = @intCast(i);
             boundary_3_dense.values[i] = if (i % 2 == 0) @as(i8, 1) else @as(i8, -1);
         }
-        boundary_3 = try BoundaryMatrix.fromCsr(allocator, boundary_3_dense);
+        boundary_3 = try BoundaryMatrix.fromBoundaryCsr(allocator, 3, boundary_3_dense);
         boundary_3_dense.deinit(allocator);
     }
     errdefer boundary_3.deinit(allocator);
