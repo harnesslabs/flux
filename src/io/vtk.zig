@@ -176,9 +176,8 @@ pub fn project_edges_to_faces(
 
     const boundary_2 = mesh.boundary(2);
     for (0..num_faces) |f| {
-        const start = boundary_2.row_ptr[f];
-        const end = boundary_2.row_ptr[f + 1];
-        const edge_indices = boundary_2.col_idx[start..end];
+        const face_boundary = boundary_2.row(@intCast(f));
+        const edge_indices = face_boundary.cols;
 
         var sum: f64 = 0;
         for (edge_indices) |edge_idx| {
@@ -688,9 +687,8 @@ test "project_edges_to_faces averages absolute edge values per face" {
     // Verify: for each face, the projected value equals the mean of its 3 edge |values|.
     const boundary_2 = mesh.boundary(2);
     for (0..mesh.num_faces()) |f| {
-        const start = boundary_2.row_ptr[f];
-        const end = boundary_2.row_ptr[f + 1];
-        const edge_indices = boundary_2.col_idx[start..end];
+        const face_boundary = boundary_2.row(@intCast(f));
+        const edge_indices = face_boundary.cols;
         try testing.expectEqual(@as(usize, 3), edge_indices.len);
 
         var expected: f64 = 0;
