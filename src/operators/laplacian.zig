@@ -125,9 +125,11 @@ fn assemble_zero_form_stiffness(
         for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
             const incidence_j = d0.row(edge_j);
 
-            for (incidence_i.cols, incidence_i.vals) |vertex_i, sign_i| {
+            for (incidence_i.cols, 0..) |vertex_i, entry_i| {
+                const sign_i = incidence_i.sign(entry_i);
                 const left = @as(f64, @floatFromInt(sign_i)) * mass_ij;
-                for (incidence_j.cols, incidence_j.vals) |vertex_j, sign_j| {
+                for (incidence_j.cols, 0..) |vertex_j, entry_j| {
+                    const sign_j = incidence_j.sign(entry_j);
                     const contribution = left * @as(f64, @floatFromInt(sign_j));
                     try assembler.addEntry(allocator, vertex_i, vertex_j, contribution);
                 }
@@ -220,7 +222,8 @@ pub fn laplacian_composed(
         for (0..bk.n_rows) |row_idx| {
             const r = bk.row(@intCast(row_idx));
             var sum: f64 = 0;
-            for (r.cols, r.vals) |col, sign| {
+            for (r.cols, 0..) |col, entry_idx| {
+                const sign = r.sign(entry_idx);
                 sum += @as(f64, @floatFromInt(sign)) * codiff_vals[col];
             }
             result.values[row_idx] += sum;

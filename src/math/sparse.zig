@@ -173,6 +173,17 @@ pub const PackedIncidenceSigns = struct {
 
 /// Prototype CSR variant for incidence matrices with packed sign storage.
 pub const PackedIncidenceMatrix = struct {
+    pub const Row = struct {
+        cols: []const u32,
+        start: u32,
+        signs: PackedIncidenceSigns,
+
+        pub fn sign(self: Row, local_idx: usize) i8 {
+            std.debug.assert(local_idx < self.cols.len);
+            return self.signs.get(self.start + @as(u32, @intCast(local_idx)));
+        }
+    };
+
     row_ptr: []u32,
     col_idx: []u32,
     signs: PackedIncidenceSigns,
@@ -211,19 +222,27 @@ pub const PackedIncidenceMatrix = struct {
         self.signs.deinit(allocator);
     }
 
+    pub fn row(self: PackedIncidenceMatrix, r: u32) Row {
+        const start = self.row_ptr[r];
+        const end = self.row_ptr[r + 1];
+        return .{
+            .cols = self.col_idx[start..end],
+            .start = start,
+            .signs = self.signs,
+        };
+    }
+
     pub fn transpose_multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
         std.debug.assert(input_vals.len == self.n_rows);
         std.debug.assert(output.len == self.n_cols);
 
         for (0..self.n_rows) |row_idx_usize| {
-            const row_idx: u32 = @intCast(row_idx_usize);
-            const row_start: usize = self.row_ptr[row_idx];
-            const row_end: usize = self.row_ptr[row_idx + 1];
+            const row_idx: usize = row_idx_usize;
+            const row_view = self.row(@intCast(row_idx_usize));
             const input_value = input_vals[row_idx];
 
-            for (row_start..row_end) |entry_idx| {
-                const col = self.col_idx[entry_idx];
-                const sign = self.signs.get(@intCast(entry_idx));
+            for (row_view.cols, 0..) |col, entry_offset| {
+                const sign = row_view.sign(entry_offset);
                 output[col] += if (sign == 1) input_value else -input_value;
             }
         }
