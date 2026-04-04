@@ -91,9 +91,11 @@ const IncidenceComparisonResult = struct {
     name: []const u8,
     nnz: u32,
     dense_value_bytes: usize,
-    packed_value_bytes: usize,
+    generic_packed_value_bytes: usize,
+    specialized_value_bytes: usize,
     dense_median_ns: u64,
-    packed_median_ns: u64,
+    generic_packed_median_ns: u64,
+    specialized_median_ns: u64,
 };
 
 const ArithmeticCase = struct {
@@ -374,10 +376,162 @@ fn buildBoundary2Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.ma
     return boundary;
 }
 
+const Boundary1ImplicitSigns = struct {
+    cols: [][2]u32,
+    n_cols: u32,
+
+    fn fromCsr(allocator: std.mem.Allocator, matrix: flux.math.sparse.CsrMatrix(i8)) !Boundary1ImplicitSigns {
+        std.debug.assert(matrix.nnz() == 2 * matrix.n_rows);
+
+        const cols = try allocator.alloc([2]u32, matrix.n_rows);
+        errdefer allocator.free(cols);
+
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_idx: u32 = @intCast(row_idx_usize);
+            const row = matrix.row(row_idx);
+            std.debug.assert(row.cols.len == 2);
+            std.debug.assert(row.vals[0] == -1);
+            std.debug.assert(row.vals[1] == 1);
+            cols[row_idx_usize] = .{ row.cols[0], row.cols[1] };
+        }
+
+        return .{
+            .cols = cols,
+            .n_cols = matrix.n_cols,
+        };
+    }
+
+    fn deinit(self: *Boundary1ImplicitSigns, allocator: std.mem.Allocator) void {
+        allocator.free(self.cols);
+    }
+
+    fn transpose_multiply(self: Boundary1ImplicitSigns, input_vals: []const f64, output: []f64) void {
+        std.debug.assert(input_vals.len == self.cols.len);
+        std.debug.assert(output.len == self.n_cols);
+
+        for (self.cols, input_vals) |cols, value| {
+            output[cols[0]] -= value;
+            output[cols[1]] += value;
+        }
+    }
+
+    fn valueBytes(self: Boundary1ImplicitSigns) usize {
+        _ = self;
+        return 0;
+    }
+};
+
+const Boundary2RowBitSigns = struct {
+    cols: [][3]u32,
+    row_sign_bits: []u8,
+    n_cols: u32,
+
+    fn fromCsr(allocator: std.mem.Allocator, matrix: flux.math.sparse.CsrMatrix(i8)) !Boundary2RowBitSigns {
+        std.debug.assert(matrix.nnz() == 3 * matrix.n_rows);
+
+        const cols = try allocator.alloc([3]u32, matrix.n_rows);
+        errdefer allocator.free(cols);
+        const row_sign_bits = try allocator.alloc(u8, flux.math.sparse.PackedIncidenceSigns.bytesForEntries(matrix.n_rows));
+        errdefer allocator.free(row_sign_bits);
+        @memset(row_sign_bits, 0);
+
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_idx: u32 = @intCast(row_idx_usize);
+            const row = matrix.row(row_idx);
+            std.debug.assert(row.cols.len == 3);
+            std.debug.assert(row.cols[0] < row.cols[1]);
+            std.debug.assert(row.cols[1] < row.cols[2]);
+            std.debug.assert(row.vals[0] == row.vals[1]);
+            std.debug.assert(row.vals[2] == -row.vals[0]);
+
+            cols[row_idx_usize] = .{ row.cols[0], row.cols[1], row.cols[2] };
+            if (row.vals[0] == 1) {
+                setPackedBit(row_sign_bits, row_idx);
+            }
+        }
+
+        return .{
+            .cols = cols,
+            .row_sign_bits = row_sign_bits,
+            .n_cols = matrix.n_cols,
+        };
+    }
+
+    fn deinit(self: *Boundary2RowBitSigns, allocator: std.mem.Allocator) void {
+        allocator.free(self.row_sign_bits);
+        allocator.free(self.cols);
+    }
+
+    fn transpose_multiply(self: Boundary2RowBitSigns, input_vals: []const f64, output: []f64) void {
+        std.debug.assert(input_vals.len == self.cols.len);
+        std.debug.assert(output.len == self.n_cols);
+
+        for (self.cols, input_vals, 0..) |cols, value, row_idx| {
+            const positive_first_two = getPackedBit(self.row_sign_bits, @intCast(row_idx));
+            const signed_value = if (positive_first_two) value else -value;
+
+            output[cols[0]] += signed_value;
+            output[cols[1]] += signed_value;
+            output[cols[2]] -= signed_value;
+        }
+    }
+
+    fn valueBytes(self: Boundary2RowBitSigns) usize {
+        return self.row_sign_bits.len;
+    }
+};
+
+fn packedBitMask(bit_idx: u32) u8 {
+    const shift: u3 = @intCast(@mod(bit_idx, 8));
+    return @as(u8, 1) << shift;
+}
+
+fn packedByteIndex(bit_idx: u32) usize {
+    return @intCast(@divFloor(bit_idx, 8));
+}
+
+fn setPackedBit(bits: []u8, bit_idx: u32) void {
+    bits[packedByteIndex(bit_idx)] |= packedBitMask(bit_idx);
+}
+
+fn getPackedBit(bits: []const u8, bit_idx: u32) bool {
+    return (bits[packedByteIndex(bit_idx)] & packedBitMask(bit_idx)) != 0;
+}
+
+fn timeDenseTransposeMultiply(
+    matrix: flux.math.sparse.CsrMatrix(i8),
+    input: []const f64,
+    output: []f64,
+) !u64 {
+    var timings: [incidence_measured_iterations]u64 = undefined;
+    for (&timings) |*timing| {
+        @memset(output, 0.0);
+        var timer = try std.time.Timer.start();
+        matrix.transpose_multiply(input, output);
+        timing.* = timer.read();
+    }
+    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
+    return timings[incidence_measured_iterations / 2];
+}
+
+fn timeSpecializedTransposeMultiply(matrix: anytype, input: []const f64, output: []f64) !u64 {
+    var timings: [incidence_measured_iterations]u64 = undefined;
+    for (&timings) |*timing| {
+        @memset(output, 0.0);
+        var timer = try std.time.Timer.start();
+        matrix.transpose_multiply(input, output);
+        timing.* = timer.read();
+    }
+    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
+    return timings[incidence_measured_iterations / 2];
+}
+
 fn compareIncidenceTransposeMultiply(
     allocator: std.mem.Allocator,
     name: []const u8,
     matrix: flux.math.sparse.CsrMatrix(i8),
+    specialized_matrix: anytype,
+    specialized_value_bytes: usize,
 ) !IncidenceComparisonResult {
     var packed_matrix = try flux.math.sparse.PackedIncidenceMatrix.fromCsr(allocator, matrix);
     defer packed_matrix.deinit(allocator);
@@ -386,8 +540,10 @@ fn compareIncidenceTransposeMultiply(
     defer allocator.free(input);
     const dense_output = try allocator.alloc(f64, matrix.n_cols);
     defer allocator.free(dense_output);
-    const packed_output = try allocator.alloc(f64, matrix.n_cols);
-    defer allocator.free(packed_output);
+    const generic_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(generic_output);
+    const specialized_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(specialized_output);
 
     var rng = std.Random.DefaultPrng.init(0x1AC1_D3C3);
     fillRandom(&rng, input);
@@ -395,40 +551,32 @@ fn compareIncidenceTransposeMultiply(
     for (0..incidence_warmup_iterations) |_| {
         @memset(dense_output, 0.0);
         matrix.transpose_multiply(input, dense_output);
-        @memset(packed_output, 0.0);
-        packed_matrix.transpose_multiply(input, packed_output);
+        @memset(generic_output, 0.0);
+        packed_matrix.transpose_multiply(input, generic_output);
+        @memset(specialized_output, 0.0);
+        specialized_matrix.transpose_multiply(input, specialized_output);
     }
 
-    var dense_timings: [incidence_measured_iterations]u64 = undefined;
-    for (&dense_timings) |*timing| {
-        @memset(dense_output, 0.0);
-        var timer = try std.time.Timer.start();
-        matrix.transpose_multiply(input, dense_output);
-        timing.* = timer.read();
-    }
+    const dense_median_ns = try timeDenseTransposeMultiply(matrix, input, dense_output);
+    const generic_packed_median_ns = try timeSpecializedTransposeMultiply(packed_matrix, input, generic_output);
+    const specialized_median_ns = try timeSpecializedTransposeMultiply(specialized_matrix, input, specialized_output);
 
-    var packed_timings: [incidence_measured_iterations]u64 = undefined;
-    for (&packed_timings) |*timing| {
-        @memset(packed_output, 0.0);
-        var timer = try std.time.Timer.start();
-        packed_matrix.transpose_multiply(input, packed_output);
-        timing.* = timer.read();
-    }
-
-    for (dense_output, packed_output) |expected, actual| {
+    for (dense_output, generic_output) |expected, actual| {
         try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
     }
-
-    std.mem.sortUnstable(u64, &dense_timings, {}, std.sort.asc(u64));
-    std.mem.sortUnstable(u64, &packed_timings, {}, std.sort.asc(u64));
+    for (dense_output, specialized_output) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
+    }
 
     return .{
         .name = name,
         .nnz = matrix.nnz(),
         .dense_value_bytes = matrix.values.len * @sizeOf(i8),
-        .packed_value_bytes = packed_matrix.signs.bytes.len,
-        .dense_median_ns = dense_timings[incidence_measured_iterations / 2],
-        .packed_median_ns = packed_timings[incidence_measured_iterations / 2],
+        .generic_packed_value_bytes = packed_matrix.signs.bytes.len,
+        .specialized_value_bytes = specialized_value_bytes,
+        .dense_median_ns = dense_median_ns,
+        .generic_packed_median_ns = generic_packed_median_ns,
+        .specialized_median_ns = specialized_median_ns,
     };
 }
 
@@ -437,11 +585,27 @@ fn runIncidenceComparisonBenchmarks(allocator: std.mem.Allocator) ![2]IncidenceC
 
     var boundary1 = try buildBoundary1Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
     defer boundary1.deinit(allocator);
-    results[0] = try compareIncidenceTransposeMultiply(allocator, "boundary_1_transpose_multiply", boundary1);
+    var boundary1_specialized = try Boundary1ImplicitSigns.fromCsr(allocator, boundary1);
+    defer boundary1_specialized.deinit(allocator);
+    results[0] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_1_transpose_multiply",
+        boundary1,
+        boundary1_specialized,
+        boundary1_specialized.valueBytes(),
+    );
 
     var boundary2 = try buildBoundary2Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
     defer boundary2.deinit(allocator);
-    results[1] = try compareIncidenceTransposeMultiply(allocator, "boundary_2_transpose_multiply", boundary2);
+    var boundary2_specialized = try Boundary2RowBitSigns.fromCsr(allocator, boundary2);
+    defer boundary2_specialized.deinit(allocator);
+    results[1] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_2_transpose_multiply",
+        boundary2,
+        boundary2_specialized,
+        boundary2_specialized.valueBytes(),
+    );
 
     return results;
 }
@@ -892,34 +1056,46 @@ fn printIncidenceComparisons(writer: anytype, results: []const IncidenceComparis
         incidence_grid_nx,
         incidence_grid_ny,
     });
-    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n");
-    try writer.print("  {s:<32} {s:>12} {s:>12} {s:>12} {s:>10}\n", .{
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n");
+    try writer.print("  {s:<32} {s:>10} {s:>10} {s:>10} {s:>8} {s:>8} {s:>8} {s:>8}\n", .{
         "benchmark",
-        "i8 median",
-        "packed",
-        "speedup",
-        "bits/entry",
+        "i8",
+        "generic",
+        "special",
+        "gen x",
+        "spec x",
+        "gen b/e",
+        "spec b/e",
     });
-    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n");
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n");
 
     for (results) |result| {
-        const speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
-            @as(f64, @floatFromInt(result.packed_median_ns));
-        const packed_bits_per_entry = 8.0 *
-            @as(f64, @floatFromInt(result.packed_value_bytes)) /
+        const generic_speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
+            @as(f64, @floatFromInt(result.generic_packed_median_ns));
+        const specialized_speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
+            @as(f64, @floatFromInt(result.specialized_median_ns));
+        const generic_bits_per_entry = 8.0 *
+            @as(f64, @floatFromInt(result.generic_packed_value_bytes)) /
+            @as(f64, @floatFromInt(result.nnz));
+        const specialized_bits_per_entry = 8.0 *
+            @as(f64, @floatFromInt(result.specialized_value_bytes)) /
             @as(f64, @floatFromInt(result.nnz));
 
         try writer.print("  {s:<32} ", .{result.name});
         try printDuration(writer, result.dense_median_ns);
         try writer.writeAll("  ");
-        try printDuration(writer, result.packed_median_ns);
-        try writer.print("  {d:>7.2}x  {d:>8.3}\n", .{
-            speedup,
-            packed_bits_per_entry,
+        try printDuration(writer, result.generic_packed_median_ns);
+        try writer.writeAll("  ");
+        try printDuration(writer, result.specialized_median_ns);
+        try writer.print("  {d:>6.2}x  {d:>7.2}x  {d:>8.3}  {d:>8.3}\n", .{
+            generic_speedup,
+            specialized_speedup,
+            generic_bits_per_entry,
+            specialized_bits_per_entry,
         });
     }
 
-    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n\n");
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n\n");
 }
 
 fn printDuration(writer: anytype, ns: u64) !void {
