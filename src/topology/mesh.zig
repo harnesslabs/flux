@@ -605,6 +605,35 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return partial;
         }
 
+        /// Construct a uniform tetrahedral grid on `[0, width] × [0, height] × [0, depth]`.
+        ///
+        /// Only available for 3D volume meshes (`topological_dimension = 3`).
+        /// The intended decomposition is six tetrahedra per hexahedral cell
+        /// using the Freudenthal/Kuhn simplex decomposition.
+        pub fn uniform_tetrahedral_grid(
+            allocator: std.mem.Allocator,
+            nx: u32,
+            ny: u32,
+            nz: u32,
+            width: f64,
+            height: f64,
+            depth: f64,
+        ) !Self {
+            comptime {
+                if (topological_dimension != 3) @compileError("uniform_tetrahedral_grid is only available for 3D meshes (topological_dimension = 3)");
+            }
+
+            _ = allocator;
+            _ = nx;
+            _ = ny;
+            _ = nz;
+            _ = width;
+            _ = height;
+            _ = depth;
+
+            @panic("uniform_tetrahedral_grid is not yet implemented");
+        }
+
         // ───────────────────────────────────────────────────────────────────
         // Index helpers (grid-specific)
         // ───────────────────────────────────────────────────────────────────

@@ -224,3 +224,27 @@ Separating the storage experiment from mesh/operator integration keeps the API
 honest, preserves the current topology/operator boundary, and answers the
 performance question before committing the rest of the codebase to a more
 involved matrix interface.
+
+## 2026-04-04: Uniform tetrahedral grids use the 6-tet Freudenthal/Kuhn decomposition
+
+**Decision:** `uniform_tetrahedral_grid(...)` decomposes each axis-aligned cube
+into six tetrahedra using the Freudenthal/Kuhn simplex decomposition induced by
+the coordinate ordering `x ≤ y ≤ z` on the unit cube, then maps that pattern
+affinely onto every hexahedral cell in the grid.
+
+**Alternatives considered:**
+1. Five-tetrahedron cube split with parity alternation: rejected because the
+   global conformity rules are harder to reason about and would force
+   checkerboard bookkeeping into what should be a mechanically generated test
+   bed.
+2. Ad hoc per-cell triangulations chosen for symmetry: rejected because local
+   choices make face sharing and orientation consistency across cell boundaries
+   harder to audit.
+
+**Rationale:** The 6-tet decomposition gives one obvious global rule: every
+cell uses the same simplex pattern derived from the cube's total vertex order.
+That makes boundary assembly easier to verify, guarantees conforming shared
+faces across adjacent cells, and provides a clean foundation for M2 invariant
+tests. The tradeoff is a larger tetrahedron count than a 5-tet scheme, which
+is acceptable here because correctness and orientation regularity matter more
+than minimizing element count in the initial 3D test-bed constructor.
