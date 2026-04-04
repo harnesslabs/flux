@@ -380,3 +380,89 @@ test "TripletAssembler handles empty rows" {
     const r1 = m.row(1);
     try testing.expectEqual(@as(usize, 0), r1.cols.len);
 }
+
+test "PackedIncidenceSigns round-trips random signs" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51A9_B17);
+
+    const lengths = [_]u32{ 1, 2, 7, 8, 9, 31, 32, 33, 257 };
+    for (lengths) |len| {
+        const signs = try allocator.alloc(i8, len);
+        defer allocator.free(signs);
+
+        for (signs) |*sign| {
+            sign.* = if (rng.random().boolean()) @as(i8, 1) else @as(i8, -1);
+        }
+
+        var packed_signs = try PackedIncidenceSigns.fromSigns(allocator, signs);
+        defer packed_signs.deinit(allocator);
+
+        try testing.expectEqual(PackedIncidenceSigns.bytesForEntries(len), packed_signs.bytes.len);
+        for (signs, 0..) |expected, entry_idx| {
+            try testing.expectEqual(expected, packed_signs.get(@intCast(entry_idx)));
+        }
+    }
+}
+
+test "PackedIncidenceMatrix transpose_multiply matches i8 CSR baseline" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x1A61_D3CE);
+
+    inline for (0..32) |_| {
+        const n_rows: u32 = 12;
+        const n_cols: u32 = 19;
+        const max_row_nnz: u32 = 4;
+
+        var matrix = try CsrMatrix(i8).init(allocator, n_rows, n_cols, n_rows * max_row_nnz);
+        defer matrix.deinit(allocator);
+
+        var write_idx: u32 = 0;
+        matrix.row_ptr[0] = 0;
+        for (0..n_rows) |row_idx_usize| {
+            const row_idx: u32 = @intCast(row_idx_usize);
+            const row_nnz = rng.random().uintLessThanBiased(u32, max_row_nnz + 1);
+            var used_cols = [_]bool{false} ** n_cols;
+            var selected: u32 = 0;
+            while (selected < row_nnz) {
+                const col = rng.random().uintLessThanBiased(u32, n_cols);
+                if (used_cols[col]) continue;
+                used_cols[col] = true;
+                selected += 1;
+            }
+
+            for (used_cols, 0..) |present, col| {
+                if (!present) continue;
+                matrix.col_idx[write_idx] = @intCast(col);
+                matrix.values[write_idx] = if (rng.random().boolean()) @as(i8, 1) else @as(i8, -1);
+                write_idx += 1;
+            }
+            matrix.row_ptr[row_idx + 1] = write_idx;
+        }
+
+        matrix.col_idx = matrix.col_idx[0..write_idx];
+        matrix.values = matrix.values[0..write_idx];
+
+        var packed_matrix = try PackedIncidenceMatrix.fromCsr(allocator, matrix);
+        defer packed_matrix.deinit(allocator);
+
+        const input = try allocator.alloc(f64, n_rows);
+        defer allocator.free(input);
+        const dense_output = try allocator.alloc(f64, n_cols);
+        defer allocator.free(dense_output);
+        const packed_output = try allocator.alloc(f64, n_cols);
+        defer allocator.free(packed_output);
+
+        for (input) |*value| {
+            value.* = rng.random().float(f64) * 20.0 - 10.0;
+        }
+
+        @memset(dense_output, 0.0);
+        @memset(packed_output, 0.0);
+        matrix.transpose_multiply(input, dense_output);
+        packed_matrix.transpose_multiply(input, packed_output);
+
+        for (dense_output, packed_output) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-12);
+        }
+    }
+}
