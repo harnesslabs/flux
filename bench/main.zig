@@ -11,12 +11,17 @@
 //!   zig build bench -- --json          — print JSON to stdout (default: table to stderr)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
 /// Version of the benchmark result file schema.
-const benchmark_suite_version: u32 = 2;
-/// Version for microbenchmarks whose timing method changed after batching.
-const small_cochain_method_version: u32 = 2;
+const benchmark_suite_version: u32 = 3;
+/// Version for operator and end-to-end rows after switching to calibrated samples.
+const stable_benchmark_method_version: u32 = 2;
+/// Version for tiny cochain microbenchmarks after switching to calibrated samples.
+const micro_benchmark_method_version: u32 = 3;
+/// Version for arithmetic scalar-vs-default comparisons after switching to calibrated samples.
+const arithmetic_benchmark_method_version: u32 = 2;
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -60,6 +65,12 @@ const cavity_grid: u32 = 256;
 const cavity_domain: f64 = 1.0;
 const cavity_courant: f64 = 0.1;
 const small_cochain_repetitions: u32 = 64;
+const incidence_grid_nx: u32 = 1000;
+const incidence_grid_ny: u32 = 1000;
+const incidence_warmup_iterations: u32 = 5;
+const incidence_measured_iterations: u32 = 20;
+const target_sample_duration_ns: u64 = 5 * std.time.ns_per_ms;
+const max_sample_repetitions: u32 = 1 << 20;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -67,20 +78,39 @@ const regression_threshold: f64 = 0.20;
 
 const BenchmarkFn = *const fn (*BenchmarkContext) void;
 
+const BenchmarkClass = enum {
+    gate,
+    info,
+};
+
 const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
-    repetitions: u32 = 1,
-    version: u32 = 1,
+    minimum_repetitions: u32 = 1,
+    version: u32 = stable_benchmark_method_version,
+    class: BenchmarkClass = .gate,
 };
 
 const BenchmarkResult = struct {
     name: []const u8,
     version: u32,
+    class: BenchmarkClass,
+    repetitions: u32,
     median_ns: u64,
     min_ns: u64,
     max_ns: u64,
     iterations: u32,
+};
+
+const IncidenceComparisonResult = struct {
+    name: []const u8,
+    nnz: u32,
+    dense_value_bytes: usize,
+    generic_packed_value_bytes: usize,
+    specialized_value_bytes: usize,
+    dense_median_ns: u64,
+    generic_packed_median_ns: u64,
+    specialized_median_ns: u64,
 };
 
 const ArithmeticCase = struct {
@@ -244,6 +274,266 @@ fn innerProductScalarLoop(lhs: []const f64, rhs: []const f64) f64 {
     return sum;
 }
 
+fn gridVertexIndex(i: u32, j: u32, ny: u32) u32 {
+    return i * (ny + 1) + j;
+}
+
+fn horizontalEdgeIndex(i: u32, j: u32, nx: u32) u32 {
+    return j * nx + i;
+}
+
+fn verticalEdgeIndex(i: u32, j: u32, ny: u32, horizontal_edge_count: u32) u32 {
+    return horizontal_edge_count + i * ny + j;
+}
+
+fn diagonalEdgeIndex(i: u32, j: u32, ny: u32, horizontal_edge_count: u32, vertical_edge_count: u32) u32 {
+    return horizontal_edge_count + vertical_edge_count + i * ny + j;
+}
+
+fn buildBoundary1Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const vertex_count: u32 = (nx + 1) * (ny + 1);
+    const horizontal_edge_count: u32 = nx * (ny + 1);
+    const vertical_edge_count: u32 = (nx + 1) * ny;
+    const diagonal_edge_count: u32 = nx * ny;
+    const edge_count: u32 = horizontal_edge_count + vertical_edge_count + diagonal_edge_count;
+
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, edge_count, vertex_count, 2 * edge_count);
+    errdefer boundary.deinit(allocator);
+
+    var edge_idx: u32 = 0;
+
+    for (0..ny + 1) |j_u| {
+        for (0..nx) |i_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i + 1, j, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    for (0..nx + 1) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i, j + 1, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    for (0..nx) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i + 1, j + 1, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    std.debug.assert(edge_idx == edge_count);
+    boundary.row_ptr[edge_count] = 2 * edge_count;
+    return boundary;
+}
+
+fn buildBoundary2Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const horizontal_edge_count: u32 = nx * (ny + 1);
+    const vertical_edge_count: u32 = (nx + 1) * ny;
+    const edge_count: u32 = horizontal_edge_count + vertical_edge_count + nx * ny;
+    const face_count: u32 = 2 * nx * ny;
+
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, face_count, edge_count, 3 * face_count);
+    errdefer boundary.deinit(allocator);
+
+    var face_idx: u32 = 0;
+    for (0..nx) |i_u| {
+        const i: u32 = @intCast(i_u);
+        for (0..ny) |j_u| {
+            const j: u32 = @intCast(j_u);
+            const h_ij = horizontalEdgeIndex(i, j, nx);
+            const h_i_jp1 = horizontalEdgeIndex(i, j + 1, nx);
+            const v_ip1_j = verticalEdgeIndex(i + 1, j, ny, horizontal_edge_count);
+            const v_i_j = verticalEdgeIndex(i, j, ny, horizontal_edge_count);
+            const d_ij = diagonalEdgeIndex(i, j, ny, horizontal_edge_count, vertical_edge_count);
+
+            boundary.row_ptr[face_idx] = 3 * face_idx;
+            boundary.col_idx[3 * face_idx + 0] = h_ij;
+            boundary.values[3 * face_idx + 0] = 1;
+            boundary.col_idx[3 * face_idx + 1] = v_ip1_j;
+            boundary.values[3 * face_idx + 1] = 1;
+            boundary.col_idx[3 * face_idx + 2] = d_ij;
+            boundary.values[3 * face_idx + 2] = -1;
+            face_idx += 1;
+
+            boundary.row_ptr[face_idx] = 3 * face_idx;
+            boundary.col_idx[3 * face_idx + 0] = h_i_jp1;
+            boundary.values[3 * face_idx + 0] = -1;
+            boundary.col_idx[3 * face_idx + 1] = v_i_j;
+            boundary.values[3 * face_idx + 1] = -1;
+            boundary.col_idx[3 * face_idx + 2] = d_ij;
+            boundary.values[3 * face_idx + 2] = 1;
+            face_idx += 1;
+        }
+    }
+
+    std.debug.assert(face_idx == face_count);
+    boundary.row_ptr[face_count] = 3 * face_count;
+    return boundary;
+}
+
+fn buildBoundary3LikeMatrix(allocator: std.mem.Allocator, row_count: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const col_count: u32 = row_count + 3;
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, row_count, col_count, 4 * row_count);
+    errdefer boundary.deinit(allocator);
+
+    for (0..row_count) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const start = 4 * row_idx;
+        boundary.row_ptr[row_idx] = start;
+        boundary.col_idx[start + 0] = row_idx;
+        boundary.values[start + 0] = 1;
+        boundary.col_idx[start + 1] = row_idx + 1;
+        boundary.values[start + 1] = -1;
+        boundary.col_idx[start + 2] = row_idx + 2;
+        boundary.values[start + 2] = 1;
+        boundary.col_idx[start + 3] = row_idx + 3;
+        boundary.values[start + 3] = -1;
+    }
+    boundary.row_ptr[row_count] = 4 * row_count;
+    return boundary;
+}
+
+fn timeDenseTransposeMultiply(
+    matrix: flux.math.sparse.CsrMatrix(i8),
+    input: []const f64,
+    output: []f64,
+) !u64 {
+    var timings: [incidence_measured_iterations]u64 = undefined;
+    for (&timings) |*timing| {
+        @memset(output, 0.0);
+        var timer = try std.time.Timer.start();
+        matrix.transpose_multiply(input, output);
+        timing.* = timer.read();
+    }
+    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
+    return timings[incidence_measured_iterations / 2];
+}
+
+fn timeSpecializedTransposeMultiply(matrix: anytype, input: []const f64, output: []f64) !u64 {
+    var timings: [incidence_measured_iterations]u64 = undefined;
+    for (&timings) |*timing| {
+        @memset(output, 0.0);
+        var timer = try std.time.Timer.start();
+        matrix.transpose_multiply(input, output);
+        timing.* = timer.read();
+    }
+    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
+    return timings[incidence_measured_iterations / 2];
+}
+
+fn compareIncidenceTransposeMultiply(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    matrix: flux.math.sparse.CsrMatrix(i8),
+    specialized_matrix: flux.math.sparse.PackedIncidenceMatrix,
+) !IncidenceComparisonResult {
+    var generic_matrix = try flux.math.sparse.PackedIncidenceMatrix.fromCsr(allocator, matrix);
+    defer generic_matrix.deinit(allocator);
+
+    const input = try allocator.alloc(f64, matrix.n_rows);
+    defer allocator.free(input);
+    const dense_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(dense_output);
+    const generic_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(generic_output);
+    const specialized_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(specialized_output);
+
+    var rng = std.Random.DefaultPrng.init(0x1AC1_D3C3);
+    fillRandom(&rng, input);
+
+    for (0..incidence_warmup_iterations) |_| {
+        @memset(dense_output, 0.0);
+        matrix.transpose_multiply(input, dense_output);
+        @memset(generic_output, 0.0);
+        generic_matrix.transpose_multiply(input, generic_output);
+        @memset(specialized_output, 0.0);
+        specialized_matrix.transpose_multiply(input, specialized_output);
+    }
+
+    const dense_median_ns = try timeDenseTransposeMultiply(matrix, input, dense_output);
+    const generic_packed_median_ns = try timeSpecializedTransposeMultiply(generic_matrix, input, generic_output);
+    const specialized_median_ns = try timeSpecializedTransposeMultiply(specialized_matrix, input, specialized_output);
+
+    for (dense_output, generic_output) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
+    }
+    for (dense_output, specialized_output) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
+    }
+
+    return .{
+        .name = name,
+        .nnz = matrix.nnz(),
+        .dense_value_bytes = matrix.values.len * @sizeOf(i8),
+        .generic_packed_value_bytes = generic_matrix.signBytes(),
+        .specialized_value_bytes = specialized_matrix.signBytes(),
+        .dense_median_ns = dense_median_ns,
+        .generic_packed_median_ns = generic_packed_median_ns,
+        .specialized_median_ns = specialized_median_ns,
+    };
+}
+
+fn runIncidenceComparisonBenchmarks(allocator: std.mem.Allocator) ![3]IncidenceComparisonResult {
+    var results: [3]IncidenceComparisonResult = undefined;
+
+    var boundary1 = try buildBoundary1Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
+    defer boundary1.deinit(allocator);
+    var boundary1_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 1, boundary1);
+    defer boundary1_specialized.deinit(allocator);
+    results[0] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_1_transpose_multiply",
+        boundary1,
+        boundary1_specialized,
+    );
+
+    var boundary2 = try buildBoundary2Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
+    defer boundary2.deinit(allocator);
+    var boundary2_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 2, boundary2);
+    defer boundary2_specialized.deinit(allocator);
+    results[1] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_2_transpose_multiply",
+        boundary2,
+        boundary2_specialized,
+    );
+
+    const boundary3_rows: u32 = incidence_grid_nx * incidence_grid_ny;
+    var boundary3 = try buildBoundary3LikeMatrix(allocator, boundary3_rows);
+    defer boundary3.deinit(allocator);
+    var boundary3_specialized = try flux.math.sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 3, boundary3);
+    defer boundary3_specialized.deinit(allocator);
+    results[2] = try compareIncidenceTransposeMultiply(
+        allocator,
+        "boundary_3_like_transpose_multiply",
+        boundary3,
+        boundary3_specialized,
+    );
+
+    return results;
+}
+
 // ── I/O helpers (Zig 0.15 compatible) ───────────────────────────────────
 
 fn stderrWriter() @TypeOf((std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter()) {
@@ -390,6 +680,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticAddScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -399,6 +691,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticAdd(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -408,6 +702,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticScaleScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -417,6 +713,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticScale(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -426,6 +724,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticNegateScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -435,6 +735,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticNegate(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -444,6 +746,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticInnerProductScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -453,6 +757,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticInnerProduct(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
     }
@@ -474,26 +780,30 @@ const base_benchmarks = [_]BenchmarkDef{
     .{
         .name = "cochain_add",
         .run = benchCochainAdd,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_scale",
         .run = benchCochainScale,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_negate",
         .run = benchCochainNegate,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_inner_product",
         .run = benchCochainInnerProduct,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
@@ -505,19 +815,21 @@ const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;
 fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     // Warmup — let branch predictors and caches settle.
     for (0..warmup_iterations) |_| {
-        for (0..def.repetitions) |_| {
+        for (0..def.minimum_repetitions) |_| {
             def.run(ctx);
         }
     }
+
+    const repetitions = calibrateRepetitions(def, ctx);
 
     // Measured iterations.
     var timings: [measured_iterations]u64 = undefined;
     for (&timings) |*t| {
         var timer = std.time.Timer.start() catch unreachable;
-        for (0..def.repetitions) |_| {
+        for (0..repetitions) |_| {
             def.run(ctx);
         }
-        t.* = @divFloor(timer.read(), def.repetitions);
+        t.* = @divFloor(timer.read(), repetitions);
     }
 
     // Sort for median/min/max.
@@ -526,6 +838,8 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     return .{
         .name = def.name,
         .version = def.version,
+        .class = def.class,
+        .repetitions = repetitions,
         .median_ns = timings[measured_iterations / 2],
         .min_ns = timings[0],
         .max_ns = timings[measured_iterations - 1],
@@ -533,11 +847,28 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     };
 }
 
+fn calibrateRepetitions(def: BenchmarkDef, ctx: *BenchmarkContext) u32 {
+    var repetitions = def.minimum_repetitions;
+    while (true) {
+        var timer = std.time.Timer.start() catch unreachable;
+        for (0..repetitions) |_| {
+            def.run(ctx);
+        }
+        const elapsed_ns = timer.read();
+        if (elapsed_ns >= target_sample_duration_ns) return repetitions;
+        if (repetitions >= max_sample_repetitions) return repetitions;
+
+        const doubled = @as(u64, repetitions) * 2;
+        repetitions = @intCast(@min(doubled, max_sample_repetitions));
+    }
+}
+
 // ── Baseline I/O ────────────────────────────────────────────────────────
 
 const Baseline = struct {
     name: []const u8,
     version: u32 = 1,
+    class: BenchmarkClass = .gate,
     median_ns: u64,
 };
 
@@ -576,8 +907,8 @@ fn writeBaselines(results: []const BenchmarkResult) !void {
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}}}",
-            .{ r.name, r.version, r.median_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"class\": \"{s}\", \"median_ns\": {d}}}",
+            .{ r.name, r.version, @tagName(r.class), r.median_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -629,6 +960,8 @@ fn printTable(
         if (baseline) |base| {
             if (base.version != r.version) {
                 try writer.print("  method v{d}→v{d}", .{ base.version, r.version });
+            } else if (r.class == .info) {
+                try writer.writeAll("  info only");
             } else {
                 const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
                 const pct = (ratio - 1.0) * 100.0;
@@ -685,6 +1018,53 @@ fn printArithmeticSpeedups(writer: anytype, results: []const BenchmarkResult) !v
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
 }
 
+fn printIncidenceComparisons(writer: anytype, results: []const IncidenceComparisonResult) !void {
+    try writer.print("  Incidence transpose-multiply comparison ({d}x{d} grid)\n", .{
+        incidence_grid_nx,
+        incidence_grid_ny,
+    });
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n");
+    try writer.print("  {s:<32} {s:>10} {s:>10} {s:>10} {s:>8} {s:>8} {s:>8} {s:>8}\n", .{
+        "benchmark",
+        "i8",
+        "generic",
+        "special",
+        "gen x",
+        "spec x",
+        "gen b/e",
+        "spec b/e",
+    });
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n");
+
+    for (results) |result| {
+        const generic_speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
+            @as(f64, @floatFromInt(result.generic_packed_median_ns));
+        const specialized_speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
+            @as(f64, @floatFromInt(result.specialized_median_ns));
+        const generic_bits_per_entry = 8.0 *
+            @as(f64, @floatFromInt(result.generic_packed_value_bytes)) /
+            @as(f64, @floatFromInt(result.nnz));
+        const specialized_bits_per_entry = 8.0 *
+            @as(f64, @floatFromInt(result.specialized_value_bytes)) /
+            @as(f64, @floatFromInt(result.nnz));
+
+        try writer.print("  {s:<32} ", .{result.name});
+        try printDuration(writer, result.dense_median_ns);
+        try writer.writeAll("  ");
+        try printDuration(writer, result.generic_packed_median_ns);
+        try writer.writeAll("  ");
+        try printDuration(writer, result.specialized_median_ns);
+        try writer.print("  {d:>6.2}x  {d:>7.2}x  {d:>8.3}  {d:>8.3}\n", .{
+            generic_speedup,
+            specialized_speedup,
+            generic_bits_per_entry,
+            specialized_bits_per_entry,
+        });
+    }
+
+    try writer.writeAll("  ──────────────────────────────────────────────────────────────────────────────────────────────────\n\n");
+}
+
 fn printDuration(writer: anytype, ns: u64) !void {
     if (ns < 1_000) {
         try writer.print("{d:>8} ns", .{ns});
@@ -705,12 +1085,18 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
+    try writer.writeAll("  \"context\": {\n");
+    try writer.print("    \"zig_version\": \"{s}\",\n", .{builtin.zig_version_string});
+    try writer.print("    \"arch\": \"{s}\",\n", .{@tagName(builtin.target.cpu.arch)});
+    try writer.print("    \"os\": \"{s}\",\n", .{@tagName(builtin.target.os.tag)});
+    try writer.print("    \"target_sample_duration_ns\": {d}\n", .{target_sample_duration_ns});
+    try writer.writeAll("  },\n");
     try writer.writeAll("  \"benchmarks\": [\n");
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
-            .{ r.name, r.version, r.median_ns, r.min_ns, r.max_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"class\": \"{s}\", \"repetitions\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
+            .{ r.name, r.version, @tagName(r.class), r.repetitions, r.median_ns, r.min_ns, r.max_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -735,8 +1121,10 @@ fn checkRegressions(results: []const BenchmarkResult, baselines: []const Baselin
     const stderr = stderrWriter();
 
     for (results) |r| {
+        if (r.class != .gate) continue;
         const base = findBaseline(baselines, r.name) orelse continue;
         if (base.version != r.version) continue;
+        if (base.class != .gate) continue;
         const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
         if (ratio > 1.0 + regression_threshold) {
             stderr.print("  REGRESSION: {s} — {d:.1}% slower (baseline: ", .{
@@ -807,6 +1195,13 @@ pub fn main() !void {
     }
     try printTable(stderr, &results, baseline_list);
     try printArithmeticSpeedups(stderr, &results);
+
+    try stderr.print("  Building incidence comparison cases on a {d}x{d} grid...\n", .{
+        incidence_grid_nx,
+        incidence_grid_ny,
+    });
+    const incidence_results = try runIncidenceComparisonBenchmarks(allocator);
+    try printIncidenceComparisons(stderr, &incidence_results);
 
     // Update baselines if requested.
     if (update_mode) {

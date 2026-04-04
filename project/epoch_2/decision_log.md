@@ -201,3 +201,26 @@ still giving the module an internal performance seam. The decision also stays
 compatible with the scalar-type horizon: when `Cochain(..., Scalar)` lands, the
 private kernels can be generalized or specialized without freezing a public
 SIMD-specific surface today.
+
+## 2026-04-03: Incidence compression prototypes a sign-bit CSR wrapper before any mesh integration
+
+**Decision:** Prototype compressed incidence storage as a dedicated
+`PackedIncidenceMatrix` plus `PackedIncidenceSigns` in `src/math/sparse.zig`,
+benchmark it against `CsrMatrix(i8)`, and defer replacing mesh boundary
+operators until the benchmark shows a real SpMV win.
+
+**Alternatives considered:**
+1. Integrate a 2-bit packed ternary encoding directly into `CsrMatrix(i8)`:
+   rejected for the first pass because CSR already omits zeros, so storing
+   `{−1,+1}` as one sign bit per nonzero is denser, and changing `row().vals`
+   semantics up front would force avoidable API churn across operators.
+2. Replace `BoundaryMatrix` immediately with a compressed type: rejected until
+   the packed path proves it helps the hot loop. The issue explicitly allows
+   not shipping the optimization if decode overhead erases the cache benefit.
+
+**Rationale:** The real question in issue #48 is empirical: does smaller
+incidence storage make boundary-operator application faster on large meshes?
+Separating the storage experiment from mesh/operator integration keeps the API
+honest, preserves the current topology/operator boundary, and answers the
+performance question before committing the rest of the codebase to a more
+involved matrix interface.

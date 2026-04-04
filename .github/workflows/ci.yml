@@ -116,9 +116,13 @@ jobs:
 
           rows = []
           skipped = []
+          info_only = []
           has_regression = False
           for name in base:
               if name not in pr: continue
+              if pr[name].get('class', 'gate') != 'gate':
+                  info_only.append(name)
+                  continue
               base_version = base[name].get('version', 1)
               pr_version = pr[name].get('version', 1)
               if base_version != pr_version:
@@ -156,6 +160,12 @@ jobs:
                   f.write('Skipped due to benchmark method version changes:\n')
                   for name, base_version, pr_version in skipped:
                       f.write(f'- \`{name}\`: v{base_version} → v{pr_version}\n')
+              if info_only:
+                  if rows or skipped:
+                      f.write('\n')
+                  f.write('Informational microbenchmarks omitted from PR comparison:\n')
+                  for name in info_only:
+                      f.write(f'- \`{name}\`\n')
           " && HAS_NOTABLE=true || HAS_NOTABLE=false
 
           if [ "$HAS_NOTABLE" = "false" ]; then

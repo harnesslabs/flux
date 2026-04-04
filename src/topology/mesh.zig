@@ -11,8 +11,9 @@ const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 const whitney = @import("../operators/whitney_mass.zig");
 
-/// Boundary operators use i8-valued CSR matrices with entries in {−1, 0, +1}.
-pub const BoundaryMatrix = sparse.CsrMatrix(i8);
+/// Boundary operators use packed sign storage: one bit per stored incidence.
+pub const BoundaryMatrix = sparse.PackedIncidenceMatrix;
+const DenseBoundaryMatrix = sparse.CsrMatrix(i8);
 
 /// Standalone 0-simplex (vertex) type constructor.
 ///
@@ -366,20 +367,25 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
 
             // -- Build ∂₁ (n_edges × n_vertices) --
             // Each edge row has exactly 2 nonzeros: tail = −1, head = +1.
-            var boundary_1 = try BoundaryMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
-            errdefer boundary_1.deinit(allocator);
+            var boundary_1: BoundaryMatrix = undefined;
             {
+                var boundary_1_dense = try DenseBoundaryMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
+                errdefer boundary_1_dense.deinit(allocator);
                 const edge_verts = edges_list.slice().items(.vertices);
                 for (0..edge_count) |e| {
-                    boundary_1.row_ptr[e] = @intCast(2 * e);
+                    boundary_1_dense.row_ptr[e] = @intCast(2 * e);
                     // tail < head for the uniform grid, so columns are sorted
-                    boundary_1.col_idx[2 * e] = edge_verts[e][0];
-                    boundary_1.values[2 * e] = -1;
-                    boundary_1.col_idx[2 * e + 1] = edge_verts[e][1];
-                    boundary_1.values[2 * e + 1] = 1;
+                    boundary_1_dense.col_idx[2 * e] = edge_verts[e][0];
+                    boundary_1_dense.values[2 * e] = -1;
+                    boundary_1_dense.col_idx[2 * e + 1] = edge_verts[e][1];
+                    boundary_1_dense.values[2 * e + 1] = 1;
                 }
-                boundary_1.row_ptr[edge_count] = 2 * edge_count;
+                boundary_1_dense.row_ptr[edge_count] = 2 * edge_count;
+
+                boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, boundary_1_dense);
+                boundary_1_dense.deinit(allocator);
             }
+            errdefer boundary_1.deinit(allocator);
 
             // -- Build ∂₂ (n_faces × n_edges) --
             // Each face row has exactly 3 nonzeros for the oriented boundary edges.
@@ -388,9 +394,10 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             // Upper-left  (SW,NE,NW): −h(i,j+1), −vert(i,j), +diag(i,j)
             //
             // Column ordering: horizontal < vertical < diagonal (always sorted).
-            var boundary_2 = try BoundaryMatrix.init(allocator, face_count, edge_count, 3 * face_count);
-            errdefer boundary_2.deinit(allocator);
+            var boundary_2: BoundaryMatrix = undefined;
             {
+                var boundary_2_dense = try DenseBoundaryMatrix.init(allocator, face_count, edge_count, 3 * face_count);
+                errdefer boundary_2_dense.deinit(allocator);
                 var f_idx: u32 = 0;
                 for (0..nx) |i_u| {
                     const i: u32 = @intCast(i_u);
@@ -403,28 +410,32 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
                         const d_ij = diagonal_edge_index(i, j, ny, horizontal_edge_count, vertical_edge_count);
 
                         // Lower-right triangle
-                        boundary_2.row_ptr[f_idx] = 3 * f_idx;
-                        boundary_2.col_idx[3 * f_idx + 0] = h_ij;
-                        boundary_2.values[3 * f_idx + 0] = 1;
-                        boundary_2.col_idx[3 * f_idx + 1] = v_ip1_j;
-                        boundary_2.values[3 * f_idx + 1] = 1;
-                        boundary_2.col_idx[3 * f_idx + 2] = d_ij;
-                        boundary_2.values[3 * f_idx + 2] = -1;
+                        boundary_2_dense.row_ptr[f_idx] = 3 * f_idx;
+                        boundary_2_dense.col_idx[3 * f_idx + 0] = h_ij;
+                        boundary_2_dense.values[3 * f_idx + 0] = 1;
+                        boundary_2_dense.col_idx[3 * f_idx + 1] = v_ip1_j;
+                        boundary_2_dense.values[3 * f_idx + 1] = 1;
+                        boundary_2_dense.col_idx[3 * f_idx + 2] = d_ij;
+                        boundary_2_dense.values[3 * f_idx + 2] = -1;
                         f_idx += 1;
 
                         // Upper-left triangle
-                        boundary_2.row_ptr[f_idx] = 3 * f_idx;
-                        boundary_2.col_idx[3 * f_idx + 0] = h_i_jp1;
-                        boundary_2.values[3 * f_idx + 0] = -1;
-                        boundary_2.col_idx[3 * f_idx + 1] = v_i_j;
-                        boundary_2.values[3 * f_idx + 1] = -1;
-                        boundary_2.col_idx[3 * f_idx + 2] = d_ij;
-                        boundary_2.values[3 * f_idx + 2] = 1;
+                        boundary_2_dense.row_ptr[f_idx] = 3 * f_idx;
+                        boundary_2_dense.col_idx[3 * f_idx + 0] = h_i_jp1;
+                        boundary_2_dense.values[3 * f_idx + 0] = -1;
+                        boundary_2_dense.col_idx[3 * f_idx + 1] = v_i_j;
+                        boundary_2_dense.values[3 * f_idx + 1] = -1;
+                        boundary_2_dense.col_idx[3 * f_idx + 2] = d_ij;
+                        boundary_2_dense.values[3 * f_idx + 2] = 1;
                         f_idx += 1;
                     }
                 }
-                boundary_2.row_ptr[face_count] = 3 * face_count;
+                boundary_2_dense.row_ptr[face_count] = 3 * face_count;
+
+                boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, boundary_2_dense);
+                boundary_2_dense.deinit(allocator);
             }
+            errdefer boundary_2.deinit(allocator);
 
             // -- Compute primal geometry --
 
@@ -688,8 +699,8 @@ test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
         const r = mesh.boundary(1).row(@intCast(e));
         try testing.expectEqual(@as(usize, 2), r.cols.len);
         // tail = −1, head = +1
-        try testing.expectEqual(@as(i8, -1), r.vals[0]);
-        try testing.expectEqual(@as(i8, 1), r.vals[1]);
+        try testing.expectEqual(@as(i8, -1), r.sign(0));
+        try testing.expectEqual(@as(i8, 1), r.sign(1));
         // columns sorted
         try testing.expect(r.cols[0] < r.cols[1]);
     }
@@ -732,9 +743,11 @@ test "boundary of boundary is zero for 2D triangulations" {
             @memset(vertex_sum, 0);
 
             const face_row = mesh.boundary(2).row(@intCast(f));
-            for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
+            for (face_row.cols, 0..) |edge_idx, face_entry_idx| {
+                const face_sign = face_row.sign(face_entry_idx);
                 const edge_row = mesh.boundary(1).row(edge_idx);
-                for (edge_row.cols, edge_row.vals) |vert_idx, edge_sign| {
+                for (edge_row.cols, 0..) |vert_idx, edge_entry_idx| {
+                    const edge_sign = edge_row.sign(edge_entry_idx);
                     vertex_sum[vert_idx] += @as(i32, face_sign) * @as(i32, edge_sign);
                 }
             }
@@ -1035,16 +1048,22 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
 
     // -- ∂₁ (6 edges × 4 vertices) --
     // Each edge row: tail = -1, head = +1.
-    var boundary_1 = try BoundaryMatrix.init(allocator, 6, 4, 12);
-    errdefer boundary_1.deinit(allocator);
-    for (0..6) |e| {
-        boundary_1.row_ptr[e] = @intCast(2 * e);
-        boundary_1.col_idx[2 * e] = edge_verts[e][0];
-        boundary_1.values[2 * e] = -1;
-        boundary_1.col_idx[2 * e + 1] = edge_verts[e][1];
-        boundary_1.values[2 * e + 1] = 1;
+    var boundary_1: BoundaryMatrix = undefined;
+    {
+        var boundary_1_dense = try DenseBoundaryMatrix.init(allocator, 6, 4, 12);
+        errdefer boundary_1_dense.deinit(allocator);
+        for (0..6) |e| {
+            boundary_1_dense.row_ptr[e] = @intCast(2 * e);
+            boundary_1_dense.col_idx[2 * e] = edge_verts[e][0];
+            boundary_1_dense.values[2 * e] = -1;
+            boundary_1_dense.col_idx[2 * e + 1] = edge_verts[e][1];
+            boundary_1_dense.values[2 * e + 1] = 1;
+        }
+        boundary_1_dense.row_ptr[6] = 12;
+        boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, boundary_1_dense);
+        boundary_1_dense.deinit(allocator);
     }
-    boundary_1.row_ptr[6] = 12;
+    errdefer boundary_1.deinit(allocator);
 
     // -- Faces (4) --
     // Face i is opposite vertex i. Vertices of face i (sorted):
@@ -1089,51 +1108,63 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         }
     }.f;
 
-    var boundary_2 = try BoundaryMatrix.init(allocator, 4, 6, 12);
-    errdefer boundary_2.deinit(allocator);
-    for (0..4) |fi| {
-        const fv = face_verts[fi];
-        // Edges of face (a,b,c): (a,b) +1, (a,c) -1, (b,c) +1
-        const e0 = edge_index(fv[0], fv[1]);
-        const e1 = edge_index(fv[0], fv[2]);
-        const e2 = edge_index(fv[1], fv[2]);
+    var boundary_2: BoundaryMatrix = undefined;
+    {
+        var boundary_2_dense = try DenseBoundaryMatrix.init(allocator, 4, 6, 12);
+        errdefer boundary_2_dense.deinit(allocator);
+        for (0..4) |fi| {
+            const fv = face_verts[fi];
+            // Edges of face (a,b,c): (a,b) +1, (a,c) -1, (b,c) +1
+            const e0 = edge_index(fv[0], fv[1]);
+            const e1 = edge_index(fv[0], fv[2]);
+            const e2 = edge_index(fv[1], fv[2]);
 
-        // Store in sorted column order
-        var cols: [3]u32 = .{ e0, e1, e2 };
-        var vals: [3]i8 = .{ 1, -1, 1 };
+            // Store in sorted column order
+            var cols: [3]u32 = .{ e0, e1, e2 };
+            var vals: [3]i8 = .{ 1, -1, 1 };
 
-        // Sort by column index (insertion sort on 3 elements)
-        if (cols[0] > cols[1]) {
-            std.mem.swap(u32, &cols[0], &cols[1]);
-            std.mem.swap(i8, &vals[0], &vals[1]);
-        }
-        if (cols[1] > cols[2]) {
-            std.mem.swap(u32, &cols[1], &cols[2]);
-            std.mem.swap(i8, &vals[1], &vals[2]);
-        }
-        if (cols[0] > cols[1]) {
-            std.mem.swap(u32, &cols[0], &cols[1]);
-            std.mem.swap(i8, &vals[0], &vals[1]);
-        }
+            // Sort by column index (insertion sort on 3 elements)
+            if (cols[0] > cols[1]) {
+                std.mem.swap(u32, &cols[0], &cols[1]);
+                std.mem.swap(i8, &vals[0], &vals[1]);
+            }
+            if (cols[1] > cols[2]) {
+                std.mem.swap(u32, &cols[1], &cols[2]);
+                std.mem.swap(i8, &vals[1], &vals[2]);
+            }
+            if (cols[0] > cols[1]) {
+                std.mem.swap(u32, &cols[0], &cols[1]);
+                std.mem.swap(i8, &vals[0], &vals[1]);
+            }
 
-        boundary_2.row_ptr[fi] = @intCast(3 * fi);
-        inline for (0..3) |j| {
-            boundary_2.col_idx[3 * fi + j] = cols[j];
-            boundary_2.values[3 * fi + j] = vals[j];
+            boundary_2_dense.row_ptr[fi] = @intCast(3 * fi);
+            inline for (0..3) |j| {
+                boundary_2_dense.col_idx[3 * fi + j] = cols[j];
+                boundary_2_dense.values[3 * fi + j] = vals[j];
+            }
         }
+        boundary_2_dense.row_ptr[4] = 12;
+        boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, boundary_2_dense);
+        boundary_2_dense.deinit(allocator);
     }
-    boundary_2.row_ptr[4] = 12;
+    errdefer boundary_2.deinit(allocator);
 
     // -- ∂₃ (1 tet × 4 faces) --
     // Sign for face i in ∂₃: (-1)^i.
-    var boundary_3 = try BoundaryMatrix.init(allocator, 1, 4, 4);
-    errdefer boundary_3.deinit(allocator);
-    boundary_3.row_ptr[0] = 0;
-    boundary_3.row_ptr[1] = 4;
-    for (0..4) |i| {
-        boundary_3.col_idx[i] = @intCast(i);
-        boundary_3.values[i] = if (i % 2 == 0) @as(i8, 1) else @as(i8, -1);
+    var boundary_3: BoundaryMatrix = undefined;
+    {
+        var boundary_3_dense = try DenseBoundaryMatrix.init(allocator, 1, 4, 4);
+        errdefer boundary_3_dense.deinit(allocator);
+        boundary_3_dense.row_ptr[0] = 0;
+        boundary_3_dense.row_ptr[1] = 4;
+        for (0..4) |i| {
+            boundary_3_dense.col_idx[i] = @intCast(i);
+            boundary_3_dense.values[i] = if (i % 2 == 0) @as(i8, 1) else @as(i8, -1);
+        }
+        boundary_3 = try BoundaryMatrix.fromBoundaryCsr(allocator, 3, boundary_3_dense);
+        boundary_3_dense.deinit(allocator);
     }
+    errdefer boundary_3.deinit(allocator);
 
     // -- Tets (1) --
     var tets = std.MultiArrayList(Simplex(M.embedding_dimension, M.topological_dimension, 3)){};
@@ -1189,9 +1220,11 @@ test "∂₁∂₂ = 0 on single tetrahedron" {
     for (0..mesh.num_faces()) |f| {
         @memset(vertex_sum, 0);
         const face_row = mesh.boundary(2).row(@intCast(f));
-        for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
+        for (face_row.cols, 0..) |edge_idx, face_entry_idx| {
+            const face_sign = face_row.sign(face_entry_idx);
             const edge_row = mesh.boundary(1).row(edge_idx);
-            for (edge_row.cols, edge_row.vals) |vert_idx, edge_sign| {
+            for (edge_row.cols, 0..) |vert_idx, edge_entry_idx| {
+                const edge_sign = edge_row.sign(edge_entry_idx);
                 vertex_sum[vert_idx] += @as(i32, face_sign) * @as(i32, edge_sign);
             }
         }
@@ -1214,9 +1247,11 @@ test "∂₂∂₃ = 0 on single tetrahedron" {
     for (0..mesh.num_tets()) |t| {
         @memset(edge_sum, 0);
         const tet_row = mesh.boundary(3).row(@intCast(t));
-        for (tet_row.cols, tet_row.vals) |face_idx, tet_sign| {
+        for (tet_row.cols, 0..) |face_idx, tet_entry_idx| {
+            const tet_sign = tet_row.sign(tet_entry_idx);
             const face_row = mesh.boundary(2).row(face_idx);
-            for (face_row.cols, face_row.vals) |edge_idx, face_sign| {
+            for (face_row.cols, 0..) |edge_idx, face_entry_idx| {
+                const face_sign = face_row.sign(face_entry_idx);
                 edge_sum[edge_idx] += @as(i32, tet_sign) * @as(i32, face_sign);
             }
         }

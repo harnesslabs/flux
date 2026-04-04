@@ -128,7 +128,6 @@ pub fn assemble_whitney_mass_1(
         // Match by looking up the global edge's vertex pair against the face's
         // vertex pair for each local edge.
         const boundary_global = boundary_row.cols;
-        const boundary_signs = boundary_row.vals;
 
         var local_global_edge: [3]u32 = undefined;
         var local_global_sign: [3]i8 = undefined;
@@ -140,7 +139,7 @@ pub fn assemble_whitney_mass_1(
                 const ev = mesh_edge_verts[boundary_global[col]];
                 if ((ev[0] == va and ev[1] == vb) or (ev[0] == vb and ev[1] == va)) {
                     local_global_edge[k] = boundary_global[col];
-                    local_global_sign[k] = boundary_signs[col];
+                    local_global_sign[k] = boundary_row.sign(col);
                     found = true;
                     break;
                 }

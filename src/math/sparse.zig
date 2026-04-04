@@ -102,6 +102,502 @@ pub fn spmv(matrix: CsrMatrix(f64), input_vals: []const f64, output: []f64) void
     }
 }
 
+/// Packed sign stream for incidence-valued sparse matrices.
+///
+/// CSR already omits zeros, so incidence values only need one bit per stored
+/// entry: 0 => -1, 1 => +1.
+pub const PackedIncidenceSigns = struct {
+    bytes: []u8,
+    len: u32,
+
+    pub fn bytesForEntries(entry_count: u32) usize {
+        return @intCast(@divFloor(@as(u64, entry_count) + 7, 8));
+    }
+
+    pub fn init(allocator: std.mem.Allocator, entry_count: u32) !PackedIncidenceSigns {
+        const byte_count = bytesForEntries(entry_count);
+        const bytes = try allocator.alloc(u8, byte_count);
+        @memset(bytes, 0);
+        return .{
+            .bytes = bytes,
+            .len = entry_count,
+        };
+    }
+
+    pub fn deinit(self: *PackedIncidenceSigns, allocator: std.mem.Allocator) void {
+        allocator.free(self.bytes);
+    }
+
+    pub fn fromSigns(allocator: std.mem.Allocator, signs: []const i8) !PackedIncidenceSigns {
+        std.debug.assert(signs.len <= std.math.maxInt(u32));
+
+        var packed_signs = try init(allocator, @intCast(signs.len));
+        errdefer packed_signs.deinit(allocator);
+
+        for (signs, 0..) |sign, entry_idx| {
+            packed_signs.set(@intCast(entry_idx), sign);
+        }
+
+        return packed_signs;
+    }
+
+    pub fn get(self: PackedIncidenceSigns, entry_idx: u32) i8 {
+        std.debug.assert(entry_idx < self.len);
+        const mask = bitMask(entry_idx);
+        const byte = self.bytes[byteIndex(entry_idx)];
+        return if ((byte & mask) == 0) -1 else 1;
+    }
+
+    fn set(self: PackedIncidenceSigns, entry_idx: u32, sign: i8) void {
+        std.debug.assert(entry_idx < self.len);
+        std.debug.assert(sign == -1 or sign == 1);
+
+        const byte_idx = byteIndex(entry_idx);
+        const mask = bitMask(entry_idx);
+        if (sign == 1) {
+            self.bytes[byte_idx] |= mask;
+        } else {
+            self.bytes[byte_idx] &= ~mask;
+        }
+    }
+
+    fn byteIndex(entry_idx: u32) usize {
+        return @intCast(@divFloor(entry_idx, 8));
+    }
+
+    fn bitMask(entry_idx: u32) u8 {
+        const bit_idx: u3 = @intCast(@mod(entry_idx, 8));
+        return @as(u8, 1) << bit_idx;
+    }
+};
+
+/// Packed per-row sign codes for fixed-arity incidence rows.
+pub const PackedRowSignPatterns = struct {
+    bytes: []u8,
+    len_rows: u32,
+    bits_per_row: u8,
+
+    pub fn bytesForRows(row_count: u32, bits_per_row: u8) usize {
+        return @intCast(@divFloor(@as(u64, row_count) * bits_per_row + 7, 8));
+    }
+
+    pub fn init(allocator: std.mem.Allocator, row_count: u32, bits_per_row: u8) !PackedRowSignPatterns {
+        std.debug.assert(bits_per_row >= 1 and bits_per_row <= 8);
+        const byte_count = bytesForRows(row_count, bits_per_row);
+        const bytes = try allocator.alloc(u8, byte_count);
+        @memset(bytes, 0);
+        return .{
+            .bytes = bytes,
+            .len_rows = row_count,
+            .bits_per_row = bits_per_row,
+        };
+    }
+
+    pub fn deinit(self: *PackedRowSignPatterns, allocator: std.mem.Allocator) void {
+        allocator.free(self.bytes);
+    }
+
+    pub fn set(self: PackedRowSignPatterns, row_idx: u32, code: u8) void {
+        std.debug.assert(row_idx < self.len_rows);
+        const bits_per_row: u4 = @intCast(self.bits_per_row);
+        std.debug.assert(code < (@as(u16, 1) << bits_per_row));
+
+        const start_bit = @as(u64, row_idx) * self.bits_per_row;
+        const byte_idx: usize = @intCast(@divFloor(start_bit, 8));
+        const shift: u3 = @intCast(@mod(start_bit, 8));
+        const widened = (@as(u16, code) << shift);
+        self.bytes[byte_idx] |= @truncate(widened);
+        if (shift + self.bits_per_row > 8) {
+            self.bytes[byte_idx + 1] |= @truncate(widened >> 8);
+        }
+    }
+
+    pub fn get(self: PackedRowSignPatterns, row_idx: u32) u8 {
+        std.debug.assert(row_idx < self.len_rows);
+
+        const start_bit = @as(u64, row_idx) * self.bits_per_row;
+        const byte_idx: usize = @intCast(@divFloor(start_bit, 8));
+        const shift: u3 = @intCast(@mod(start_bit, 8));
+
+        var widened: u16 = self.bytes[byte_idx];
+        if (shift + self.bits_per_row > 8) {
+            widened |= @as(u16, self.bytes[byte_idx + 1]) << 8;
+        }
+
+        const bits_per_row: u4 = @intCast(self.bits_per_row);
+        const mask: u16 = (@as(u16, 1) << bits_per_row) - 1;
+        return @truncate((widened >> shift) & mask);
+    }
+};
+
+/// CSR variant for incidence matrices with specialized sign encodings.
+pub const PackedIncidenceMatrix = struct {
+    const GenericData = struct {
+        row_ptr: []u32,
+        col_idx: []u32,
+        signs: PackedIncidenceSigns,
+
+        fn deinit(self: *GenericData, allocator: std.mem.Allocator) void {
+            allocator.free(self.row_ptr);
+            allocator.free(self.col_idx);
+            self.signs.deinit(allocator);
+        }
+    };
+
+    const Boundary1Data = struct {
+        cols: [][2]u32,
+
+        fn deinit(self: *Boundary1Data, allocator: std.mem.Allocator) void {
+            allocator.free(self.cols);
+        }
+    };
+
+    const Boundary2Data = struct {
+        cols: [][3]u32,
+        row_sign_bits: []u8,
+
+        fn deinit(self: *Boundary2Data, allocator: std.mem.Allocator) void {
+            allocator.free(self.row_sign_bits);
+            allocator.free(self.cols);
+        }
+
+        fn firstTwoPositive(self: Boundary2Data, row_idx: u32) bool {
+            return getPackedBit(self.row_sign_bits, row_idx);
+        }
+
+        fn mask(self: Boundary2Data, row_idx: u32) u8 {
+            return if (self.firstTwoPositive(row_idx)) 0b011 else 0b100;
+        }
+    };
+
+    const Encoding = union(enum) {
+        generic: GenericData,
+        boundary1: Boundary1Data,
+        boundary2: Boundary2Data,
+    };
+
+    pub const Row = struct {
+        cols: []const u32,
+        sign_encoding: union(enum) {
+            generic: struct {
+                start: u32,
+                signs: PackedIncidenceSigns,
+            },
+            fixed_mask: u8,
+        },
+
+        pub fn sign(self: Row, local_idx: usize) i8 {
+            std.debug.assert(local_idx < self.cols.len);
+            return switch (self.sign_encoding) {
+                .generic => |generic| generic.signs.get(generic.start + @as(u32, @intCast(local_idx))),
+                .fixed_mask => |mask| signFromMask(mask, local_idx),
+            };
+        }
+    };
+
+    storage: Encoding,
+    n_rows: u32,
+    n_cols: u32,
+    row_arity: u8,
+
+    pub fn fromCsr(allocator: std.mem.Allocator, matrix: CsrMatrix(i8)) !PackedIncidenceMatrix {
+        const row_ptr = try allocator.dupe(u32, matrix.row_ptr);
+        errdefer allocator.free(row_ptr);
+
+        const col_idx = try allocator.dupe(u32, matrix.col_idx);
+        errdefer allocator.free(col_idx);
+
+        for (matrix.values) |value| {
+            std.debug.assert(value == -1 or value == 1);
+        }
+
+        const signs = try PackedIncidenceSigns.fromSigns(allocator, matrix.values);
+        errdefer {
+            var signs_copy = signs;
+            signs_copy.deinit(allocator);
+        }
+
+        return .{
+            .storage = .{ .generic = .{
+                .row_ptr = row_ptr,
+                .col_idx = col_idx,
+                .signs = signs,
+            } },
+            .n_rows = matrix.n_rows,
+            .n_cols = matrix.n_cols,
+            .row_arity = 0,
+        };
+    }
+
+    pub fn fromBoundaryCsr(
+        allocator: std.mem.Allocator,
+        boundary_degree: u8,
+        matrix: CsrMatrix(i8),
+    ) !PackedIncidenceMatrix {
+        const row_arity: u8 = boundary_degree + 1;
+        std.debug.assert(row_arity >= 2 and row_arity <= 4);
+
+        if (boundary_degree >= 3) {
+            return fromCsr(allocator, matrix);
+        }
+
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            std.debug.assert(row_view.cols.len == row_arity);
+        }
+
+        if (row_arity == 2 and allRowsCanonicalEdge(matrix)) {
+            const cols = try allocator.alloc([2]u32, matrix.n_rows);
+            errdefer allocator.free(cols);
+            for (0..matrix.n_rows) |row_idx_usize| {
+                const row_view = matrix.row(@intCast(row_idx_usize));
+                cols[row_idx_usize] = .{ row_view.cols[0], row_view.cols[1] };
+            }
+            return .{
+                .storage = .{ .boundary1 = .{ .cols = cols } },
+                .n_rows = matrix.n_rows,
+                .n_cols = matrix.n_cols,
+                .row_arity = row_arity,
+            };
+        }
+
+        if (row_arity == 3 and allRowsBoundary2SignPair(matrix)) {
+            const cols = try allocator.alloc([3]u32, matrix.n_rows);
+            errdefer allocator.free(cols);
+            const row_sign_bits = try allocator.alloc(u8, PackedIncidenceSigns.bytesForEntries(matrix.n_rows));
+            errdefer allocator.free(row_sign_bits);
+            @memset(row_sign_bits, 0);
+
+            for (0..matrix.n_rows) |row_idx_usize| {
+                const row_idx: u32 = @intCast(row_idx_usize);
+                const row_view = matrix.row(@intCast(row_idx_usize));
+                cols[row_idx_usize] = .{ row_view.cols[0], row_view.cols[1], row_view.cols[2] };
+                if (row_view.vals[0] == 1) {
+                    setPackedBit(row_sign_bits, row_idx);
+                }
+            }
+
+            return .{
+                .storage = .{ .boundary2 = .{
+                    .cols = cols,
+                    .row_sign_bits = row_sign_bits,
+                } },
+                .n_rows = matrix.n_rows,
+                .n_cols = matrix.n_cols,
+                .row_arity = row_arity,
+            };
+        }
+        return fromCsr(allocator, matrix);
+    }
+
+    pub fn deinit(self: *PackedIncidenceMatrix, allocator: std.mem.Allocator) void {
+        switch (self.storage) {
+            .generic => |*generic| generic.deinit(allocator),
+            .boundary1 => |*boundary1| boundary1.deinit(allocator),
+            .boundary2 => |*boundary2| boundary2.deinit(allocator),
+        }
+    }
+
+    pub fn row(self: PackedIncidenceMatrix, r: u32) Row {
+        return switch (self.storage) {
+            .generic => |generic| blk: {
+                const start = generic.row_ptr[r];
+                const end = generic.row_ptr[r + 1];
+                break :blk .{
+                    .cols = generic.col_idx[start..end],
+                    .sign_encoding = .{ .generic = .{
+                        .start = start,
+                        .signs = generic.signs,
+                    } },
+                };
+            },
+            .boundary1 => |boundary1| .{
+                .cols = boundary1.cols[r][0..],
+                .sign_encoding = .{ .fixed_mask = 0b10 },
+            },
+            .boundary2 => |boundary2| .{
+                .cols = boundary2.cols[r][0..],
+                .sign_encoding = .{ .fixed_mask = boundary2.mask(r) },
+            },
+        };
+    }
+
+    pub fn multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
+        std.debug.assert(input_vals.len == self.n_cols);
+        std.debug.assert(output.len == self.n_rows);
+
+        switch (self.storage) {
+            .generic => |generic| {
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const start: u32 = generic.row_ptr[row_idx];
+                    const end: u32 = generic.row_ptr[row_idx + 1];
+                    var sum: f64 = 0;
+                    for (start..end) |entry_idx_usize| {
+                        const entry_idx: u32 = @intCast(entry_idx_usize);
+                        const col = generic.col_idx[entry_idx];
+                        const sign = generic.signs.get(entry_idx);
+                        sum += if (sign == 1) input_vals[col] else -input_vals[col];
+                    }
+                    output[row_idx] = sum;
+                }
+            },
+            .boundary1 => |boundary1| {
+                for (boundary1.cols, 0..) |cols, row_idx| {
+                    output[row_idx] = -input_vals[cols[0]] + input_vals[cols[1]];
+                }
+            },
+            .boundary2 => |boundary2| {
+                for (boundary2.cols, 0..) |cols, row_idx| {
+                    const sign: f64 = if (boundary2.firstTwoPositive(@intCast(row_idx))) 1.0 else -1.0;
+                    output[row_idx] = sign * (input_vals[cols[0]] + input_vals[cols[1]] - input_vals[cols[2]]);
+                }
+            },
+        }
+    }
+
+    pub fn transpose_multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
+        std.debug.assert(input_vals.len == self.n_rows);
+        std.debug.assert(output.len == self.n_cols);
+
+        switch (self.storage) {
+            .generic => |generic| {
+                for (0..self.n_rows) |row_idx_usize| {
+                    const row_idx: usize = row_idx_usize;
+                    const input_value = input_vals[row_idx];
+                    const start: u32 = generic.row_ptr[row_idx];
+                    const end: u32 = generic.row_ptr[row_idx + 1];
+
+                    for (start..end) |entry_idx_usize| {
+                        const entry_idx: u32 = @intCast(entry_idx_usize);
+                        const col = generic.col_idx[entry_idx];
+                        const sign = generic.signs.get(entry_idx);
+                        output[col] += if (sign == 1) input_value else -input_value;
+                    }
+                }
+            },
+            .boundary1 => |boundary1| {
+                for (boundary1.cols, input_vals) |cols, value| {
+                    output[cols[0]] -= value;
+                    output[cols[1]] += value;
+                }
+            },
+            .boundary2 => |boundary2| {
+                for (boundary2.cols, input_vals, 0..) |cols, value, row_idx| {
+                    const signed_value = if (boundary2.firstTwoPositive(@intCast(row_idx))) value else -value;
+                    output[cols[0]] += signed_value;
+                    output[cols[1]] += signed_value;
+                    output[cols[2]] -= signed_value;
+                }
+            },
+        }
+    }
+
+    pub fn signBytes(self: PackedIncidenceMatrix) usize {
+        return switch (self.storage) {
+            .generic => |generic| generic.signs.bytes.len,
+            .boundary1 => 0,
+            .boundary2 => |boundary2| boundary2.row_sign_bits.len,
+        };
+    }
+
+    fn allRowsCanonicalEdge(matrix: CsrMatrix(i8)) bool {
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            if (row_view.cols.len != 2) return false;
+            if (row_view.vals[0] != -1 or row_view.vals[1] != 1) return false;
+        }
+        return true;
+    }
+
+    fn allRowsBoundary2SignPair(matrix: CsrMatrix(i8)) bool {
+        for (0..matrix.n_rows) |row_idx_usize| {
+            const row_view = matrix.row(@intCast(row_idx_usize));
+            if (row_view.cols.len != 3) return false;
+            if (row_view.vals[0] != row_view.vals[1]) return false;
+            if (row_view.vals[2] != -row_view.vals[0]) return false;
+        }
+        return true;
+    }
+
+    fn positiveMaskFromValues(values: []const i8) u8 {
+        var mask: u8 = 0;
+        for (values, 0..) |value, idx| {
+            std.debug.assert(value == -1 or value == 1);
+            if (value == 1) {
+                mask |= @as(u8, 1) << @as(u3, @intCast(idx));
+            }
+        }
+        return mask;
+    }
+
+    fn signFromMask(mask: u8, local_idx: usize) i8 {
+        const bit: u3 = @intCast(local_idx);
+        return if ((mask & (@as(u8, 1) << bit)) != 0) 1 else -1;
+    }
+
+    fn signedValue(mask: u8, local_idx: usize, input_value: f64) f64 {
+        return if (signFromMask(mask, local_idx) == 1) input_value else -input_value;
+    }
+
+    fn accumulateSignedRow2(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+    }
+
+    fn signedRowSum2(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]);
+    }
+
+    fn accumulateSignedRow3(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+        output[cols[2]] += signedValue(mask, 2, input_value);
+    }
+
+    fn signedRowSum3(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]) +
+            signedInput(mask, 2, input_vals[cols[2]]);
+    }
+
+    fn accumulateSignedRow4(output: []f64, cols: []const u32, input_value: f64, mask: u8) void {
+        output[cols[0]] += signedValue(mask, 0, input_value);
+        output[cols[1]] += signedValue(mask, 1, input_value);
+        output[cols[2]] += signedValue(mask, 2, input_value);
+        output[cols[3]] += signedValue(mask, 3, input_value);
+    }
+
+    fn signedRowSum4(input_vals: []const f64, cols: []const u32, mask: u8) f64 {
+        return signedInput(mask, 0, input_vals[cols[0]]) +
+            signedInput(mask, 1, input_vals[cols[1]]) +
+            signedInput(mask, 2, input_vals[cols[2]]) +
+            signedInput(mask, 3, input_vals[cols[3]]);
+    }
+
+    fn signedInput(mask: u8, local_idx: usize, value: f64) f64 {
+        return if (signFromMask(mask, local_idx) == 1) value else -value;
+    }
+
+    fn packedBitMask(bit_idx: u32) u8 {
+        const shift: u3 = @intCast(@mod(bit_idx, 8));
+        return @as(u8, 1) << shift;
+    }
+
+    fn packedByteIndex(bit_idx: u32) usize {
+        return @intCast(@divFloor(bit_idx, 8));
+    }
+
+    fn setPackedBit(bits: []u8, bit_idx: u32) void {
+        bits[packedByteIndex(bit_idx)] |= packedBitMask(bit_idx);
+    }
+
+    fn getPackedBit(bits: []const u8, bit_idx: u32) bool {
+        return (bits[packedByteIndex(bit_idx)] & packedBitMask(bit_idx)) != 0;
+    }
+};
+
 /// COO (coordinate) format assembler for building CSR matrices incrementally.
 ///
 /// Use `addEntry` to accumulate element contributions in any order. Duplicate
@@ -379,4 +875,95 @@ test "TripletAssembler handles empty rows" {
     // Row 1 should have no entries.
     const r1 = m.row(1);
     try testing.expectEqual(@as(usize, 0), r1.cols.len);
+}
+
+test "PackedIncidenceSigns round-trips random signs" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51A9_B17);
+
+    const lengths = [_]u32{ 1, 2, 7, 8, 9, 31, 32, 33, 257 };
+    for (lengths) |len| {
+        const signs = try allocator.alloc(i8, len);
+        defer allocator.free(signs);
+
+        for (signs) |*sign| {
+            sign.* = if (rng.random().boolean()) @as(i8, 1) else @as(i8, -1);
+        }
+
+        var packed_signs = try PackedIncidenceSigns.fromSigns(allocator, signs);
+        defer packed_signs.deinit(allocator);
+
+        try testing.expectEqual(PackedIncidenceSigns.bytesForEntries(len), packed_signs.bytes.len);
+        for (signs, 0..) |expected, entry_idx| {
+            try testing.expectEqual(expected, packed_signs.get(@intCast(entry_idx)));
+        }
+    }
+}
+
+test "PackedIncidenceMatrix transpose_multiply matches i8 CSR baseline" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x1A61_D3CE);
+
+    inline for (0..32) |_| {
+        const n_rows: u32 = 12;
+        const n_cols: u32 = 19;
+        const max_row_nnz: u32 = 4;
+
+        var matrix = try CsrMatrix(i8).init(allocator, n_rows, n_cols, n_rows * max_row_nnz);
+        defer matrix.deinit(allocator);
+
+        var write_idx: u32 = 0;
+        matrix.row_ptr[0] = 0;
+        for (0..n_rows) |row_idx_usize| {
+            const row_idx: u32 = @intCast(row_idx_usize);
+            const row_nnz = rng.random().uintLessThanBiased(u32, max_row_nnz + 1);
+            var used_cols = [_]bool{false} ** n_cols;
+            var selected: u32 = 0;
+            while (selected < row_nnz) {
+                const col = rng.random().uintLessThanBiased(u32, n_cols);
+                if (used_cols[col]) continue;
+                used_cols[col] = true;
+                selected += 1;
+            }
+
+            for (used_cols, 0..) |present, col| {
+                if (!present) continue;
+                matrix.col_idx[write_idx] = @intCast(col);
+                matrix.values[write_idx] = if (rng.random().boolean()) @as(i8, 1) else @as(i8, -1);
+                write_idx += 1;
+            }
+            matrix.row_ptr[row_idx + 1] = write_idx;
+        }
+
+        const matrix_view = CsrMatrix(i8){
+            .row_ptr = matrix.row_ptr,
+            .col_idx = matrix.col_idx[0..write_idx],
+            .values = matrix.values[0..write_idx],
+            .n_rows = matrix.n_rows,
+            .n_cols = matrix.n_cols,
+        };
+
+        var packed_matrix = try PackedIncidenceMatrix.fromCsr(allocator, matrix_view);
+        defer packed_matrix.deinit(allocator);
+
+        const input = try allocator.alloc(f64, n_rows);
+        defer allocator.free(input);
+        const dense_output = try allocator.alloc(f64, n_cols);
+        defer allocator.free(dense_output);
+        const packed_output = try allocator.alloc(f64, n_cols);
+        defer allocator.free(packed_output);
+
+        for (input) |*value| {
+            value.* = rng.random().float(f64) * 20.0 - 10.0;
+        }
+
+        @memset(dense_output, 0.0);
+        @memset(packed_output, 0.0);
+        matrix_view.transpose_multiply(input, dense_output);
+        packed_matrix.transpose_multiply(input, packed_output);
+
+        for (dense_output, packed_output) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-12);
+        }
+    }
 }
