@@ -102,6 +102,73 @@ pub fn spmv(matrix: CsrMatrix(f64), input_vals: []const f64, output: []f64) void
     }
 }
 
+/// Packed sign stream for incidence-valued sparse matrices.
+///
+/// CSR already omits zeros, so incidence values only need one bit per stored
+/// entry: 0 => -1, 1 => +1.
+pub const PackedIncidenceSigns = struct {
+    bytes: []u8,
+    len: u32,
+
+    pub fn bytesForEntries(entry_count: u32) usize {
+        return @intCast(@divFloor(@as(u64, entry_count) + 7, 8));
+    }
+
+    pub fn init(allocator: std.mem.Allocator, entry_count: u32) !PackedIncidenceSigns {
+        const byte_count = bytesForEntries(entry_count);
+        const bytes = try allocator.alloc(u8, byte_count);
+        @memset(bytes, 0);
+        return .{
+            .bytes = bytes,
+            .len = entry_count,
+        };
+    }
+
+    pub fn deinit(self: *PackedIncidenceSigns, allocator: std.mem.Allocator) void {
+        allocator.free(self.bytes);
+    }
+
+    pub fn fromSigns(allocator: std.mem.Allocator, signs: []const i8) !PackedIncidenceSigns {
+        _ = allocator;
+        _ = signs;
+        @panic("TODO: implement PackedIncidenceSigns.fromSigns");
+    }
+
+    pub fn get(self: PackedIncidenceSigns, entry_idx: u32) i8 {
+        _ = self;
+        _ = entry_idx;
+        @panic("TODO: implement PackedIncidenceSigns.get");
+    }
+};
+
+/// Prototype CSR variant for incidence matrices with packed sign storage.
+pub const PackedIncidenceMatrix = struct {
+    row_ptr: []u32,
+    col_idx: []u32,
+    signs: PackedIncidenceSigns,
+    n_rows: u32,
+    n_cols: u32,
+
+    pub fn fromCsr(allocator: std.mem.Allocator, matrix: CsrMatrix(i8)) !PackedIncidenceMatrix {
+        _ = allocator;
+        _ = matrix;
+        @panic("TODO: implement PackedIncidenceMatrix.fromCsr");
+    }
+
+    pub fn deinit(self: *PackedIncidenceMatrix, allocator: std.mem.Allocator) void {
+        allocator.free(self.row_ptr);
+        allocator.free(self.col_idx);
+        self.signs.deinit(allocator);
+    }
+
+    pub fn transpose_multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
+        _ = self;
+        _ = input_vals;
+        _ = output;
+        @panic("TODO: implement PackedIncidenceMatrix.transpose_multiply");
+    }
+};
+
 /// COO (coordinate) format assembler for building CSR matrices incrementally.
 ///
 /// Use `addEntry` to accumulate element contributions in any order. Duplicate
