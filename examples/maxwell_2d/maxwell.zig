@@ -1345,7 +1345,7 @@ fn discrete_energy_from_arrays(allocator: std.mem.Allocator, mesh: *const Mesh2D
     // ★₁(E) via Whitney mass matrix SpMV.
     const m1_e = try allocator.alloc(f64, e_vals.len);
     defer allocator.free(m1_e);
-    sparse.spmv(mesh.whitney_mass_1, e_vals, m1_e);
+    sparse.spmv(mesh.whitney_mass(1), e_vals, m1_e);
 
     var e_energy: f64 = 0.0;
     for (e_vals, m1_e) |e, se| {

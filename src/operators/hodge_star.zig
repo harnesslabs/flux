@@ -3,17 +3,11 @@
 //! The Hodge star ★ₖ maps primal k-cochains to dual (n−k)-cochains.
 //! The implementation dispatches by degree at comptime:
 //!
-//!   Diagonal path: ratio = dual_measure / primal_measure for barycentric-dual
-//!     cells. This covers k = 0 and k = n in every supported dimension, and the
-//!     3D interior degrees used by this issue.
+//!   Diagonal path for boundary degrees k = 0 and k = n.
+//!   Whitney/Galerkin mass-matrix path for every interior degree 0 < k < n.
 //!
-//!   2D ★₁: Whitney/Galerkin mass matrix M₁ (SpMV for forward,
-//!     preconditioned CG solve for inverse). The diagonal approximation
-//!     dual_length/length is only consistent on orthogonal dual meshes;
-//!     the Whitney mass matrix is exact on any triangulation.
-//!
-//! The mesh stores both M₁ and its diagonal preconditioner, precomputed
-//! during construction.
+//! The mesh stores the interior-degree Whitney mass matrices and diagonal
+//! preconditioners, indexed by degree.
 
 const std = @import("std");
 const testing = std.testing;
@@ -21,6 +15,9 @@ const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const conjugate_gradient = @import("../math/cg.zig");
+
+const cg_relative_tolerance: f64 = 1e-14;
+const cg_iteration_limit: u32 = 20000;
 
 pub fn AssembledHodgeStar(comptime InputType: type) type {
     comptime validateHodgeStarInput(InputType);
@@ -88,8 +85,8 @@ pub fn assemble_inverse_for_degree(
 
 /// Apply the Hodge star ★ₖ to a primal k-cochain, returning a dual (n−k)-cochain.
 ///
-/// For k=0 and k=n, this is a diagonal scaling by dual mesh volumes.
-/// For k=1, this applies the Whitney mass matrix M₁ via SpMV.
+/// For k=0 and k=n, this is a diagonal scaling by dual/primal measures.
+/// For 0 < k < n, this applies the Whitney/Galerkin mass matrix Mₖ via SpMV.
 pub fn apply_hodge_star(
     allocator: std.mem.Allocator,
     input: anytype,
@@ -104,8 +101,8 @@ pub fn apply_hodge_star(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    if (supportsWhitneyMassDegree(InputType.MeshT, k)) {
-        sparse.spmv(input.mesh.whitney_mass_1, input.values, output.values);
+    if (comptime supportsWhitneyMassDegree(InputType.MeshT, k)) {
+        sparse.spmv(input.mesh.whitney_mass(k), input.values, output.values);
         return output;
     }
 
@@ -117,7 +114,7 @@ pub fn apply_hodge_star(
 /// primal k-cochain.
 ///
 /// For k=0 and k=n, this is the element-wise reciprocal of the diagonal.
-/// For k=1, this solves M₁ x = b via preconditioned conjugate gradient.
+/// For 0 < k < n, this solves Mₖ x = b via preconditioned conjugate gradient.
 pub fn apply_hodge_star_inverse(
     allocator: std.mem.Allocator,
     input: anytype,
@@ -133,20 +130,24 @@ pub fn apply_hodge_star_inverse(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    if (supportsWhitneyMassDegree(InputType.MeshT, primal_degree)) {
-        // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
-        @memset(output.values, 0.0);
+    if (comptime supportsWhitneyMassDegree(InputType.MeshT, primal_degree)) {
+        // CG solve: Mₖ · x = b, with diagonal dual/primal ratio as a preconditioner.
+        const diagonal = input.mesh.whitney_preconditioner(primal_degree);
+        for (output.values, input.values, diagonal) |*out, in_val, diagonal_entry| {
+            std.debug.assert(diagonal_entry != 0.0);
+            out.* = in_val / diagonal_entry;
+        }
 
         var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.values.len));
         defer scratch.deinit(allocator);
 
-        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
+        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
         const result = conjugate_gradient.solve(
-            input.mesh.whitney_mass_1,
+            input.mesh.whitney_mass(primal_degree),
             input.values,
             output.values,
-            1e-10,
-            1000,
+            cg_relative_tolerance,
+            cg_iteration_limit,
             conjugate_gradient.DiagonalPreconditioner.apply,
             @ptrCast(&precond),
             scratch,
@@ -216,8 +217,8 @@ pub fn apply_raw(
     input: []const f64,
     output: []f64,
 ) void {
-    if (supportsWhitneyMassDegree(MeshType, primal_degree)) {
-        sparse.spmv(mesh.whitney_mass_1, input, output);
+    if (comptime supportsWhitneyMassDegree(MeshType, primal_degree)) {
+        sparse.spmv(mesh.whitney_mass(primal_degree), input, output);
         return;
     }
 
@@ -234,19 +235,23 @@ pub fn apply_inverse_raw(
     input: []const f64,
     output: []f64,
 ) !void {
-    if (supportsWhitneyMassDegree(MeshType, primal_degree)) {
-        @memset(output, 0.0);
+    if (comptime supportsWhitneyMassDegree(MeshType, primal_degree)) {
+        const diagonal = mesh.whitney_preconditioner(primal_degree);
+        for (output, input, diagonal) |*out, in_val, diagonal_entry| {
+            std.debug.assert(diagonal_entry != 0.0);
+            out.* = in_val / diagonal_entry;
+        }
 
         var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
         defer scratch.deinit(allocator);
 
-        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
+        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
         const result = conjugate_gradient.solve(
-            mesh.whitney_mass_1,
+            mesh.whitney_mass(primal_degree),
             input,
             output,
-            1e-10,
-            1000,
+            cg_relative_tolerance,
+            cg_iteration_limit,
             conjugate_gradient.DiagonalPreconditioner.apply,
             @ptrCast(&precond),
             scratch,
@@ -277,22 +282,6 @@ fn applyDiagonalForward(
         return;
     }
 
-    if (MeshType.topological_dimension == 3 and primal_degree == 1) {
-        const edge_volumes = mesh.simplices(1).items(.volume);
-        for (output, input, edge_volumes, mesh.dual_edge_volumes) |*out, in_val, volume, dual_volume| {
-            std.debug.assert(volume != 0.0);
-            out.* = (dual_volume / volume) * in_val;
-        }
-        return;
-    }
-
-    if (MeshType.topological_dimension == 3 and primal_degree == 2) {
-        const face_volumes = mesh.simplices(2).items(.volume);
-        @memset(output, 0.0);
-        accumulateDualFaceLengthsScaled(mesh, input, face_volumes, output);
-        return;
-    }
-
     if (primal_degree == MeshType.topological_dimension) {
         const primal_volumes = mesh.simplices(MeshType.topological_dimension).items(.volume);
         for (output, input, primal_volumes) |*out, in_val, volume| {
@@ -314,35 +303,13 @@ fn applyDiagonalInverse(
     output: []f64,
 ) !void {
     std.debug.assert(!supportsWhitneyMassDegree(MeshType, primal_degree));
+    _ = allocator;
 
     if (primal_degree == 0) {
         const dual_volumes = mesh.vertices.slice().items(.dual_volume);
         for (output, input, dual_volumes) |*out, in_val, ratio| {
             std.debug.assert(ratio != 0.0);
             out.* = in_val / ratio;
-        }
-        return;
-    }
-
-    if (MeshType.topological_dimension == 3 and primal_degree == 1) {
-        const edge_volumes = mesh.simplices(1).items(.volume);
-        for (output, input, edge_volumes, mesh.dual_edge_volumes) |*out, in_val, volume, dual_volume| {
-            std.debug.assert(dual_volume != 0.0);
-            out.* = (volume / dual_volume) * in_val;
-        }
-        return;
-    }
-
-    if (MeshType.topological_dimension == 3 and primal_degree == 2) {
-        const dual_face_lengths = try allocator.alloc(f64, input.len);
-        defer allocator.free(dual_face_lengths);
-
-        accumulateDualFaceLengths(mesh, dual_face_lengths);
-
-        const face_volumes = mesh.simplices(2).items(.volume);
-        for (output, input, face_volumes, dual_face_lengths) |*out, in_val, volume, dual_length| {
-            std.debug.assert(dual_length != 0.0);
-            out.* = (volume / dual_length) * in_val;
         }
         return;
     }
@@ -359,56 +326,12 @@ fn applyDiagonalInverse(
 }
 
 fn supportsWhitneyMassDegree(comptime MeshType: type, comptime primal_degree: comptime_int) bool {
-    return MeshType.topological_dimension == 2 and primal_degree == 1;
+    return primal_degree > 0 and primal_degree < MeshType.topological_dimension;
 }
 
-// In the 3D barycentric dual, a primal face's dual 1-cell is the union of the
-// segments from the face barycenter to the barycenters of incident tetrahedra.
-fn accumulateDualFaceLengths(
-    mesh: *const topology.Mesh(3, 3),
-    dual_face_lengths: []f64,
-) void {
-    std.debug.assert(dual_face_lengths.len == mesh.num_faces());
-    @memset(dual_face_lengths, 0.0);
-
-    const face_barycenters = mesh.simplices(2).items(.barycenter);
-    const tet_barycenters = mesh.simplices(3).items(.barycenter);
-    for (0..mesh.num_tets()) |tet_idx| {
-        const tet_barycenter = tet_barycenters[tet_idx];
-        const tet_row = mesh.boundary(3).row(@intCast(tet_idx));
-        for (tet_row.cols) |face_idx| {
-            dual_face_lengths[face_idx] += euclideanDistance3(face_barycenters[face_idx], tet_barycenter);
-        }
-    }
-}
-
-fn accumulateDualFaceLengthsScaled(
-    mesh: *const topology.Mesh(3, 3),
-    input: []const f64,
-    face_volumes: []const f64,
-    output: []f64,
-) void {
-    std.debug.assert(input.len == mesh.num_faces());
-    std.debug.assert(face_volumes.len == mesh.num_faces());
-    std.debug.assert(output.len == mesh.num_faces());
-
-    const face_barycenters = mesh.simplices(2).items(.barycenter);
-    const tet_barycenters = mesh.simplices(3).items(.barycenter);
-    for (0..mesh.num_tets()) |tet_idx| {
-        const tet_barycenter = tet_barycenters[tet_idx];
-        const tet_row = mesh.boundary(3).row(@intCast(tet_idx));
-        for (tet_row.cols) |face_idx| {
-            const segment_length = euclideanDistance3(face_barycenters[face_idx], tet_barycenter);
-            output[face_idx] += (segment_length / face_volumes[face_idx]) * input[face_idx];
-        }
-    }
-}
-
-fn euclideanDistance3(a: [3]f64, b: [3]f64) f64 {
-    const dx = a[0] - b[0];
-    const dy = a[1] - b[1];
-    const dz = a[2] - b[2];
-    return @sqrt(dx * dx + dy * dy + dz * dz);
+fn expectApproxEqRelOrAbs(expected: f64, actual: f64, relative_tolerance: f64, absolute_tolerance: f64) !void {
+    const tolerance = @max(absolute_tolerance, @abs(expected) * relative_tolerance);
+    try testing.expect(@abs(expected - actual) <= tolerance);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -516,7 +439,7 @@ test "★₁ applies Whitney mass matrix (not diagonal)" {
     const edge_count = mesh.num_edges();
     const expected = try allocator.alloc(f64, edge_count);
     defer allocator.free(expected);
-    sparse.spmv(mesh.whitney_mass_1, omega.values, expected);
+    sparse.spmv(mesh.whitney_mass(1), omega.values, expected);
 
     for (result.values, expected) |r, e| {
         try testing.expectApproxEqAbs(e, r, 1e-15);
@@ -656,7 +579,7 @@ test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
             defer round_trip.deinit(allocator);
 
             for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, 1e-8);
+                try expectApproxEqRelOrAbs(original, recovered, 1e-7, 1e-10);
             }
         }
     }
@@ -675,7 +598,7 @@ test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
             defer round_trip.deinit(allocator);
 
             for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, 1e-8);
+                try expectApproxEqRelOrAbs(original, recovered, 1e-7, 1e-10);
             }
         }
     }

@@ -113,7 +113,7 @@ fn assemble_zero_form_stiffness(
     mesh: anytype,
 ) !sparse.CsrMatrix(f64) {
     const d0 = mesh.boundary(1);
-    const m1 = mesh.whitney_mass_1;
+    const m1 = mesh.whitney_mass(1);
 
     var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
     defer assembler.deinit(allocator);
@@ -541,12 +541,12 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
         defer lap_g.deinit(allocator);
 
         // ⟨Δ₁f, g⟩_★₁ = (Δ₁f)ᵀ M₁ g
-        sparse_mod.spmv(mesh.whitney_mass_1, g_form.values, m1_buf);
+        sparse_mod.spmv(mesh.whitney_mass(1), g_form.values, m1_buf);
         var inner_lap_f_g: f64 = 0;
         for (lap_f.values, m1_buf) |lf, mg| inner_lap_f_g += lf * mg;
 
         // ⟨f, Δ₁g⟩_★₁ = fᵀ M₁ (Δ₁g)
-        sparse_mod.spmv(mesh.whitney_mass_1, lap_g.values, m1_buf);
+        sparse_mod.spmv(mesh.whitney_mass(1), lap_g.values, m1_buf);
         var inner_f_lap_g: f64 = 0;
         for (f_form.values, m1_buf) |fv, mlg| inner_f_lap_g += fv * mlg;
 
