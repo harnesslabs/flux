@@ -6,6 +6,8 @@ The central abstraction is the **operator on a function space**: a map between t
 
 See [`project/vision.md`](project/vision.md) for the full design philosophy.
 
+![TE10 cavity animation](assets/cavity-512-grid-10000-steps.png)
+
 ## Status
 
 Early development. See [Projects](https://github.com/harnesslabs/flux/projects) for the current epoch roadmap.
@@ -33,13 +35,22 @@ Physics simulations live in `examples/` and consume flux as a library dependency
 
 Cavity resonance (TE₁₀ standing wave) and point dipole radiation on a triangulated PEC cavity. Demonstrates the full DEC operator stack: exterior derivative, Whitney/Galerkin Hodge star, symplectic leapfrog integration.
 
+Use `-Doptimize=ReleaseFast` for any meaningful performance measurement. The default
+`zig build` mode is a debug build and is much slower on large grids.
+
 ```sh
-zig build example-maxwell2d -- --demo cavity --steps 2000   # standing wave
-zig build example-maxwell2d -- --demo dipole --grid 64      # point source
-zig build example-maxwell2d -- --help                       # all options
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity --steps 2000
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole --grid 64
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
 ```
 
 The example includes 40 integration tests covering Whitney ★₁ convergence (O(h²) verified), TE₁₀ eigenvalue accuracy, energy conservation over hundreds of timesteps, and PEC boundary correctness.
+
+Generate a polished full-color animation with:
+
+```sh
+uv run tools/visualize.py output --field B_flux --output animation.png
+```
 
 ---
 

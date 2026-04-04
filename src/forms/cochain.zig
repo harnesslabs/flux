@@ -17,6 +17,114 @@ pub const Primal = struct {};
 /// compile time via these marker types.
 pub const Dual = struct {};
 
+fn addAssignScalar(lhs: []f64, rhs: []const f64) void {
+    std.debug.assert(lhs.len == rhs.len);
+    for (lhs, rhs) |*left, right| {
+        left.* += right;
+    }
+}
+
+fn addAssignSimd(lhs: []f64, rhs: []const f64) void {
+    std.debug.assert(lhs.len == rhs.len);
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = lhs.len - (lhs.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const left_block: Block = lhs[i..][0..lane_count].*;
+            const right_block: Block = rhs[i..][0..lane_count].*;
+            const sum_array: [lane_count]f64 = left_block + right_block;
+            lhs[i..][0..lane_count].* = sum_array;
+        }
+
+        addAssignScalar(lhs[simd_len..], rhs[simd_len..]);
+        return;
+    }
+
+    addAssignScalar(lhs, rhs);
+}
+
+fn scaleInPlaceScalar(values: []f64, scalar: f64) void {
+    for (values) |*value| {
+        value.* *= scalar;
+    }
+}
+
+fn scaleInPlaceSimd(values: []f64, scalar: f64) void {
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const factor: Block = @splat(scalar);
+        const simd_len = values.len - (values.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const block: Block = values[i..][0..lane_count].*;
+            const scaled_array: [lane_count]f64 = block * factor;
+            values[i..][0..lane_count].* = scaled_array;
+        }
+
+        scaleInPlaceScalar(values[simd_len..], scalar);
+        return;
+    }
+
+    scaleInPlaceScalar(values, scalar);
+}
+
+fn negateInPlaceScalar(values: []f64) void {
+    for (values) |*value| {
+        value.* = -value.*;
+    }
+}
+
+fn negateInPlaceSimd(values: []f64) void {
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = values.len - (values.len % lane_count);
+
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const block: Block = values[i..][0..lane_count].*;
+            const negated_array: [lane_count]f64 = -block;
+            values[i..][0..lane_count].* = negated_array;
+        }
+
+        negateInPlaceScalar(values[simd_len..]);
+        return;
+    }
+
+    negateInPlaceScalar(values);
+}
+
+fn innerProductScalar(lhs: []const f64, rhs: []const f64) f64 {
+    std.debug.assert(lhs.len == rhs.len);
+    var sum: f64 = 0;
+    for (lhs, rhs) |left, right| {
+        sum += left * right;
+    }
+    return sum;
+}
+
+fn innerProductSimd(lhs: []const f64, rhs: []const f64) f64 {
+    std.debug.assert(lhs.len == rhs.len);
+    if (std.simd.suggestVectorLength(f64)) |lane_count| {
+        const Block = @Vector(lane_count, f64);
+        const simd_len = lhs.len - (lhs.len % lane_count);
+
+        var sum_block: Block = @splat(0.0);
+        var i: usize = 0;
+        while (i < simd_len) : (i += lane_count) {
+            const left_block: Block = lhs[i..][0..lane_count].*;
+            const right_block: Block = rhs[i..][0..lane_count].*;
+            sum_block += left_block * right_block;
+        }
+
+        return @reduce(.Add, sum_block) + innerProductScalar(lhs[simd_len..], rhs[simd_len..]);
+    }
+
+    return innerProductScalar(lhs, rhs);
+}
+
 /// A discrete k-form (cochain) on a simplicial mesh.
 ///
 /// In DEC, a k-cochain assigns a real value to every k-cell of the mesh:
@@ -97,9 +205,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         /// Pointwise addition: self += other.
         pub fn add(self: *Self, other: Self) void {
             std.debug.assert(self.values.len == other.values.len);
-            for (self.values, other.values) |*a, b| {
-                a.* += b;
-            }
+            addAssignSimd(self.values, other.values);
         }
 
         /// Pointwise subtraction: self -= other.
@@ -112,16 +218,12 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
 
         /// Scalar multiplication: self *= scalar.
         pub fn scale(self: *Self, scalar: f64) void {
-            for (self.values) |*v| {
-                v.* *= scalar;
-            }
+            scaleInPlaceSimd(self.values, scalar);
         }
 
         /// Negate all coefficients in place: self = -self.
         pub fn negate(self: *Self) void {
-            for (self.values) |*v| {
-                v.* = -v.*;
-            }
+            negateInPlaceSimd(self.values);
         }
 
         /// L² inner product: ⟨self, other⟩ = Σᵢ selfᵢ · otherᵢ.
@@ -129,11 +231,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
         /// version will come with the Hodge star in M2.
         pub fn inner_product(self: Self, other: Self) f64 {
             std.debug.assert(self.values.len == other.values.len);
-            var sum: f64 = 0;
-            for (self.values, other.values) |a, b| {
-                sum += a * b;
-            }
-            return sum;
+            return innerProductSimd(self.values, other.values);
         }
 
         /// Squared L² norm: ‖self‖² = ⟨self, self⟩.
@@ -337,6 +435,97 @@ test "inner product and norm" {
 
     // ‖a‖² = 1 + 4 + 9 + 16 = 30
     try testing.expectApproxEqAbs(@as(f64, 30.0), a.norm_squared(), 1e-15);
+}
+
+test "SIMD add kernel matches scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51ADADD0);
+
+    const lengths = [_]usize{ 1, 2, 3, 5, 7, 9, 15, 17, 31 };
+    for (lengths) |len| {
+        const lhs_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(lhs_scalar);
+        const lhs_simd = try allocator.alloc(f64, len);
+        defer allocator.free(lhs_simd);
+        const rhs = try allocator.alloc(f64, len);
+        defer allocator.free(rhs);
+
+        for (0..len) |i| {
+            const left = rng.random().float(f64) * 200.0 - 100.0;
+            const right = rng.random().float(f64) * 200.0 - 100.0;
+            lhs_scalar[i] = left;
+            lhs_simd[i] = left;
+            rhs[i] = right;
+        }
+
+        addAssignScalar(lhs_scalar, rhs);
+        addAssignSimd(lhs_simd, rhs);
+
+        for (lhs_scalar, lhs_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+    }
+}
+
+test "SIMD scale and negate kernels match scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51AD5CA1);
+
+    const lengths = [_]usize{ 1, 4, 6, 8, 10, 13, 16, 19, 33 };
+    for (lengths) |len| {
+        const scale_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(scale_scalar);
+        const scale_simd = try allocator.alloc(f64, len);
+        defer allocator.free(scale_simd);
+        const negate_scalar = try allocator.alloc(f64, len);
+        defer allocator.free(negate_scalar);
+        const negate_simd = try allocator.alloc(f64, len);
+        defer allocator.free(negate_simd);
+
+        const alpha = rng.random().float(f64) * 20.0 - 10.0;
+
+        for (0..len) |i| {
+            const value = rng.random().float(f64) * 200.0 - 100.0;
+            scale_scalar[i] = value;
+            scale_simd[i] = value;
+            negate_scalar[i] = value;
+            negate_simd[i] = value;
+        }
+
+        scaleInPlaceScalar(scale_scalar, alpha);
+        scaleInPlaceSimd(scale_simd, alpha);
+        negateInPlaceScalar(negate_scalar);
+        negateInPlaceSimd(negate_simd);
+
+        for (scale_scalar, scale_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+        for (negate_scalar, negate_simd) |expected, actual| {
+            try testing.expectApproxEqAbs(expected, actual, 1e-14);
+        }
+    }
+}
+
+test "SIMD inner product kernel matches scalar reference for tail lengths" {
+    const allocator = testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0x51ADD071);
+
+    const lengths = [_]usize{ 1, 2, 5, 7, 11, 16, 18, 29, 65 };
+    for (lengths) |len| {
+        const lhs = try allocator.alloc(f64, len);
+        defer allocator.free(lhs);
+        const rhs = try allocator.alloc(f64, len);
+        defer allocator.free(rhs);
+
+        for (0..len) |i| {
+            lhs[i] = rng.random().float(f64) * 200.0 - 100.0;
+            rhs[i] = rng.random().float(f64) * 200.0 - 100.0;
+        }
+
+        const expected = innerProductScalar(lhs, rhs);
+        const actual = innerProductSimd(lhs, rhs);
+        try testing.expectApproxEqRel(expected, actual, 1e-12);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

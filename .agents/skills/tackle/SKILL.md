@@ -109,6 +109,11 @@ Fill in the stubs until tests pass.
 5. If you realize an approach is wrong, you can reset to an earlier commit — the remote has the history. State what you're resetting and why before doing it.
 6. When all acceptance criterion tests pass, that is the final implementation commit.
 7. If additional non-obvious decisions were made during implementation, log them to the decision log.
+8. If the issue is performance work, benchmark discipline is part of the implementation:
+   - Keep at least one honest comparable benchmark row for every claimed speedup when possible.
+   - If benchmark methodology changes for a row, bump that row's per-benchmark `version` only for the affected benchmarks.
+   - Do not claim a base-vs-PR speedup from a row whose benchmark `version` changed.
+   - If the base branch lacks a benchmark for the claimed win, add a same-run comparison benchmark so the PR still demonstrates the improvement.
 
 The rhythm is: **write → test → commit → push → repeat**.
 

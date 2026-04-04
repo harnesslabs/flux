@@ -3,20 +3,32 @@
 2D electromagnetic simulations demonstrating the flux Maxwell solver on
 triangulated PEC cavities.
 
+![TE10 cavity animation](../assets/cavity-512-grid-10000-steps.png)
+
 ---
 
 ## Quick start
 
+For realistic throughput numbers, run the example in `ReleaseFast`:
+
 ```sh
-zig build run                     # run default dipole simulation
-zig build run -- --help           # see all options
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
+zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
 ```
+
+The default `zig build` mode is `Debug`, which is useful for development but
+materially slower on larger grids.
 
 Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-sh/uv)):
 
 ```sh
+uv run tools/visualize.py output --field B_flux --output animation.png
 uv run tools/visualize.py output --field B_flux --output animation.gif
 ```
+
+APNG is now the default recommendation because it preserves full color. Use
+`.gif` only when you specifically need GIF compatibility; GIF is limited to a
+256-color palette and will show more banding.
 
 ---
 
@@ -24,8 +36,8 @@ uv run tools/visualize.py output --field B_flux --output animation.gif
 
 | Demo | What it does | Example |
 |------|-------------|---------|
-| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build run` |
-| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build run -- --demo cavity` |
+| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole` |
+| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity` |
 
 ---
 
@@ -78,10 +90,10 @@ steps per period.
 
 ## Visualization tools
 
-### tools/visualize.py — animated GIF
+### tools/visualize.py — animated APNG/GIF
 
-Parses VTK `.vtu` files and renders an animated GIF with matplotlib. No
-ParaView needed — `uv` handles dependencies automatically.
+Parses VTK `.vtu` files and renders an animation with matplotlib. No ParaView
+needed — `uv` handles dependencies automatically.
 
 ```sh
 uv run tools/visualize.py <input_dir> [options]
@@ -90,7 +102,7 @@ uv run tools/visualize.py <input_dir> [options]
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--field` | `B_flux` | Which CellData array to plot |
-| `--output` | `<dir>/animation.gif` | Output GIF path |
+| `--output` | `<dir>/animation.png` | Output animation path; `.png`/`.apng` writes full-color APNG, `.gif` writes palette-limited GIF |
 | `--fps` | 12 | Frames per second |
 
 Available fields:

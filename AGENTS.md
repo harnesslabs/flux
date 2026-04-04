@@ -58,6 +58,19 @@ zig build docs                  # generate API docs to zig-out/docs/
 zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 ```
 
+### Benchmark Discipline
+
+- Treat benchmark comparability as a first-class invariant. A perf claim is only valid if the compared benchmark rows measure the same thing with the same timing method.
+- `bench/main.zig` uses two versioning layers:
+  - `suite_version` is the JSON/baseline file format version.
+  - Per-benchmark `version` is the measurement-method version for a single benchmark row.
+- Bump a benchmark row's `version` when its measurement method changes: repetitions/batching, setup cost, workload size, warmup policy, data distribution, or benchmark semantics.
+- Do **not** bump a benchmark row's `version` for an implementation-only change under the same measurement method. That is exactly when we want base-vs-PR comparisons to remain live.
+- Never invalidate the whole suite because one row changed methodology. Preserve comparability for all unchanged rows.
+- When a perf PR adds a new benchmark with no base-branch counterpart, also include a same-run comparison that demonstrates the claimed win honestly, such as scalar-vs-default or old-path-vs-new-path within one run.
+- PR benchmark comments must compare only rows with matching per-benchmark versions and must explicitly list skipped rows when versions differ.
+- After a benchmark-method change merges, refresh `bench/baselines.json` on `main` with `zig build bench -- --update`.
+
 ---
 
 ## Vision Alignment

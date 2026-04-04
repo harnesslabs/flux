@@ -178,3 +178,26 @@ API honest about setup cost, avoids parallel interfaces in a pre-release codebas
 and gives the future PDE/system builder a natural home: the builder requests the
 operators it needs from the context instead of mutating the mesh or relying on
 hidden convenience assembly.
+
+## 2026-04-03: SIMD cochain arithmetic uses private slice kernels, not new public methods
+
+**Decision:** Keep the caller-facing cochain API unchanged:
+`Cochain.add`, `.scale`, `.negate`, and `.inner_product` remain the only
+arithmetic entry points. Implement SIMD through private slice kernels inside
+`src/forms/cochain.zig`, with scalar reference kernels kept alongside them for
+tests and benchmark baselines.
+
+**Alternatives considered:**
+1. Add explicit public SIMD methods (`addSimd`, `innerProductSimd`, etc.):
+   rejected because it creates parallel APIs for the same algebraic operations,
+   forcing callers to care about an implementation detail.
+2. Keep only one SIMD implementation with no scalar reference kernel:
+   rejected because the issue requires measurable benchmark comparison against a
+   scalar baseline, and the tail-handling path is easier to validate against a
+   trusted scalar implementation than against hand-derived expected arrays.
+
+**Rationale:** This keeps one obvious way to express cochain arithmetic while
+still giving the module an internal performance seam. The decision also stays
+compatible with the scalar-type horizon: when `Cochain(..., Scalar)` lands, the
+private kernels can be generalized or specialized without freezing a public
+SIMD-specific surface today.

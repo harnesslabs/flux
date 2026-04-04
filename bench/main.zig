@@ -12,12 +12,38 @@
 
 const std = @import("std");
 const flux = @import("flux");
+const maxwell = @import("maxwell_example");
+/// Version of the benchmark result file schema.
+const benchmark_suite_version: u32 = 2;
+/// Version for microbenchmarks whose timing method changed after batching.
+const small_cochain_method_version: u32 = 2;
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
 const PrimalC1 = flux.Cochain(Mesh2D, 1, flux.Primal);
 const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);
 const OperatorContext2D = flux.OperatorContext(Mesh2D);
+const MaxwellState2D = maxwell.State(Mesh2D);
+const ArithmeticMesh = struct {
+    pub const topological_dimension = 2;
+
+    vertices: u32,
+    edges: u32,
+    faces: u32,
+
+    pub fn num_vertices(self: *const @This()) u32 {
+        return self.vertices;
+    }
+
+    pub fn num_edges(self: *const @This()) u32 {
+        return self.edges;
+    }
+
+    pub fn num_faces(self: *const @This()) u32 {
+        return self.faces;
+    }
+};
+const ArithmeticC1 = flux.Cochain(ArithmeticMesh, 1, flux.Primal);
 
 // ── Configuration ───────────────────────────────────────────────────────
 
@@ -27,6 +53,13 @@ const grid_width: f64 = 50.0;
 const grid_height: f64 = 50.0;
 const warmup_iterations: u32 = 10;
 const measured_iterations: u32 = 100;
+const arithmetic_scale_factor: f64 = 1.000001;
+const arithmetic_case_lengths = [_]u32{ 1024, 16 * 1024, 128 * 1024 };
+const arithmetic_case_labels = [_][]const u8{ "1k", "16k", "128k" };
+const cavity_grid: u32 = 256;
+const cavity_domain: f64 = 1.0;
+const cavity_courant: f64 = 0.1;
+const small_cochain_repetitions: u32 = 64;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -37,14 +70,50 @@ const BenchmarkFn = *const fn (*BenchmarkContext) void;
 const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
+    repetitions: u32 = 1,
+    version: u32 = 1,
 };
 
 const BenchmarkResult = struct {
     name: []const u8,
+    version: u32,
     median_ns: u64,
     min_ns: u64,
     max_ns: u64,
     iterations: u32,
+};
+
+const ArithmeticCase = struct {
+    mesh: ArithmeticMesh,
+    lhs: ArithmeticC1,
+    rhs: ArithmeticC1,
+
+    fn init(allocator: std.mem.Allocator, len: u32) !ArithmeticCase {
+        var mesh = ArithmeticMesh{
+            .vertices = len,
+            .edges = len,
+            .faces = len,
+        };
+        var lhs = try ArithmeticC1.init(allocator, &mesh);
+        errdefer lhs.deinit(allocator);
+        var rhs = try ArithmeticC1.init(allocator, &mesh);
+        errdefer rhs.deinit(allocator);
+
+        var rng = std.Random.DefaultPrng.init(@as(u64, len) * 0x9E37_79B9);
+        fillRandom(&rng, lhs.values);
+        fillRandom(&rng, rhs.values);
+
+        return .{
+            .mesh = mesh,
+            .lhs = lhs,
+            .rhs = rhs,
+        };
+    }
+
+    fn deinit(self: *ArithmeticCase, allocator: std.mem.Allocator) void {
+        self.rhs.deinit(allocator);
+        self.lhs.deinit(allocator);
+    }
 };
 
 const BenchmarkContext = struct {
@@ -58,6 +127,9 @@ const BenchmarkContext = struct {
     // Secondary cochains for binary operations.
     c0_other: PrimalC0,
     c1_other: PrimalC1,
+    arithmetic_cases: [arithmetic_case_lengths.len]ArithmeticCase,
+    cavity_mesh: *Mesh2D,
+    cavity_state: MaxwellState2D,
     operator_context: *OperatorContext2D,
 
     fn init(allocator: std.mem.Allocator, mesh: *Mesh2D) !BenchmarkContext {
@@ -71,6 +143,22 @@ const BenchmarkContext = struct {
         errdefer c0_other.deinit(allocator);
         var c1_other = try PrimalC1.init(allocator, mesh);
         errdefer c1_other.deinit(allocator);
+        var arithmetic_cases: [arithmetic_case_lengths.len]ArithmeticCase = undefined;
+        var arithmetic_cases_initialized: usize = 0;
+        errdefer for (arithmetic_cases[0..arithmetic_cases_initialized]) |*arithmetic_case| {
+            arithmetic_case.deinit(allocator);
+        };
+        inline for (arithmetic_case_lengths, 0..) |len, i| {
+            arithmetic_cases[i] = try ArithmeticCase.init(allocator, len);
+            arithmetic_cases_initialized = i + 1;
+        }
+        const cavity_mesh = try allocator.create(Mesh2D);
+        errdefer allocator.destroy(cavity_mesh);
+        cavity_mesh.* = try Mesh2D.uniform_grid(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
+        errdefer cavity_mesh.deinit(allocator);
+        var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
+        errdefer cavity_state.deinit(allocator);
+        maxwell.project_te10_b(cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
         try operator_context.withExteriorDerivative(flux.Primal, 0);
@@ -97,12 +185,21 @@ const BenchmarkContext = struct {
             .c2 = c2,
             .c0_other = c0_other,
             .c1_other = c1_other,
+            .arithmetic_cases = arithmetic_cases,
+            .cavity_mesh = cavity_mesh,
+            .cavity_state = cavity_state,
             .operator_context = operator_context,
         };
     }
 
     fn deinit(self: *BenchmarkContext) void {
         self.operator_context.deinit();
+        self.cavity_state.deinit(self.allocator);
+        self.cavity_mesh.deinit(self.allocator);
+        self.allocator.destroy(self.cavity_mesh);
+        for (&self.arithmetic_cases) |*arithmetic_case| {
+            arithmetic_case.deinit(self.allocator);
+        }
         self.c1_other.deinit(self.allocator);
         self.c0_other.deinit(self.allocator);
         self.c2.deinit(self.allocator);
@@ -115,6 +212,36 @@ fn fillRandom(rng: *std.Random.DefaultPrng, values: []f64) void {
     for (values) |*v| {
         v.* = rng.random().float(f64) * 200.0 - 100.0;
     }
+}
+
+fn cavityDt() f64 {
+    return cavity_courant * (cavity_domain / @as(f64, @floatFromInt(cavity_grid)));
+}
+
+fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
+    for (lhs, rhs) |*left, right| {
+        left.* += right;
+    }
+}
+
+fn scaleScalarLoop(values: []f64, scalar: f64) void {
+    for (values) |*value| {
+        value.* *= scalar;
+    }
+}
+
+fn negateScalarLoop(values: []f64) void {
+    for (values) |*value| {
+        value.* = -value.*;
+    }
+}
+
+fn innerProductScalarLoop(lhs: []const f64, rhs: []const f64) f64 {
+    var sum: f64 = 0;
+    for (lhs, rhs) |left, right| {
+        sum += left * right;
+    }
+    return sum;
 }
 
 // ── I/O helpers (Zig 0.15 compatible) ───────────────────────────────────
@@ -185,16 +312,17 @@ fn benchLaplacian0Composed(ctx: *BenchmarkContext) void {
 
 /// Cochain add: pointwise addition of two 1-cochains.
 fn benchCochainAdd(ctx: *BenchmarkContext) void {
-    for (ctx.c1.values, ctx.c1_other.values) |*a, b| {
-        a.* += b;
-    }
+    ctx.c1.add(ctx.c1_other);
 }
 
 /// Cochain scale: scalar multiplication on a 1-cochain.
 fn benchCochainScale(ctx: *BenchmarkContext) void {
-    for (ctx.c1.values) |*v| {
-        v.* *= 2.5;
-    }
+    ctx.c1.scale(arithmetic_scale_factor);
+}
+
+/// Cochain negate: sign flip on a 1-cochain.
+fn benchCochainNegate(ctx: *BenchmarkContext) void {
+    ctx.c1.negate();
 }
 
 /// Cochain inner product: ⟨a, b⟩ on 0-cochains.
@@ -203,7 +331,138 @@ fn benchCochainInnerProduct(ctx: *BenchmarkContext) void {
     std.mem.doNotOptimizeAway(result);
 }
 
-const all_benchmarks = [_]BenchmarkDef{
+fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
+    maxwell.leapfrog_step(ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
+    maxwell.apply_pec_boundary(&ctx.cavity_state);
+}
+
+fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    addScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values);
+}
+
+fn benchArithmeticAdd(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    arithmetic_case.lhs.add(arithmetic_case.rhs);
+}
+
+fn benchArithmeticScaleScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    scaleScalarLoop(arithmetic_case.lhs.values, arithmetic_scale_factor);
+}
+
+fn benchArithmeticScale(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    arithmetic_case.lhs.scale(arithmetic_scale_factor);
+}
+
+fn benchArithmeticNegateScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    negateScalarLoop(arithmetic_case.lhs.values);
+}
+
+fn benchArithmeticNegate(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    arithmetic_case.lhs.negate();
+}
+
+fn benchArithmeticInnerProductScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    const result = innerProductScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn benchArithmeticInnerProduct(comptime case_index: usize, ctx: *BenchmarkContext) void {
+    const arithmetic_case = &ctx.arithmetic_cases[case_index];
+    const result = arithmetic_case.lhs.inner_product(arithmetic_case.rhs);
+    std.mem.doNotOptimizeAway(result);
+}
+
+fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
+    var defs: [arithmetic_case_lengths.len * 8]BenchmarkDef = undefined;
+    var i = 0;
+
+    inline for (arithmetic_case_labels, 0..) |label, case_index| {
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_add_scalar_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticAddScalar(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_add_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticAdd(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_scale_scalar_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticScaleScalar(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_scale_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticScale(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_negate_scalar_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticNegateScalar(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_negate_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticNegate(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_inner_product_scalar_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticInnerProductScalar(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+        defs[i] = .{
+            .name = std.fmt.comptimePrint("cochain_inner_product_{s}", .{label}),
+            .run = struct {
+                fn call(ctx: *BenchmarkContext) void {
+                    benchArithmeticInnerProduct(case_index, ctx);
+                }
+            }.call,
+        };
+        i += 1;
+    }
+
+    return defs;
+}
+
+const arithmetic_benchmarks = arithmeticBenchmarks();
+
+const base_benchmarks = [_]BenchmarkDef{
     .{ .name = "exterior_derivative_d0", .run = benchExteriorDerivativeD0 },
     .{ .name = "exterior_derivative_d1", .run = benchExteriorDerivativeD1 },
     .{ .name = "hodge_star_0", .run = benchHodgeStar0 },
@@ -212,25 +471,53 @@ const all_benchmarks = [_]BenchmarkDef{
     .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1 },
     .{ .name = "laplacian_0", .run = benchLaplacian0 },
     .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed },
-    .{ .name = "cochain_add", .run = benchCochainAdd },
-    .{ .name = "cochain_scale", .run = benchCochainScale },
-    .{ .name = "cochain_inner_product", .run = benchCochainInnerProduct },
+    .{
+        .name = "cochain_add",
+        .run = benchCochainAdd,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_scale",
+        .run = benchCochainScale,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_negate",
+        .run = benchCochainNegate,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{
+        .name = "cochain_inner_product",
+        .run = benchCochainInnerProduct,
+        .repetitions = small_cochain_repetitions,
+        .version = small_cochain_method_version,
+    },
+    .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
+
+const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;
 
 // ── Runner ──────────────────────────────────────────────────────────────
 
 fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     // Warmup — let branch predictors and caches settle.
     for (0..warmup_iterations) |_| {
-        def.run(ctx);
+        for (0..def.repetitions) |_| {
+            def.run(ctx);
+        }
     }
 
     // Measured iterations.
     var timings: [measured_iterations]u64 = undefined;
     for (&timings) |*t| {
         var timer = std.time.Timer.start() catch unreachable;
-        def.run(ctx);
-        t.* = timer.read();
+        for (0..def.repetitions) |_| {
+            def.run(ctx);
+        }
+        t.* = @divFloor(timer.read(), def.repetitions);
     }
 
     // Sort for median/min/max.
@@ -238,6 +525,7 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
 
     return .{
         .name = def.name,
+        .version = def.version,
         .median_ns = timings[measured_iterations / 2],
         .min_ns = timings[0],
         .max_ns = timings[measured_iterations - 1],
@@ -249,10 +537,12 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
 
 const Baseline = struct {
     name: []const u8,
+    version: u32 = 1,
     median_ns: u64,
 };
 
 const BaselineFile = struct {
+    suite_version: u32 = 1,
     mesh_size: []const u8,
     iterations: u32,
     benchmarks: []const Baseline,
@@ -279,12 +569,16 @@ fn writeBaselines(results: []const BenchmarkResult) !void {
 
     const writer = file.deprecatedWriter();
     try writer.writeAll("{\n");
+    try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
     try writer.writeAll("  \"benchmarks\": [\n");
 
     for (results, 0..) |r, i| {
-        try writer.print("    {{\"name\": \"{s}\", \"median_ns\": {d}}}", .{ r.name, r.median_ns });
+        try writer.print(
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}}}",
+            .{ r.name, r.version, r.median_ns },
+        );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
         } else {
@@ -307,6 +601,7 @@ fn printTable(
     try writer.print("  flux benchmark suite — {d}x{d} mesh, {d} iterations\n", .{
         grid_nx, grid_ny, measured_iterations,
     });
+    try writer.print("  suite version: {d}\n", .{benchmark_suite_version});
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
 
     if (baselines != null) {
@@ -322,7 +617,7 @@ fn printTable(
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
 
     for (results) |r| {
-        const baseline_ns = if (baselines) |bl| findBaseline(bl, r.name) else null;
+        const baseline = if (baselines) |bl| findBaseline(bl, r.name) else null;
 
         try writer.print("  {s:<30} ", .{r.name});
         try printDuration(writer, r.median_ns);
@@ -331,21 +626,60 @@ fn printTable(
         try writer.writeAll("  ");
         try printDuration(writer, r.max_ns);
 
-        if (baseline_ns) |base| {
-            const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base));
-            const pct = (ratio - 1.0) * 100.0;
-            if (pct > regression_threshold * 100.0) {
-                try writer.print("  +{d:.1}% REGRESSED", .{pct});
-            } else if (pct < -5.0) {
-                try writer.print("  {d:.1}% faster", .{-pct});
-            } else if (pct >= 0) {
-                try writer.print("  +{d:.1}%", .{pct});
+        if (baseline) |base| {
+            if (base.version != r.version) {
+                try writer.print("  method v{d}→v{d}", .{ base.version, r.version });
             } else {
-                try writer.print("  {d:.1}%", .{pct});
+                const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
+                const pct = (ratio - 1.0) * 100.0;
+                if (pct > regression_threshold * 100.0) {
+                    try writer.print("  +{d:.1}% REGRESSED", .{pct});
+                } else if (pct < -5.0) {
+                    try writer.print("  {d:.1}% faster", .{-pct});
+                } else if (pct >= 0) {
+                    try writer.print("  +{d:.1}%", .{pct});
+                } else {
+                    try writer.print("  {d:.1}%", .{pct});
+                }
             }
         }
 
         try writer.writeAll("\n");
+    }
+
+    try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
+}
+
+fn findResult(results: []const BenchmarkResult, name: []const u8) ?BenchmarkResult {
+    for (results) |result| {
+        if (std.mem.eql(u8, result.name, name)) return result;
+    }
+    return null;
+}
+
+fn printArithmeticSpeedups(writer: anytype, results: []const BenchmarkResult) !void {
+    const arithmetic_ops = [_][]const u8{ "add", "scale", "negate", "inner_product" };
+
+    try writer.writeAll("  Arithmetic speedups (default cochain path vs scalar loop)\n");
+    try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
+
+    for (arithmetic_case_labels) |label| {
+        for (arithmetic_ops) |op| {
+            var scalar_name_buffer: [64]u8 = undefined;
+            const scalar_name = try std.fmt.bufPrint(&scalar_name_buffer, "cochain_{s}_scalar_{s}", .{ op, label });
+            var simd_name_buffer: [64]u8 = undefined;
+            const simd_name = try std.fmt.bufPrint(&simd_name_buffer, "cochain_{s}_{s}", .{ op, label });
+            const scalar_result = findResult(results, scalar_name) orelse continue;
+            const simd_result = findResult(results, simd_name) orelse continue;
+            const speedup = @as(f64, @floatFromInt(scalar_result.median_ns)) /
+                @as(f64, @floatFromInt(simd_result.median_ns));
+
+            try writer.print("  {s:<22} {s:>6}  {d:>5.2}x faster\n", .{
+                op,
+                label,
+                speedup,
+            });
+        }
     }
 
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
@@ -368,14 +702,15 @@ fn printDuration(writer: anytype, ns: u64) !void {
 
 fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.writeAll("{\n");
+    try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
     try writer.writeAll("  \"benchmarks\": [\n");
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
-            .{ r.name, r.median_ns, r.min_ns, r.max_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
+            .{ r.name, r.version, r.median_ns, r.min_ns, r.max_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -388,9 +723,9 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.writeAll("}\n");
 }
 
-fn findBaseline(baselines: []const Baseline, name: []const u8) ?u64 {
+fn findBaseline(baselines: []const Baseline, name: []const u8) ?Baseline {
     for (baselines) |b| {
-        if (std.mem.eql(u8, b.name, name)) return b.median_ns;
+        if (std.mem.eql(u8, b.name, name)) return b;
     }
     return null;
 }
@@ -401,12 +736,13 @@ fn checkRegressions(results: []const BenchmarkResult, baselines: []const Baselin
 
     for (results) |r| {
         const base = findBaseline(baselines, r.name) orelse continue;
-        const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base));
+        if (base.version != r.version) continue;
+        const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
         if (ratio > 1.0 + regression_threshold) {
             stderr.print("  REGRESSION: {s} — {d:.1}% slower (baseline: ", .{
                 r.name, (ratio - 1.0) * 100.0,
             }) catch {};
-            printDuration(stderr, base) catch {};
+            printDuration(stderr, base.median_ns) catch {};
             stderr.writeAll(", current: ") catch {};
             printDuration(stderr, r.median_ns) catch {};
             stderr.writeAll(")\n") catch {};
@@ -470,6 +806,7 @@ pub fn main() !void {
         try printJson(stdoutWriter(), &results);
     }
     try printTable(stderr, &results, baseline_list);
+    try printArithmeticSpeedups(stderr, &results);
 
     // Update baselines if requested.
     if (update_mode) {

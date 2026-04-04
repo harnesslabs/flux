@@ -508,6 +508,8 @@ fn printUsage() void {
         \\  flux — 2D electromagnetic simulation on simplicial meshes
         \\
         \\  usage: flux [--demo <name>] [options]
+        \\         build with `zig build -Doptimize=ReleaseFast example-maxwell2d -- ...`
+        \\         for realistic performance; the default build mode is Debug
         \\
         \\  demos:
         \\    dipole    (default) point dipole radiating in a PEC cavity
@@ -530,14 +532,14 @@ fn printUsage() void {
         \\    --frames N        number of snapshots (default: 100)
         \\
         \\  examples:
-        \\    zig build run                                    # defaults
-        \\    zig build run -- --demo cavity --steps 2000      # standing wave
-        \\    zig build run -- --grid 64 --steps 4000          # fine mesh
-        \\    zig build run -- --frequency 1.5 --amplitude 2   # off-resonance
-        \\    zig build run -- --grid 16 --courant 0.2         # coarse & fast
+        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
+        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity --steps 2000
+        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --grid 64 --steps 4000
+        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --frequency 1.5 --amplitude 2
+        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --grid 16 --courant 0.2
         \\
         \\  visualization:
-        \\    uv run tools/visualize.py output --field B_flux --output anim.gif
+        \\    uv run tools/visualize.py output --field B_flux --output animation.png
         \\
     , .{});
 }

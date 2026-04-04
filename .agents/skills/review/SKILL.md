@@ -70,6 +70,10 @@ These are the findings the user is least likely to catch:
 ### 6. Process
 - PR body has `Closes #N`?
 - Acceptance criterion from the issue is stated and verified?
+- If the PR makes a performance claim, are the benchmark comparisons honest?
+- If benchmark methodology changed, was the per-benchmark `version` bumped for the affected rows?
+- If benchmark methodology did not change, did the PR preserve base-vs-PR comparability instead of hiding behind a version bump?
+- If the claimed perf win comes from a new benchmark with no base counterpart, is there an explicit same-run comparison showing the win?
 - Were any non-obvious architectural decisions made? If yes, are they in the decision log?
 - Labels correct: `type/`, `domain/`, `priority/` all set?
 - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?

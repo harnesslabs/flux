@@ -103,8 +103,10 @@ jobs:
           python3 -c "
           import json, sys
 
-          base = {b['name']: b for b in json.load(open('/tmp/base-bench.json'))['benchmarks']}
-          pr   = {b['name']: b for b in json.load(open('/tmp/pr-bench.json'))['benchmarks']}
+          base_doc = json.load(open('/tmp/base-bench.json'))
+          pr_doc = json.load(open('/tmp/pr-bench.json'))
+          base = {b['name']: b for b in base_doc['benchmarks']}
+          pr   = {b['name']: b for b in pr_doc['benchmarks']}
 
           def fmt_ns(ns):
               if ns < 1_000:       return f'{ns} ns'
@@ -113,9 +115,15 @@ jobs:
               return f'{ns/1e9:.3f} s'
 
           rows = []
+          skipped = []
           has_regression = False
           for name in base:
               if name not in pr: continue
+              base_version = base[name].get('version', 1)
+              pr_version = pr[name].get('version', 1)
+              if base_version != pr_version:
+                  skipped.append((name, base_version, pr_version))
+                  continue
               b_ns, p_ns = base[name]['median_ns'], pr[name]['median_ns']
               pct = (p_ns - b_ns) / b_ns * 100
               if abs(pct) < 20: continue
@@ -126,21 +134,28 @@ jobs:
                   tag = f'{pct:.1f}% 🟢'
               rows.append((name, fmt_ns(b_ns), fmt_ns(p_ns), tag))
 
-          if not rows:
+          if not rows and not skipped:
               sys.exit(1)  # signal: no notable changes
 
           with open('/tmp/bench-comment.md', 'w') as f:
               f.write('## ⚡ Benchmark Report\n\n')
               f.write(f'Compared against base branch (\`${BASE_SHA}\`) on the same runner.\n\n')
-              f.write('| Benchmark | Base | PR | Change |\n')
-              f.write('|-----------|-----:|---:|--------|\n')
-              for name, b, p, tag in rows:
-                  f.write(f'| \`{name}\` | {b} | {p} | {tag} |\n')
-              f.write('\n')
-              if has_regression:
-                  f.write('🔴 **Regressions detected** — review before merging.\n')
-              else:
-                  f.write('🟢 **Improvements only** — no regressions.\n')
+              if rows:
+                  f.write('| Benchmark | Base | PR | Change |\n')
+                  f.write('|-----------|-----:|---:|--------|\n')
+                  for name, b, p, tag in rows:
+                      f.write(f'| \`{name}\` | {b} | {p} | {tag} |\n')
+                  f.write('\n')
+                  if has_regression:
+                      f.write('🔴 **Regressions detected** — review before merging.\n')
+                  else:
+                      f.write('🟢 **Comparable notable changes only** — no regressions.\n')
+              if skipped:
+                  if rows:
+                      f.write('\n')
+                  f.write('Skipped due to benchmark method version changes:\n')
+                  for name, base_version, pr_version in skipped:
+                      f.write(f'- \`{name}\`: v{base_version} → v{pr_version}\n')
           " && HAS_NOTABLE=true || HAS_NOTABLE=false
 
           if [ "$HAS_NOTABLE" = "false" ]; then
