@@ -622,16 +622,336 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             comptime {
                 if (topological_dimension != 3) @compileError("uniform_tetrahedral_grid is only available for 3D meshes (topological_dimension = 3)");
             }
+            if (nx == 0 or ny == 0 or nz == 0) @panic("grid dimensions must be positive");
+            if (!(width > 0) or !(height > 0) or !(depth > 0)) @panic("domain size must be positive");
 
-            _ = allocator;
-            _ = nx;
-            _ = ny;
-            _ = nz;
-            _ = width;
-            _ = height;
-            _ = depth;
+            const dx = width / @as(f64, @floatFromInt(nx));
+            const dy = height / @as(f64, @floatFromInt(ny));
+            const dz = depth / @as(f64, @floatFromInt(nz));
 
-            @panic("uniform_tetrahedral_grid is not yet implemented");
+            const vertex_count: u32 = (nx + 1) * (ny + 1) * (nz + 1);
+            const tet_count: u32 = 6 * nx * ny * nz;
+
+            var vertices = std.MultiArrayList(Vertex(embedding_dimension)){};
+            try vertices.ensureTotalCapacity(allocator, vertex_count);
+            errdefer vertices.deinit(allocator);
+
+            for (0..nx + 1) |i_u| {
+                const x = @as(f64, @floatFromInt(i_u)) * dx;
+                for (0..ny + 1) |j_u| {
+                    const y = @as(f64, @floatFromInt(j_u)) * dy;
+                    for (0..nz + 1) |k_u| {
+                        const z = @as(f64, @floatFromInt(k_u)) * dz;
+                        var coords: [embedding_dimension]f64 = @splat(0);
+                        coords[0] = x;
+                        coords[1] = y;
+                        coords[2] = z;
+                        vertices.appendAssumeCapacity(.{ .coords = coords, .dual_volume = 0 });
+                    }
+                }
+            }
+
+            const coords = vertices.slice().items(.coords);
+
+            const cell_patterns = [_][4]u8{
+                .{ 0, 4, 6, 7 },
+                .{ 0, 4, 5, 7 },
+                .{ 0, 2, 6, 7 },
+                .{ 0, 2, 3, 7 },
+                .{ 0, 1, 5, 7 },
+                .{ 0, 1, 3, 7 },
+            };
+
+            const tet_vertices = try allocator.alloc([4]u32, tet_count);
+            defer allocator.free(tet_vertices);
+
+            var tet_index: u32 = 0;
+            for (0..nx) |i_u| {
+                const i: u32 = @intCast(i_u);
+                for (0..ny) |j_u| {
+                    const j: u32 = @intCast(j_u);
+                    for (0..nz) |k_u| {
+                        const k: u32 = @intCast(k_u);
+                        const cell_vertices = [8]u32{
+                            vertex_index_3d(i, j, k, ny, nz),
+                            vertex_index_3d(i, j, k + 1, ny, nz),
+                            vertex_index_3d(i, j + 1, k, ny, nz),
+                            vertex_index_3d(i, j + 1, k + 1, ny, nz),
+                            vertex_index_3d(i + 1, j, k, ny, nz),
+                            vertex_index_3d(i + 1, j, k + 1, ny, nz),
+                            vertex_index_3d(i + 1, j + 1, k, ny, nz),
+                            vertex_index_3d(i + 1, j + 1, k + 1, ny, nz),
+                        };
+
+                        for (cell_patterns) |pattern| {
+                            var tet = [4]u32{
+                                cell_vertices[pattern[0]],
+                                cell_vertices[pattern[1]],
+                                cell_vertices[pattern[2]],
+                                cell_vertices[pattern[3]],
+                            };
+                            const signed_volume = signed_tetrahedron_volume(coords[tet[0]], coords[tet[1]], coords[tet[2]], coords[tet[3]]);
+                            if (signed_volume < 0) {
+                                std.mem.swap(u32, &tet[2], &tet[3]);
+                            } else if (!(signed_volume > 0)) {
+                                return flux.Error.DegenerateTetrahedron;
+                            }
+
+                            tet_vertices[tet_index] = tet;
+                            tet_index += 1;
+                        }
+                    }
+                }
+            }
+            std.debug.assert(tet_index == tet_count);
+
+            var edge_map = std.AutoHashMap([2]u32, u32).init(allocator);
+            defer edge_map.deinit();
+            var face_map = std.AutoHashMap([3]u32, u32).init(allocator);
+            defer face_map.deinit();
+
+            var edge_keys = try std.ArrayList([2]u32).initCapacity(allocator, 6 * tet_count);
+            defer edge_keys.deinit(allocator);
+            var face_keys = try std.ArrayList([3]u32).initCapacity(allocator, 4 * tet_count);
+            defer face_keys.deinit(allocator);
+
+            for (tet_vertices) |tet| {
+                inline for (tet_edge_vertex_pairs) |pair| {
+                    const edge_key = canonical_edge_key(tet[pair[0]], tet[pair[1]]);
+                    const gop = try edge_map.getOrPut(edge_key);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = @intCast(edge_keys.items.len);
+                        edge_keys.appendAssumeCapacity(edge_key);
+                    }
+                }
+
+                inline for (tet_face_vertex_triples) |triple| {
+                    const face_key = canonical_face_key(tet[triple[0]], tet[triple[1]], tet[triple[2]]);
+                    const gop = try face_map.getOrPut(face_key);
+                    if (!gop.found_existing) {
+                        gop.value_ptr.* = @intCast(face_keys.items.len);
+                        face_keys.appendAssumeCapacity(face_key);
+                    }
+                }
+            }
+
+            const edge_count: u32 = @intCast(edge_keys.items.len);
+            const face_count: u32 = @intCast(face_keys.items.len);
+
+            var edges_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 1)){};
+            try edges_list.ensureTotalCapacity(allocator, edge_count);
+            errdefer edges_list.deinit(allocator);
+
+            for (edge_keys.items) |edge_key| {
+                edges_list.appendAssumeCapacity(.{
+                    .vertices = edge_key,
+                    .volume = euclidean_distance(coords[edge_key[0]], coords[edge_key[1]]),
+                    .barycenter = point_midpoint(coords[edge_key[0]], coords[edge_key[1]]),
+                });
+            }
+
+            var faces_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 2)){};
+            try faces_list.ensureTotalCapacity(allocator, face_count);
+            errdefer faces_list.deinit(allocator);
+
+            for (face_keys.items) |face_key| {
+                faces_list.appendAssumeCapacity(.{
+                    .vertices = face_key,
+                    .volume = triangle_area(coords[face_key[0]], coords[face_key[1]], coords[face_key[2]]),
+                    .barycenter = triangle_barycenter(coords[face_key[0]], coords[face_key[1]], coords[face_key[2]]),
+                });
+            }
+
+            var tets_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 3)){};
+            try tets_list.ensureTotalCapacity(allocator, tet_count);
+            errdefer tets_list.deinit(allocator);
+
+            for (tet_vertices) |tet| {
+                const volume = tetrahedron_volume(coords[tet[0]], coords[tet[1]], coords[tet[2]], coords[tet[3]]);
+                if (!(volume > 0)) return flux.Error.DegenerateTetrahedron;
+                tets_list.appendAssumeCapacity(.{
+                    .vertices = tet,
+                    .volume = volume,
+                    .barycenter = tetrahedron_barycenter(coords[tet[0]], coords[tet[1]], coords[tet[2]], coords[tet[3]]),
+                });
+            }
+
+            var boundary_1: BoundaryMatrix = undefined;
+            {
+                var dense = try DenseBoundaryMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
+                errdefer dense.deinit(allocator);
+
+                for (0..edge_count) |edge_idx| {
+                    const edge_key = edge_keys.items[edge_idx];
+                    dense.row_ptr[edge_idx] = @intCast(2 * edge_idx);
+                    dense.col_idx[2 * edge_idx] = edge_key[0];
+                    dense.values[2 * edge_idx] = -1;
+                    dense.col_idx[2 * edge_idx + 1] = edge_key[1];
+                    dense.values[2 * edge_idx + 1] = 1;
+                }
+                dense.row_ptr[edge_count] = 2 * edge_count;
+
+                boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, dense);
+                dense.deinit(allocator);
+            }
+            errdefer boundary_1.deinit(allocator);
+
+            var boundary_2: BoundaryMatrix = undefined;
+            {
+                var dense = try DenseBoundaryMatrix.init(allocator, face_count, edge_count, 3 * face_count);
+                errdefer dense.deinit(allocator);
+
+                for (0..face_count) |face_idx| {
+                    const face_key = face_keys.items[face_idx];
+                    var cols = [3]u32{
+                        edge_map.get(canonical_edge_key(face_key[1], face_key[2])).?,
+                        edge_map.get(canonical_edge_key(face_key[0], face_key[2])).?,
+                        edge_map.get(canonical_edge_key(face_key[0], face_key[1])).?,
+                    };
+                    var vals = [3]i8{ 1, -1, 1 };
+                    sort_small_row(3, &cols, &vals);
+
+                    dense.row_ptr[face_idx] = @intCast(3 * face_idx);
+                    inline for (0..3) |entry_idx| {
+                        dense.col_idx[3 * face_idx + entry_idx] = cols[entry_idx];
+                        dense.values[3 * face_idx + entry_idx] = vals[entry_idx];
+                    }
+                }
+                dense.row_ptr[face_count] = 3 * face_count;
+
+                boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, dense);
+                dense.deinit(allocator);
+            }
+            errdefer boundary_2.deinit(allocator);
+
+            const face_incidence_count = try allocator.alloc(u8, face_count);
+            defer allocator.free(face_incidence_count);
+            @memset(face_incidence_count, 0);
+
+            var boundary_3: BoundaryMatrix = undefined;
+            {
+                var dense = try DenseBoundaryMatrix.init(allocator, tet_count, face_count, 4 * tet_count);
+                errdefer dense.deinit(allocator);
+
+                for (0..tet_count) |tet_idx| {
+                    const tet = tet_vertices[tet_idx];
+                    var cols: [4]u32 = undefined;
+                    var vals: [4]i8 = undefined;
+
+                    inline for (tet_face_vertex_triples, 0..) |triple, local_face_idx| {
+                        const oriented_face = [3]u32{ tet[triple[0]], tet[triple[1]], tet[triple[2]] };
+                        const face_key = canonical_face_key(oriented_face[0], oriented_face[1], oriented_face[2]);
+                        const face_idx = face_map.get(face_key).?;
+                        const boundary_sign: i8 = if (local_face_idx % 2 == 0) 1 else -1;
+
+                        cols[local_face_idx] = face_idx;
+                        vals[local_face_idx] = boundary_sign * orientation_sign_3(oriented_face, face_key);
+                        face_incidence_count[face_idx] += 1;
+                    }
+
+                    sort_small_row(4, &cols, &vals);
+
+                    dense.row_ptr[tet_idx] = @intCast(4 * tet_idx);
+                    inline for (0..4) |entry_idx| {
+                        dense.col_idx[4 * tet_idx + entry_idx] = cols[entry_idx];
+                        dense.values[4 * tet_idx + entry_idx] = vals[entry_idx];
+                    }
+                }
+                dense.row_ptr[tet_count] = 4 * tet_count;
+
+                boundary_3 = try BoundaryMatrix.fromBoundaryCsr(allocator, 3, dense);
+                dense.deinit(allocator);
+            }
+            errdefer boundary_3.deinit(allocator);
+
+            for (face_incidence_count) |count| {
+                if (count == 0 or count > 2) return flux.Error.NonManifoldFace;
+            }
+
+            const dual_edge_volumes = try allocator.alloc(f64, edge_count);
+            errdefer allocator.free(dual_edge_volumes);
+            @memset(dual_edge_volumes, 0.0);
+
+            {
+                const dual_volumes = vertices.slice().items(.dual_volume);
+                @memset(dual_volumes, 0.0);
+
+                const tet_barycenters = tets_list.slice().items(.barycenter);
+                const tet_volumes = tets_list.slice().items(.volume);
+                const face_barycenters = faces_list.slice().items(.barycenter);
+
+                for (0..tet_count) |tet_idx| {
+                    const tet = tet_vertices[tet_idx];
+                    const tet_barycenter = tet_barycenters[tet_idx];
+                    const tet_volume = tet_volumes[tet_idx];
+
+                    inline for (0..4) |local_vertex_idx| {
+                        dual_volumes[tet[local_vertex_idx]] += tet_volume / 4.0;
+                    }
+
+                    var local_face_indices: [4]u32 = undefined;
+                    inline for (tet_face_vertex_triples, 0..) |triple, local_face_idx| {
+                        local_face_indices[local_face_idx] = face_map.get(canonical_face_key(
+                            tet[triple[0]],
+                            tet[triple[1]],
+                            tet[triple[2]],
+                        )).?;
+                    }
+
+                    inline for (tet_edge_vertex_pairs, tet_edge_dual_faces) |pair, incident_faces| {
+                        const edge_key = canonical_edge_key(tet[pair[0]], tet[pair[1]]);
+                        const edge_idx = edge_map.get(edge_key).?;
+                        const midpoint = point_midpoint(coords[edge_key[0]], coords[edge_key[1]]);
+                        const face_barycenter_0 = face_barycenters[local_face_indices[incident_faces[0]]];
+                        const face_barycenter_1 = face_barycenters[local_face_indices[incident_faces[1]]];
+
+                        dual_edge_volumes[edge_idx] += triangle_area(midpoint, face_barycenter_0, tet_barycenter);
+                        dual_edge_volumes[edge_idx] += triangle_area(midpoint, tet_barycenter, face_barycenter_1);
+                    }
+                }
+            }
+
+            const boundary_edge_flags = try allocator.alloc(bool, edge_count);
+            defer allocator.free(boundary_edge_flags);
+            @memset(boundary_edge_flags, false);
+
+            var boundary_edge_count: u32 = 0;
+            for (0..face_count) |face_idx| {
+                if (face_incidence_count[face_idx] != 1) continue;
+                const face_row = boundary_2.row(@intCast(face_idx));
+                for (face_row.cols) |edge_idx| {
+                    if (!boundary_edge_flags[edge_idx]) {
+                        boundary_edge_flags[edge_idx] = true;
+                        boundary_edge_count += 1;
+                    }
+                }
+            }
+
+            const boundary_edges = try allocator.alloc(u32, boundary_edge_count);
+            errdefer allocator.free(boundary_edges);
+            var boundary_edge_write: u32 = 0;
+            for (0..edge_count) |edge_idx| {
+                if (!boundary_edge_flags[edge_idx]) continue;
+                boundary_edges[boundary_edge_write] = @intCast(edge_idx);
+                boundary_edge_write += 1;
+            }
+            std.debug.assert(boundary_edge_write == boundary_edge_count);
+
+            var dummy_mass = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
+            errdefer dummy_mass.deinit(allocator);
+
+            const preconditioner = try allocator.alloc(f64, 0);
+            errdefer allocator.free(preconditioner);
+
+            return .{
+                .vertices = vertices,
+                .simplex_lists = .{ edges_list, faces_list, tets_list },
+                .boundaries = .{ boundary_1, boundary_2, boundary_3 },
+                .dual_edge_volumes = dual_edge_volumes,
+                .boundary_edges = boundary_edges,
+                .whitney_mass_1 = dummy_mass,
+                .preconditioner_1 = preconditioner,
+            };
         }
 
         // ───────────────────────────────────────────────────────────────────
@@ -652,6 +972,10 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
 
         fn diagonal_edge_index(i: u32, j: u32, ny_val: u32, n_horizontal: u32, n_vertical: u32) u32 {
             return n_horizontal + n_vertical + i * ny_val + j;
+        }
+
+        fn vertex_index_3d(i: u32, j: u32, k: u32, ny_val: u32, nz_val: u32) u32 {
+            return i * (ny_val + 1) * (nz_val + 1) + j * (nz_val + 1) + k;
         }
 
         // ───────────────────────────────────────────────────────────────────
@@ -689,9 +1013,19 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return (dx1 * dy2 - dx2 * dy1) / 2.0;
         }
 
-        /// Unsigned area of a 2D triangle. Uses only the first two coordinate components.
+        /// Unsigned area of a triangle in any embedding dimension.
         fn triangle_area(p0: [embedding_dimension]f64, p1: [embedding_dimension]f64, p2: [embedding_dimension]f64) f64 {
-            return @abs(signed_triangle_area(p0, p1, p2));
+            var edge_u_dot_u: f64 = 0;
+            var edge_v_dot_v: f64 = 0;
+            var edge_u_dot_v: f64 = 0;
+            inline for (0..embedding_dimension) |d| {
+                const edge_u = p1[d] - p0[d];
+                const edge_v = p2[d] - p0[d];
+                edge_u_dot_u += edge_u * edge_u;
+                edge_v_dot_v += edge_v * edge_v;
+                edge_u_dot_v += edge_u * edge_v;
+            }
+            return 0.5 * @sqrt(edge_u_dot_u * edge_v_dot_v - edge_u_dot_v * edge_u_dot_v);
         }
 
         /// Barycenter (centroid) of a triangle: average of its three vertices.
@@ -702,6 +1036,108 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             }
             return result;
         }
+
+        fn tetrahedron_barycenter(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64, d: [embedding_dimension]f64) [embedding_dimension]f64 {
+            var result: [embedding_dimension]f64 = undefined;
+            inline for (0..embedding_dimension) |dim_idx| {
+                result[dim_idx] = (a[dim_idx] + b[dim_idx] + c[dim_idx] + d[dim_idx]) / 4.0;
+            }
+            return result;
+        }
+
+        fn tetrahedron_volume(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64, d: [embedding_dimension]f64) f64 {
+            const signed = signed_tetrahedron_volume(a, b, c, d);
+            return @abs(signed);
+        }
+
+        fn signed_tetrahedron_volume(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64, d: [embedding_dimension]f64) f64 {
+            const ux = b[0] - a[0];
+            const uy = b[1] - a[1];
+            const uz = b[2] - a[2];
+            const vx = c[0] - a[0];
+            const vy = c[1] - a[1];
+            const vz = c[2] - a[2];
+            const wx = d[0] - a[0];
+            const wy = d[1] - a[1];
+            const wz = d[2] - a[2];
+
+            const determinant =
+                ux * (vy * wz - vz * wy) -
+                uy * (vx * wz - vz * wx) +
+                uz * (vx * wy - vy * wx);
+            return determinant / 6.0;
+        }
+
+        fn canonical_edge_key(a: u32, b: u32) [2]u32 {
+            return if (a < b) .{ a, b } else .{ b, a };
+        }
+
+        fn canonical_face_key(a: u32, b: u32, c: u32) [3]u32 {
+            var vertices = [3]u32{ a, b, c };
+            sort_vertices_3(&vertices);
+            return vertices;
+        }
+
+        fn sort_vertices_3(vertices: *[3]u32) void {
+            if (vertices[0] > vertices[1]) std.mem.swap(u32, &vertices[0], &vertices[1]);
+            if (vertices[1] > vertices[2]) std.mem.swap(u32, &vertices[1], &vertices[2]);
+            if (vertices[0] > vertices[1]) std.mem.swap(u32, &vertices[0], &vertices[1]);
+        }
+
+        fn orientation_sign_3(oriented: [3]u32, reference: [3]u32) i8 {
+            var permutation: [3]u8 = undefined;
+            inline for (0..3) |entry_idx| {
+                permutation[entry_idx] = index_in_3(reference, oriented[entry_idx]);
+            }
+
+            var inversion_count: u8 = 0;
+            if (permutation[0] > permutation[1]) inversion_count += 1;
+            if (permutation[0] > permutation[2]) inversion_count += 1;
+            if (permutation[1] > permutation[2]) inversion_count += 1;
+            return if (inversion_count % 2 == 0) 1 else -1;
+        }
+
+        fn index_in_3(vertices: [3]u32, needle: u32) u8 {
+            inline for (0..3) |entry_idx| {
+                if (vertices[entry_idx] == needle) return @intCast(entry_idx);
+            }
+            unreachable;
+        }
+
+        fn sort_small_row(comptime arity: usize, cols: *[arity]u32, vals: *[arity]i8) void {
+            inline for (1..arity) |i| {
+                var j = i;
+                while (j > 0 and cols[j - 1] > cols[j]) : (j -= 1) {
+                    std.mem.swap(u32, &cols[j - 1], &cols[j]);
+                    std.mem.swap(i8, &vals[j - 1], &vals[j]);
+                }
+            }
+        }
+
+        const tet_edge_vertex_pairs = [6][2]u8{
+            .{ 0, 1 },
+            .{ 0, 2 },
+            .{ 0, 3 },
+            .{ 1, 2 },
+            .{ 1, 3 },
+            .{ 2, 3 },
+        };
+
+        const tet_face_vertex_triples = [4][3]u8{
+            .{ 1, 2, 3 },
+            .{ 0, 2, 3 },
+            .{ 0, 1, 3 },
+            .{ 0, 1, 2 },
+        };
+
+        const tet_edge_dual_faces = [6][2]u8{
+            .{ 2, 3 },
+            .{ 1, 3 },
+            .{ 1, 2 },
+            .{ 0, 3 },
+            .{ 0, 2 },
+            .{ 0, 1 },
+        };
     };
 }
 
@@ -1245,6 +1681,17 @@ test "uniform tetrahedral grid 1x1x1 entity counts" {
     try testing.expectEqual(@as(u32, 19), mesh.num_edges());
     try testing.expectEqual(@as(u32, 18), mesh.num_faces());
     try testing.expectEqual(@as(u32, 6), mesh.num_tets());
+}
+
+test "uniform tetrahedral grid 2x2x2 entity counts" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh(3, 3).uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 27), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 98), mesh.num_edges());
+    try testing.expectEqual(@as(u32, 120), mesh.num_faces());
+    try testing.expectEqual(@as(u32, 48), mesh.num_tets());
 }
 
 test "uniform tetrahedral grid boundary of boundary is zero" {

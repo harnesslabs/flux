@@ -41,9 +41,15 @@ pub const Error = error{
     /// A triangle has zero area — cotangent weights and dual geometry
     /// cannot be computed.
     DegenerateTriangle,
+    /// A tetrahedron has zero volume — 3D dual geometry and boundary
+    /// operators cannot be computed consistently.
+    DegenerateTetrahedron,
     /// An edge is adjacent to zero faces — the mesh is disconnected or
     /// malformed.
     NonManifoldEdge,
+    /// A face is adjacent to more than two tetrahedra, so the simplicial
+    /// complex is not a manifold-with-boundary.
+    NonManifoldFace,
 };
 
 // ── Submodule re-exports (for namespaced access) ────────────────────────
