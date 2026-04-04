@@ -129,15 +129,45 @@ pub const PackedIncidenceSigns = struct {
     }
 
     pub fn fromSigns(allocator: std.mem.Allocator, signs: []const i8) !PackedIncidenceSigns {
-        _ = allocator;
-        _ = signs;
-        @panic("TODO: implement PackedIncidenceSigns.fromSigns");
+        std.debug.assert(signs.len <= std.math.maxInt(u32));
+
+        var packed_signs = try init(allocator, @intCast(signs.len));
+        errdefer packed_signs.deinit(allocator);
+
+        for (signs, 0..) |sign, entry_idx| {
+            packed_signs.set(@intCast(entry_idx), sign);
+        }
+
+        return packed_signs;
     }
 
     pub fn get(self: PackedIncidenceSigns, entry_idx: u32) i8 {
-        _ = self;
-        _ = entry_idx;
-        @panic("TODO: implement PackedIncidenceSigns.get");
+        std.debug.assert(entry_idx < self.len);
+        const mask = bitMask(entry_idx);
+        const byte = self.bytes[byteIndex(entry_idx)];
+        return if ((byte & mask) == 0) -1 else 1;
+    }
+
+    fn set(self: PackedIncidenceSigns, entry_idx: u32, sign: i8) void {
+        std.debug.assert(entry_idx < self.len);
+        std.debug.assert(sign == -1 or sign == 1);
+
+        const byte_idx = byteIndex(entry_idx);
+        const mask = bitMask(entry_idx);
+        if (sign == 1) {
+            self.bytes[byte_idx] |= mask;
+        } else {
+            self.bytes[byte_idx] &= ~mask;
+        }
+    }
+
+    fn byteIndex(entry_idx: u32) usize {
+        return @intCast(@divFloor(entry_idx, 8));
+    }
+
+    fn bitMask(entry_idx: u32) u8 {
+        const bit_idx: u3 = @intCast(@mod(entry_idx, 8));
+        return @as(u8, 1) << bit_idx;
     }
 };
 
@@ -150,9 +180,29 @@ pub const PackedIncidenceMatrix = struct {
     n_cols: u32,
 
     pub fn fromCsr(allocator: std.mem.Allocator, matrix: CsrMatrix(i8)) !PackedIncidenceMatrix {
-        _ = allocator;
-        _ = matrix;
-        @panic("TODO: implement PackedIncidenceMatrix.fromCsr");
+        const row_ptr = try allocator.dupe(u32, matrix.row_ptr);
+        errdefer allocator.free(row_ptr);
+
+        const col_idx = try allocator.dupe(u32, matrix.col_idx);
+        errdefer allocator.free(col_idx);
+
+        for (matrix.values) |value| {
+            std.debug.assert(value == -1 or value == 1);
+        }
+
+        const signs = try PackedIncidenceSigns.fromSigns(allocator, matrix.values);
+        errdefer {
+            var signs_copy = signs;
+            signs_copy.deinit(allocator);
+        }
+
+        return .{
+            .row_ptr = row_ptr,
+            .col_idx = col_idx,
+            .signs = signs,
+            .n_rows = matrix.n_rows,
+            .n_cols = matrix.n_cols,
+        };
     }
 
     pub fn deinit(self: *PackedIncidenceMatrix, allocator: std.mem.Allocator) void {
@@ -162,10 +212,21 @@ pub const PackedIncidenceMatrix = struct {
     }
 
     pub fn transpose_multiply(self: PackedIncidenceMatrix, input_vals: []const f64, output: []f64) void {
-        _ = self;
-        _ = input_vals;
-        _ = output;
-        @panic("TODO: implement PackedIncidenceMatrix.transpose_multiply");
+        std.debug.assert(input_vals.len == self.n_rows);
+        std.debug.assert(output.len == self.n_cols);
+
+        for (0..self.n_rows) |row_idx_usize| {
+            const row_idx: u32 = @intCast(row_idx_usize);
+            const row_start: usize = self.row_ptr[row_idx];
+            const row_end: usize = self.row_ptr[row_idx + 1];
+            const input_value = input_vals[row_idx];
+
+            for (row_start..row_end) |entry_idx| {
+                const col = self.col_idx[entry_idx];
+                const sign = self.signs.get(@intCast(entry_idx));
+                output[col] += if (sign == 1) input_value else -input_value;
+            }
+        }
     }
 };
 
@@ -506,10 +567,15 @@ test "PackedIncidenceMatrix transpose_multiply matches i8 CSR baseline" {
             matrix.row_ptr[row_idx + 1] = write_idx;
         }
 
-        matrix.col_idx = matrix.col_idx[0..write_idx];
-        matrix.values = matrix.values[0..write_idx];
+        const matrix_view = CsrMatrix(i8){
+            .row_ptr = matrix.row_ptr,
+            .col_idx = matrix.col_idx[0..write_idx],
+            .values = matrix.values[0..write_idx],
+            .n_rows = matrix.n_rows,
+            .n_cols = matrix.n_cols,
+        };
 
-        var packed_matrix = try PackedIncidenceMatrix.fromCsr(allocator, matrix);
+        var packed_matrix = try PackedIncidenceMatrix.fromCsr(allocator, matrix_view);
         defer packed_matrix.deinit(allocator);
 
         const input = try allocator.alloc(f64, n_rows);
@@ -525,7 +591,7 @@ test "PackedIncidenceMatrix transpose_multiply matches i8 CSR baseline" {
 
         @memset(dense_output, 0.0);
         @memset(packed_output, 0.0);
-        matrix.transpose_multiply(input, dense_output);
+        matrix_view.transpose_multiply(input, dense_output);
         packed_matrix.transpose_multiply(input, packed_output);
 
         for (dense_output, packed_output) |expected, actual| {
