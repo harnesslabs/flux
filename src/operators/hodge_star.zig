@@ -104,11 +104,16 @@ pub fn apply_hodge_star(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    switch (k) {
-        0, topological_dimension => applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false),
-        else => sparse.spmv(input.mesh.whitney_mass_1, input.values, output.values),
+    if (isDiagonalDegree(InputType.MeshT, k)) {
+        applyDiagonal(InputType.MeshT, k, input.mesh, input.values, output.values, false);
+        return output;
     }
 
+    if (!supportsWhitneyMassDegree(InputType.MeshT, k)) {
+        return error.NotYetImplemented;
+    }
+
+    sparse.spmv(input.mesh.whitney_mass_1, input.values, output.values);
     return output;
 }
 
@@ -132,29 +137,33 @@ pub fn apply_hodge_star_inverse(
     var output = try OutputType.init(allocator, input.mesh);
     errdefer output.deinit(allocator);
 
-    switch (primal_degree) {
-        0, topological_dimension => applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true),
-        else => {
-            // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
-            @memset(output.values, 0.0);
-
-            var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.values.len));
-            defer scratch.deinit(allocator);
-
-            var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
-            const result = conjugate_gradient.solve(
-                input.mesh.whitney_mass_1,
-                input.values,
-                output.values,
-                1e-10,
-                1000,
-                conjugate_gradient.DiagonalPreconditioner.apply,
-                @ptrCast(&precond),
-                scratch,
-            );
-            std.debug.assert(result.converged);
-        },
+    if (isDiagonalDegree(InputType.MeshT, primal_degree)) {
+        applyDiagonal(InputType.MeshT, primal_degree, input.mesh, input.values, output.values, true);
+        return output;
     }
+
+    if (!supportsWhitneyMassDegree(InputType.MeshT, primal_degree)) {
+        return error.NotYetImplemented;
+    }
+
+    // CG solve: M₁ · x = b, with diagonal ★₁ as preconditioner.
+    @memset(output.values, 0.0);
+
+    var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.values.len));
+    defer scratch.deinit(allocator);
+
+    var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = input.mesh.preconditioner_1 };
+    const result = conjugate_gradient.solve(
+        input.mesh.whitney_mass_1,
+        input.values,
+        output.values,
+        1e-10,
+        1000,
+        conjugate_gradient.DiagonalPreconditioner.apply,
+        @ptrCast(&precond),
+        scratch,
+    );
+    std.debug.assert(result.converged);
 
     return output;
 }
@@ -216,11 +225,16 @@ pub fn apply_raw(
     input: []const f64,
     output: []f64,
 ) void {
-    const topological_dimension = MeshType.topological_dimension;
-    switch (primal_degree) {
-        0, topological_dimension => applyDiagonal(MeshType, primal_degree, mesh, input, output, false),
-        else => sparse.spmv(mesh.whitney_mass_1, input, output),
+    if (isDiagonalDegree(MeshType, primal_degree)) {
+        applyDiagonal(MeshType, primal_degree, mesh, input, output, false);
+        return;
     }
+
+    if (!supportsWhitneyMassDegree(MeshType, primal_degree)) {
+        @panic("Hodge star interior degree not yet implemented for this mesh dimension");
+    }
+
+    sparse.spmv(mesh.whitney_mass_1, input, output);
 }
 
 /// Apply ★⁻¹ₖ to raw f64 buffers. Dispatches by primal_degree at comptime:
@@ -233,29 +247,32 @@ pub fn apply_inverse_raw(
     input: []const f64,
     output: []f64,
 ) !void {
-    const topological_dimension = MeshType.topological_dimension;
-    switch (primal_degree) {
-        0, topological_dimension => applyDiagonal(MeshType, primal_degree, mesh, input, output, true),
-        else => {
-            @memset(output, 0.0);
-
-            var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
-            defer scratch.deinit(allocator);
-
-            var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
-            const result = conjugate_gradient.solve(
-                mesh.whitney_mass_1,
-                input,
-                output,
-                1e-10,
-                1000,
-                conjugate_gradient.DiagonalPreconditioner.apply,
-                @ptrCast(&precond),
-                scratch,
-            );
-            std.debug.assert(result.converged);
-        },
+    if (isDiagonalDegree(MeshType, primal_degree)) {
+        applyDiagonal(MeshType, primal_degree, mesh, input, output, true);
+        return;
     }
+
+    if (!supportsWhitneyMassDegree(MeshType, primal_degree)) {
+        return error.NotYetImplemented;
+    }
+
+    @memset(output, 0.0);
+
+    var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
+    defer scratch.deinit(allocator);
+
+    var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = mesh.preconditioner_1 };
+    const result = conjugate_gradient.solve(
+        mesh.whitney_mass_1,
+        input,
+        output,
+        1e-10,
+        1000,
+        conjugate_gradient.DiagonalPreconditioner.apply,
+        @ptrCast(&precond),
+        scratch,
+    );
+    std.debug.assert(result.converged);
 }
 
 // ── Diagonal application (k=0 and k=n only) ────────────────────────────
@@ -272,33 +289,43 @@ fn applyDiagonal(
     output: []f64,
     comptime invert: bool,
 ) void {
-    switch (primal_degree) {
-        // ★₀: ratio = dual_volume[i]
-        0 => {
-            const dual_volumes = mesh.vertices.slice().items(.dual_volume);
-            for (output, input, dual_volumes) |*out, in_val, ratio| {
-                if (invert) {
-                    std.debug.assert(ratio != 0.0);
-                    out.* = in_val / ratio;
-                } else {
-                    out.* = ratio * in_val;
-                }
+    std.debug.assert(isDiagonalDegree(MeshType, primal_degree));
+
+    if (primal_degree == 0) {
+        const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+        for (output, input, dual_volumes) |*out, in_val, ratio| {
+            if (invert) {
+                std.debug.assert(ratio != 0.0);
+                out.* = in_val / ratio;
+            } else {
+                out.* = ratio * in_val;
             }
-        },
-        // ★₂: ratio = 1 / volume[i] (face area)
-        2 => {
-            const face_volumes = mesh.simplices(2).items(.volume);
-            for (output, input, face_volumes) |*out, in_val, volume| {
-                if (invert) {
-                    out.* = volume * in_val;
-                } else {
-                    std.debug.assert(volume != 0.0);
-                    out.* = in_val / volume;
-                }
-            }
-        },
-        else => @compileError("applyDiagonal only supports k=0 and k=n"),
+        }
+        return;
     }
+
+    if (primal_degree == MeshType.topological_dimension) {
+        const primal_volumes = mesh.simplices(MeshType.topological_dimension).items(.volume);
+        for (output, input, primal_volumes) |*out, in_val, volume| {
+            if (invert) {
+                out.* = volume * in_val;
+            } else {
+                std.debug.assert(volume != 0.0);
+                out.* = in_val / volume;
+            }
+        }
+        return;
+    }
+
+    unreachable;
+}
+
+fn isDiagonalDegree(comptime MeshType: type, comptime primal_degree: comptime_int) bool {
+    return primal_degree == 0 or primal_degree == MeshType.topological_dimension;
+}
+
+fn supportsWhitneyMassDegree(comptime MeshType: type, comptime primal_degree: comptime_int) bool {
+    return MeshType.topological_dimension == 2 and primal_degree == 1;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
