@@ -11,12 +11,17 @@
 //!   zig build bench -- --json          — print JSON to stdout (default: table to stderr)
 
 const std = @import("std");
+const builtin = @import("builtin");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
 /// Version of the benchmark result file schema.
-const benchmark_suite_version: u32 = 2;
-/// Version for microbenchmarks whose timing method changed after batching.
-const small_cochain_method_version: u32 = 2;
+const benchmark_suite_version: u32 = 3;
+/// Version for operator and end-to-end rows after switching to calibrated samples.
+const stable_benchmark_method_version: u32 = 2;
+/// Version for tiny cochain microbenchmarks after switching to calibrated samples.
+const micro_benchmark_method_version: u32 = 3;
+/// Version for arithmetic scalar-vs-default comparisons after switching to calibrated samples.
+const arithmetic_benchmark_method_version: u32 = 2;
 
 const Mesh2D = flux.Mesh(2, 2);
 const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -64,6 +69,8 @@ const incidence_grid_nx: u32 = 1000;
 const incidence_grid_ny: u32 = 1000;
 const incidence_warmup_iterations: u32 = 5;
 const incidence_measured_iterations: u32 = 20;
+const target_sample_duration_ns: u64 = 5 * std.time.ns_per_ms;
+const max_sample_repetitions: u32 = 1 << 20;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -71,16 +78,24 @@ const regression_threshold: f64 = 0.20;
 
 const BenchmarkFn = *const fn (*BenchmarkContext) void;
 
+const BenchmarkClass = enum {
+    gate,
+    info,
+};
+
 const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
-    repetitions: u32 = 1,
-    version: u32 = 1,
+    minimum_repetitions: u32 = 1,
+    version: u32 = stable_benchmark_method_version,
+    class: BenchmarkClass = .gate,
 };
 
 const BenchmarkResult = struct {
     name: []const u8,
     version: u32,
+    class: BenchmarkClass,
+    repetitions: u32,
     median_ns: u64,
     min_ns: u64,
     max_ns: u64,
@@ -665,6 +680,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticAddScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -674,6 +691,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticAdd(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -683,6 +702,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticScaleScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -692,6 +713,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticScale(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -701,6 +724,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticNegateScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -710,6 +735,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticNegate(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -719,6 +746,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticInnerProductScalar(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
         defs[i] = .{
@@ -728,6 +757,8 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
                     benchArithmeticInnerProduct(case_index, ctx);
                 }
             }.call,
+            .version = arithmetic_benchmark_method_version,
+            .class = .info,
         };
         i += 1;
     }
@@ -749,26 +780,30 @@ const base_benchmarks = [_]BenchmarkDef{
     .{
         .name = "cochain_add",
         .run = benchCochainAdd,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_scale",
         .run = benchCochainScale,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_negate",
         .run = benchCochainNegate,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{
         .name = "cochain_inner_product",
         .run = benchCochainInnerProduct,
-        .repetitions = small_cochain_repetitions,
-        .version = small_cochain_method_version,
+        .minimum_repetitions = small_cochain_repetitions,
+        .version = micro_benchmark_method_version,
+        .class = .info,
     },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
 };
@@ -780,19 +815,21 @@ const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;
 fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     // Warmup — let branch predictors and caches settle.
     for (0..warmup_iterations) |_| {
-        for (0..def.repetitions) |_| {
+        for (0..def.minimum_repetitions) |_| {
             def.run(ctx);
         }
     }
+
+    const repetitions = calibrateRepetitions(def, ctx);
 
     // Measured iterations.
     var timings: [measured_iterations]u64 = undefined;
     for (&timings) |*t| {
         var timer = std.time.Timer.start() catch unreachable;
-        for (0..def.repetitions) |_| {
+        for (0..repetitions) |_| {
             def.run(ctx);
         }
-        t.* = @divFloor(timer.read(), def.repetitions);
+        t.* = @divFloor(timer.read(), repetitions);
     }
 
     // Sort for median/min/max.
@@ -801,6 +838,8 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     return .{
         .name = def.name,
         .version = def.version,
+        .class = def.class,
+        .repetitions = repetitions,
         .median_ns = timings[measured_iterations / 2],
         .min_ns = timings[0],
         .max_ns = timings[measured_iterations - 1],
@@ -808,11 +847,28 @@ fn runBenchmark(def: BenchmarkDef, ctx: *BenchmarkContext) BenchmarkResult {
     };
 }
 
+fn calibrateRepetitions(def: BenchmarkDef, ctx: *BenchmarkContext) u32 {
+    var repetitions = def.minimum_repetitions;
+    while (true) {
+        var timer = std.time.Timer.start() catch unreachable;
+        for (0..repetitions) |_| {
+            def.run(ctx);
+        }
+        const elapsed_ns = timer.read();
+        if (elapsed_ns >= target_sample_duration_ns) return repetitions;
+        if (repetitions >= max_sample_repetitions) return repetitions;
+
+        const doubled = @as(u64, repetitions) * 2;
+        repetitions = @intCast(@min(doubled, max_sample_repetitions));
+    }
+}
+
 // ── Baseline I/O ────────────────────────────────────────────────────────
 
 const Baseline = struct {
     name: []const u8,
     version: u32 = 1,
+    class: BenchmarkClass = .gate,
     median_ns: u64,
 };
 
@@ -851,8 +907,8 @@ fn writeBaselines(results: []const BenchmarkResult) !void {
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}}}",
-            .{ r.name, r.version, r.median_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"class\": \"{s}\", \"median_ns\": {d}}}",
+            .{ r.name, r.version, @tagName(r.class), r.median_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -904,6 +960,8 @@ fn printTable(
         if (baseline) |base| {
             if (base.version != r.version) {
                 try writer.print("  method v{d}→v{d}", .{ base.version, r.version });
+            } else if (r.class == .info) {
+                try writer.writeAll("  info only");
             } else {
                 const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
                 const pct = (ratio - 1.0) * 100.0;
@@ -1027,12 +1085,18 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
+    try writer.writeAll("  \"context\": {\n");
+    try writer.print("    \"zig_version\": \"{s}\",\n", .{builtin.zig_version_string});
+    try writer.print("    \"arch\": \"{s}\",\n", .{@tagName(builtin.target.cpu.arch)});
+    try writer.print("    \"os\": \"{s}\",\n", .{@tagName(builtin.target.os.tag)});
+    try writer.print("    \"target_sample_duration_ns\": {d}\n", .{target_sample_duration_ns});
+    try writer.writeAll("  },\n");
     try writer.writeAll("  \"benchmarks\": [\n");
 
     for (results, 0..) |r, i| {
         try writer.print(
-            "    {{\"name\": \"{s}\", \"version\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
-            .{ r.name, r.version, r.median_ns, r.min_ns, r.max_ns },
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"class\": \"{s}\", \"repetitions\": {d}, \"median_ns\": {d}, \"min_ns\": {d}, \"max_ns\": {d}}}",
+            .{ r.name, r.version, @tagName(r.class), r.repetitions, r.median_ns, r.min_ns, r.max_ns },
         );
         if (i < results.len - 1) {
             try writer.writeAll(",\n");
@@ -1057,8 +1121,10 @@ fn checkRegressions(results: []const BenchmarkResult, baselines: []const Baselin
     const stderr = stderrWriter();
 
     for (results) |r| {
+        if (r.class != .gate) continue;
         const base = findBaseline(baselines, r.name) orelse continue;
         if (base.version != r.version) continue;
+        if (base.class != .gate) continue;
         const ratio = @as(f64, @floatFromInt(r.median_ns)) / @as(f64, @floatFromInt(base.median_ns));
         if (ratio > 1.0 + regression_threshold) {
             stderr.print("  REGRESSION: {s} — {d:.1}% slower (baseline: ", .{
