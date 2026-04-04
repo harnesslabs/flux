@@ -60,6 +60,10 @@ const cavity_grid: u32 = 256;
 const cavity_domain: f64 = 1.0;
 const cavity_courant: f64 = 0.1;
 const small_cochain_repetitions: u32 = 64;
+const incidence_grid_nx: u32 = 1000;
+const incidence_grid_ny: u32 = 1000;
+const incidence_warmup_iterations: u32 = 5;
+const incidence_measured_iterations: u32 = 20;
 /// Maximum allowed regression before CI fails (0.20 = 20%).
 const regression_threshold: f64 = 0.20;
 
@@ -81,6 +85,15 @@ const BenchmarkResult = struct {
     min_ns: u64,
     max_ns: u64,
     iterations: u32,
+};
+
+const IncidenceComparisonResult = struct {
+    name: []const u8,
+    nnz: u32,
+    dense_value_bytes: usize,
+    packed_value_bytes: usize,
+    dense_median_ns: u64,
+    packed_median_ns: u64,
 };
 
 const ArithmeticCase = struct {
@@ -242,6 +255,195 @@ fn innerProductScalarLoop(lhs: []const f64, rhs: []const f64) f64 {
         sum += left * right;
     }
     return sum;
+}
+
+fn gridVertexIndex(i: u32, j: u32, ny: u32) u32 {
+    return i * (ny + 1) + j;
+}
+
+fn horizontalEdgeIndex(i: u32, j: u32, nx: u32) u32 {
+    return j * nx + i;
+}
+
+fn verticalEdgeIndex(i: u32, j: u32, ny: u32, horizontal_edge_count: u32) u32 {
+    return horizontal_edge_count + i * ny + j;
+}
+
+fn diagonalEdgeIndex(i: u32, j: u32, ny: u32, horizontal_edge_count: u32, vertical_edge_count: u32) u32 {
+    return horizontal_edge_count + vertical_edge_count + i * ny + j;
+}
+
+fn buildBoundary1Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const vertex_count: u32 = (nx + 1) * (ny + 1);
+    const horizontal_edge_count: u32 = nx * (ny + 1);
+    const vertical_edge_count: u32 = (nx + 1) * ny;
+    const diagonal_edge_count: u32 = nx * ny;
+    const edge_count: u32 = horizontal_edge_count + vertical_edge_count + diagonal_edge_count;
+
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, edge_count, vertex_count, 2 * edge_count);
+    errdefer boundary.deinit(allocator);
+
+    var edge_idx: u32 = 0;
+
+    for (0..ny + 1) |j_u| {
+        for (0..nx) |i_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i + 1, j, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    for (0..nx + 1) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i, j + 1, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    for (0..nx) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            boundary.row_ptr[edge_idx] = 2 * edge_idx;
+            boundary.col_idx[2 * edge_idx] = gridVertexIndex(i, j, ny);
+            boundary.values[2 * edge_idx] = -1;
+            boundary.col_idx[2 * edge_idx + 1] = gridVertexIndex(i + 1, j + 1, ny);
+            boundary.values[2 * edge_idx + 1] = 1;
+            edge_idx += 1;
+        }
+    }
+
+    std.debug.assert(edge_idx == edge_count);
+    boundary.row_ptr[edge_count] = 2 * edge_count;
+    return boundary;
+}
+
+fn buildBoundary2Matrix(allocator: std.mem.Allocator, nx: u32, ny: u32) !flux.math.sparse.CsrMatrix(i8) {
+    const horizontal_edge_count: u32 = nx * (ny + 1);
+    const vertical_edge_count: u32 = (nx + 1) * ny;
+    const edge_count: u32 = horizontal_edge_count + vertical_edge_count + nx * ny;
+    const face_count: u32 = 2 * nx * ny;
+
+    var boundary = try flux.math.sparse.CsrMatrix(i8).init(allocator, face_count, edge_count, 3 * face_count);
+    errdefer boundary.deinit(allocator);
+
+    var face_idx: u32 = 0;
+    for (0..nx) |i_u| {
+        const i: u32 = @intCast(i_u);
+        for (0..ny) |j_u| {
+            const j: u32 = @intCast(j_u);
+            const h_ij = horizontalEdgeIndex(i, j, nx);
+            const h_i_jp1 = horizontalEdgeIndex(i, j + 1, nx);
+            const v_ip1_j = verticalEdgeIndex(i + 1, j, ny, horizontal_edge_count);
+            const v_i_j = verticalEdgeIndex(i, j, ny, horizontal_edge_count);
+            const d_ij = diagonalEdgeIndex(i, j, ny, horizontal_edge_count, vertical_edge_count);
+
+            boundary.row_ptr[face_idx] = 3 * face_idx;
+            boundary.col_idx[3 * face_idx + 0] = h_ij;
+            boundary.values[3 * face_idx + 0] = 1;
+            boundary.col_idx[3 * face_idx + 1] = v_ip1_j;
+            boundary.values[3 * face_idx + 1] = 1;
+            boundary.col_idx[3 * face_idx + 2] = d_ij;
+            boundary.values[3 * face_idx + 2] = -1;
+            face_idx += 1;
+
+            boundary.row_ptr[face_idx] = 3 * face_idx;
+            boundary.col_idx[3 * face_idx + 0] = h_i_jp1;
+            boundary.values[3 * face_idx + 0] = -1;
+            boundary.col_idx[3 * face_idx + 1] = v_i_j;
+            boundary.values[3 * face_idx + 1] = -1;
+            boundary.col_idx[3 * face_idx + 2] = d_ij;
+            boundary.values[3 * face_idx + 2] = 1;
+            face_idx += 1;
+        }
+    }
+
+    std.debug.assert(face_idx == face_count);
+    boundary.row_ptr[face_count] = 3 * face_count;
+    return boundary;
+}
+
+fn compareIncidenceTransposeMultiply(
+    allocator: std.mem.Allocator,
+    name: []const u8,
+    matrix: flux.math.sparse.CsrMatrix(i8),
+) !IncidenceComparisonResult {
+    var packed_matrix = try flux.math.sparse.PackedIncidenceMatrix.fromCsr(allocator, matrix);
+    defer packed_matrix.deinit(allocator);
+
+    const input = try allocator.alloc(f64, matrix.n_rows);
+    defer allocator.free(input);
+    const dense_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(dense_output);
+    const packed_output = try allocator.alloc(f64, matrix.n_cols);
+    defer allocator.free(packed_output);
+
+    var rng = std.Random.DefaultPrng.init(0x1AC1_D3C3);
+    fillRandom(&rng, input);
+
+    for (0..incidence_warmup_iterations) |_| {
+        @memset(dense_output, 0.0);
+        matrix.transpose_multiply(input, dense_output);
+        @memset(packed_output, 0.0);
+        packed_matrix.transpose_multiply(input, packed_output);
+    }
+
+    var dense_timings: [incidence_measured_iterations]u64 = undefined;
+    for (&dense_timings) |*timing| {
+        @memset(dense_output, 0.0);
+        var timer = try std.time.Timer.start();
+        matrix.transpose_multiply(input, dense_output);
+        timing.* = timer.read();
+    }
+
+    var packed_timings: [incidence_measured_iterations]u64 = undefined;
+    for (&packed_timings) |*timing| {
+        @memset(packed_output, 0.0);
+        var timer = try std.time.Timer.start();
+        packed_matrix.transpose_multiply(input, packed_output);
+        timing.* = timer.read();
+    }
+
+    for (dense_output, packed_output) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
+    }
+
+    std.mem.sortUnstable(u64, &dense_timings, {}, std.sort.asc(u64));
+    std.mem.sortUnstable(u64, &packed_timings, {}, std.sort.asc(u64));
+
+    return .{
+        .name = name,
+        .nnz = matrix.nnz(),
+        .dense_value_bytes = matrix.values.len * @sizeOf(i8),
+        .packed_value_bytes = packed_matrix.signs.bytes.len,
+        .dense_median_ns = dense_timings[incidence_measured_iterations / 2],
+        .packed_median_ns = packed_timings[incidence_measured_iterations / 2],
+    };
+}
+
+fn runIncidenceComparisonBenchmarks(allocator: std.mem.Allocator) ![2]IncidenceComparisonResult {
+    var results: [2]IncidenceComparisonResult = undefined;
+
+    var boundary1 = try buildBoundary1Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
+    defer boundary1.deinit(allocator);
+    results[0] = try compareIncidenceTransposeMultiply(allocator, "boundary_1_transpose_multiply", boundary1);
+
+    var boundary2 = try buildBoundary2Matrix(allocator, incidence_grid_nx, incidence_grid_ny);
+    defer boundary2.deinit(allocator);
+    results[1] = try compareIncidenceTransposeMultiply(allocator, "boundary_2_transpose_multiply", boundary2);
+
+    return results;
 }
 
 // ── I/O helpers (Zig 0.15 compatible) ───────────────────────────────────
@@ -685,6 +887,41 @@ fn printArithmeticSpeedups(writer: anytype, results: []const BenchmarkResult) !v
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
 }
 
+fn printIncidenceComparisons(writer: anytype, results: []const IncidenceComparisonResult) !void {
+    try writer.print("  Incidence transpose-multiply comparison ({d}x{d} grid)\n", .{
+        incidence_grid_nx,
+        incidence_grid_ny,
+    });
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n");
+    try writer.print("  {s:<32} {s:>12} {s:>12} {s:>12} {s:>10}\n", .{
+        "benchmark",
+        "i8 median",
+        "packed",
+        "speedup",
+        "bits/entry",
+    });
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n");
+
+    for (results) |result| {
+        const speedup = @as(f64, @floatFromInt(result.dense_median_ns)) /
+            @as(f64, @floatFromInt(result.packed_median_ns));
+        const packed_bits_per_entry = 8.0 *
+            @as(f64, @floatFromInt(result.packed_value_bytes)) /
+            @as(f64, @floatFromInt(result.nnz));
+
+        try writer.print("  {s:<32} ", .{result.name});
+        try printDuration(writer, result.dense_median_ns);
+        try writer.writeAll("  ");
+        try printDuration(writer, result.packed_median_ns);
+        try writer.print("  {d:>7.2}x  {d:>8.3}\n", .{
+            speedup,
+            packed_bits_per_entry,
+        });
+    }
+
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────\n\n");
+}
+
 fn printDuration(writer: anytype, ns: u64) !void {
     if (ns < 1_000) {
         try writer.print("{d:>8} ns", .{ns});
@@ -807,6 +1044,13 @@ pub fn main() !void {
     }
     try printTable(stderr, &results, baseline_list);
     try printArithmeticSpeedups(stderr, &results);
+
+    try stderr.print("  Building incidence comparison cases on a {d}x{d} grid...\n", .{
+        incidence_grid_nx,
+        incidence_grid_ny,
+    });
+    const incidence_results = try runIncidenceComparisonBenchmarks(allocator);
+    try printIncidenceComparisons(stderr, &incidence_results);
 
     // Update baselines if requested.
     if (update_mode) {
