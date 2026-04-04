@@ -306,12 +306,21 @@ fn applyDiagonal(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Mesh2D = topology.Mesh(2, 2);
+const Mesh3D = topology.Mesh(3, 3);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 const PrimalC1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
 const PrimalC2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
 const DualC0 = cochain.Cochain(Mesh2D, 0, cochain.Dual);
 const DualC1 = cochain.Cochain(Mesh2D, 1, cochain.Dual);
 const DualC2 = cochain.Cochain(Mesh2D, 2, cochain.Dual);
+const PrimalC0_3D = cochain.Cochain(Mesh3D, 0, cochain.Primal);
+const PrimalC1_3D = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+const PrimalC2_3D = cochain.Cochain(Mesh3D, 2, cochain.Primal);
+const PrimalC3_3D = cochain.Cochain(Mesh3D, 3, cochain.Primal);
+const DualC0_3D = cochain.Cochain(Mesh3D, 0, cochain.Dual);
+const DualC1_3D = cochain.Cochain(Mesh3D, 1, cochain.Dual);
+const DualC2_3D = cochain.Cochain(Mesh3D, 2, cochain.Dual);
+const DualC3_3D = cochain.Cochain(Mesh3D, 3, cochain.Dual);
 
 // ── Compile-time type checks ─────────────────────────────────────────────
 
@@ -338,6 +347,24 @@ test "compile-time: ★⁻¹ maps dual (n−k)-form back to primal k-form" {
         try testing.expect(HodgeStarInverseResult(DualC2) == PrimalC0);
         try testing.expect(HodgeStarInverseResult(DualC1) == PrimalC1);
         try testing.expect(HodgeStarInverseResult(DualC0) == PrimalC2);
+    }
+}
+
+test "compile-time: ★ maps 3D primal k-forms to dual (3-k)-forms" {
+    comptime {
+        try testing.expect(HodgeStarResult(PrimalC0_3D) == DualC3_3D);
+        try testing.expect(HodgeStarResult(PrimalC1_3D) == DualC2_3D);
+        try testing.expect(HodgeStarResult(PrimalC2_3D) == DualC1_3D);
+        try testing.expect(HodgeStarResult(PrimalC3_3D) == DualC0_3D);
+    }
+}
+
+test "compile-time: ★⁻¹ maps 3D dual k-forms back to primal (3-k)-forms" {
+    comptime {
+        try testing.expect(HodgeStarInverseResult(DualC3_3D) == PrimalC0_3D);
+        try testing.expect(HodgeStarInverseResult(DualC2_3D) == PrimalC1_3D);
+        try testing.expect(HodgeStarInverseResult(DualC1_3D) == PrimalC2_3D);
+        try testing.expect(HodgeStarInverseResult(DualC0_3D) == PrimalC3_3D);
     }
 }
 
@@ -465,6 +492,88 @@ test "★⁻¹ ∘ ★ = identity for all degrees on random inputs" {
         var rng = std.Random.DefaultPrng.init(0xDEC_57A2_02);
         for (0..1000) |_| {
             var omega = try PrimalC2.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+            var starred = try hodge_star(allocator, omega);
+            defer starred.deinit(allocator);
+
+            var round_trip = try hodge_star_inverse(allocator, starred);
+            defer round_trip.deinit(allocator);
+
+            for (omega.values, round_trip.values) |original, recovered| {
+                try testing.expectApproxEqRel(original, recovered, 1e-14);
+            }
+        }
+    }
+}
+
+test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    {
+        var rng = std.Random.DefaultPrng.init(0x82_3D_0000);
+        for (0..1000) |_| {
+            var omega = try PrimalC0_3D.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+            var starred = try hodge_star(allocator, omega);
+            defer starred.deinit(allocator);
+
+            var round_trip = try hodge_star_inverse(allocator, starred);
+            defer round_trip.deinit(allocator);
+
+            for (omega.values, round_trip.values) |original, recovered| {
+                try testing.expectApproxEqRel(original, recovered, 1e-14);
+            }
+        }
+    }
+
+    {
+        var rng = std.Random.DefaultPrng.init(0x82_3D_0001);
+        for (0..1000) |_| {
+            var omega = try PrimalC1_3D.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+            var starred = try hodge_star(allocator, omega);
+            defer starred.deinit(allocator);
+
+            var round_trip = try hodge_star_inverse(allocator, starred);
+            defer round_trip.deinit(allocator);
+
+            for (omega.values, round_trip.values) |original, recovered| {
+                try testing.expectApproxEqRel(original, recovered, 1e-8);
+            }
+        }
+    }
+
+    {
+        var rng = std.Random.DefaultPrng.init(0x82_3D_0002);
+        for (0..1000) |_| {
+            var omega = try PrimalC2_3D.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+
+            var starred = try hodge_star(allocator, omega);
+            defer starred.deinit(allocator);
+
+            var round_trip = try hodge_star_inverse(allocator, starred);
+            defer round_trip.deinit(allocator);
+
+            for (omega.values, round_trip.values) |original, recovered| {
+                try testing.expectApproxEqRel(original, recovered, 1e-8);
+            }
+        }
+    }
+
+    {
+        var rng = std.Random.DefaultPrng.init(0x82_3D_0003);
+        for (0..1000) |_| {
+            var omega = try PrimalC3_3D.init(allocator, &mesh);
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
