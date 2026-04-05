@@ -180,3 +180,34 @@ test "OBJ import builds Mesh(3, 2) from triangulated planar quads" {
     try testing.expectEqual(@as(u32, 6), mesh.num_vertices());
     try testing.expectEqual(@as(u32, 4), mesh.num_faces());
 }
+
+test "OBJ parser accepts mixed triangle and quad faces with slash indices" {
+    const allocator = testing.allocator;
+    const source =
+        \\v 0 0 0
+        \\v 1 0 0
+        \\v 1 1 0
+        \\v 0 1 0
+        \\v 2 0 0
+        \\vt 0 0
+        \\vt 1 0
+        \\vt 1 1
+        \\vt 0 1
+        \\vt 2 0
+        \\vn 0 0 1
+        \\f 1/1/1 2/2/1 3/3/1
+        \\f 1/1/1 3/3/1 4/4/1 5/5/1
+    ;
+
+    var raw_mesh = try parse_obj(allocator, source);
+    defer raw_mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 2), raw_mesh.faces.items.len);
+    try testing.expectEqual(@as(u32, 3), raw_mesh.faces.items[0].len);
+    try testing.expectEqual(@as(u32, 4), raw_mesh.faces.items[1].len);
+
+    var triangulated = try triangulate(allocator, &raw_mesh);
+    defer triangulated.deinit(allocator);
+
+    try testing.expectEqual(@as(usize, 3), triangulated.triangles.len);
+}
