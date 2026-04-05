@@ -87,13 +87,6 @@ pub fn assemble_whitney_mass(
     return assembler.build(allocator);
 }
 
-pub fn assemble_whitney_mass_1(
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-) !sparse.CsrMatrix(f64) {
-    return assemble_whitney_mass(1, allocator, mesh);
-}
-
 pub fn assemble_whitney_preconditioner(
     comptime k: comptime_int,
     allocator: std.mem.Allocator,
@@ -434,7 +427,7 @@ test "Whitney mass matrix is square with n_edges dimension" {
     var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass_1(allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh);
     defer mass.deinit(allocator);
 
     try testing.expectEqual(mesh.num_edges(), mass.n_rows);
@@ -446,7 +439,7 @@ test "Whitney mass matrix is symmetric" {
     var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass_1(allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh);
     defer mass.deinit(allocator);
 
     // Check M(i,j) = M(j,i) by comparing Ax with Aᵀx for random x.
@@ -487,7 +480,7 @@ test "Whitney mass matrix is positive definite (xᵀMx > 0 for random x)" {
     var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass_1(allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh);
     defer mass.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_AA55_01);
@@ -514,7 +507,7 @@ test "Whitney mass matrix has nonzero diagonal and at least one entry per row" {
     var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass_1(allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh);
     defer mass.deinit(allocator);
 
     // Every edge appears in at least one face, so every row has entries.
