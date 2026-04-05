@@ -641,6 +641,23 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return partial;
         }
 
+        /// Construct a 2D simplicial mesh from explicit triangle connectivity.
+        ///
+        /// This is the topology-facing half of the `.obj` import path:
+        /// parsing and polygon triangulation happen in `src/io/obj.zig`,
+        /// then this constructor builds the simplicial mesh and computes
+        /// the derived geometry and boundary operators.
+        pub fn from_triangles(
+            allocator: std.mem.Allocator,
+            vertex_coords: []const [embedding_dimension]f64,
+            face_vertices: []const [3]u32,
+        ) !Self {
+            _ = allocator;
+            _ = vertex_coords;
+            _ = face_vertices;
+            @panic("Mesh.from_triangles is not yet implemented");
+        }
+
         /// Construct a uniform tetrahedral grid on `[0, width] × [0, height] × [0, depth]`.
         ///
         /// Only available for 3D volume meshes (`topological_dimension = 3`).

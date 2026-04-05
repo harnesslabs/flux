@@ -56,6 +56,7 @@ pub const Error = error{
 
 pub const forms = @import("forms/cochain.zig");
 pub const io = @import("io/vtk.zig");
+pub const obj = @import("io/obj.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");
     pub const cg = @import("math/cg.zig");
@@ -67,6 +68,7 @@ pub const operators = struct {
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
+    pub const poisson = @import("operators/poisson.zig");
     pub const whitney_mass = @import("operators/whitney_mass.zig");
 };
 pub const topology = @import("topology/mesh.zig");
