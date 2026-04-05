@@ -14,8 +14,8 @@
 //!     βₖ = ⟨rₖ₊₁, zₖ₊₁⟩ / ⟨rₖ, zₖ⟩
 //!     pₖ₊₁ = zₖ₊₁ + βₖ pₖ
 //!
-//! The preconditioner M⁻¹ is supplied as a function pointer that applies
-//! the inverse preconditioner in-place: z = M⁻¹r.
+//! The preconditioner M⁻¹ is a typed value with `apply(self, z)` validated
+//! at comptime, so the solver never separates function and context pointers.
 
 const std = @import("std");
 const testing = std.testing;
@@ -31,16 +31,43 @@ pub const SolveResult = struct {
     converged: bool,
 };
 
-/// Preconditioner function type.
-/// Given input z (which initially holds r), overwrite z with M⁻¹r.
-pub const Preconditioner = *const fn (z: []f64, context: *const anyopaque) void;
+/// Validate that `P` satisfies the CG preconditioner concept at compile time.
+///
+/// A conforming preconditioner must declare:
+///   - `pub fn apply(self: *const P, z: []f64) void`
+pub fn PreconditionerConcept(comptime P: type) void {
+    if (!@hasDecl(P, "apply")) {
+        @compileError("PreconditionerConcept requires a 'pub fn apply(self: *const P, z: []f64) void' declaration");
+    }
 
-/// Diagonal preconditioner context — stores the diagonal values.
+    const apply_info = @typeInfo(@TypeOf(P.apply));
+    if (apply_info != .@"fn") {
+        @compileError("PreconditionerConcept: 'apply' must be a function");
+    }
+    const fn_info = apply_info.@"fn";
+
+    if (fn_info.params.len != 2) {
+        @compileError("PreconditionerConcept: 'apply' must take exactly 2 parameters (*const P, []f64)");
+    }
+    if (fn_info.params[0].type != *const P) {
+        @compileError("PreconditionerConcept: 'apply' parameter 0 must be *const " ++ @typeName(P));
+    }
+    if (fn_info.params[1].type != []f64) {
+        @compileError("PreconditionerConcept: 'apply' parameter 1 must be []f64");
+    }
+
+    const return_type = fn_info.return_type orelse
+        @compileError("PreconditionerConcept: 'apply' must have a known return type");
+    if (return_type != void) {
+        @compileError("PreconditionerConcept: 'apply' must return void");
+    }
+}
+
+/// Diagonal preconditioner — stores the diagonal values.
 pub const DiagonalPreconditioner = struct {
     diagonal: []const f64,
 
-    pub fn apply(z: []f64, context: *const anyopaque) void {
-        const self: *const DiagonalPreconditioner = @ptrCast(@alignCast(context));
+    pub fn apply(self: *const @This(), z: []f64) void {
         for (z, self.diagonal) |*zi, di| {
             std.debug.assert(di != 0.0);
             zi.* /= di;
@@ -54,8 +81,8 @@ pub const DiagonalPreconditioner = struct {
 /// initialize x to a reasonable guess (e.g., the solution from the
 /// previous timestep). Zero initialization always works.
 ///
-/// `preconditioner` and `preconditioner_context` define M⁻¹. Pass null
-/// for both to use no preconditioning (identity preconditioner).
+/// `preconditioner` is either `null`, `?*const P`, or `*const P` where `P`
+/// satisfies `PreconditionerConcept`.
 ///
 /// Returns solve statistics. The solution is written into `x`.
 pub fn solve(
@@ -64,12 +91,13 @@ pub fn solve(
     x: []f64,
     tolerance: f64,
     max_iterations: u32,
-    preconditioner: ?Preconditioner,
-    preconditioner_context: ?*const anyopaque,
+    preconditioner: anytype,
     /// Scratch space: 4 vectors of length matrix.n_rows. Caller allocates to avoid
     /// per-solve allocation.
     scratch: Scratch,
 ) SolveResult {
+    comptime validatePreconditionerArgument(@TypeOf(preconditioner));
+
     const row_count = matrix.n_rows;
     std.debug.assert(b.len == row_count);
     std.debug.assert(x.len == row_count);
@@ -78,6 +106,10 @@ pub fn solve(
     const z = scratch.z;
     const p = scratch.p;
     const ap = scratch.ap;
+    std.debug.assert(r.len == row_count);
+    std.debug.assert(z.len == row_count);
+    std.debug.assert(p.len == row_count);
+    std.debug.assert(ap.len == row_count);
 
     // r₀ = b − Ax₀
     sparse.spmv(matrix, x, r);
@@ -85,9 +117,7 @@ pub fn solve(
 
     // Apply preconditioner: z₀ = M⁻¹r₀
     @memcpy(z, r);
-    if (preconditioner) |precond| {
-        precond(z, preconditioner_context.?);
-    }
+    applyPreconditioner(preconditioner, z);
 
     // p₀ = z₀
     @memcpy(p, z);
@@ -121,9 +151,7 @@ pub fn solve(
 
         // zₖ₊₁ = M⁻¹rₖ₊₁
         @memcpy(z, r);
-        if (preconditioner) |precond| {
-            precond(z, preconditioner_context.?);
-        }
+        applyPreconditioner(preconditioner, z);
 
         // βₖ = ⟨rₖ₊₁, zₖ₊₁⟩ / ⟨rₖ, zₖ⟩
         const rz_new = dot(r, z);
@@ -140,6 +168,43 @@ pub fn solve(
         .relative_residual = final_r_norm / b_norm,
         .converged = false,
     };
+}
+
+fn validatePreconditionerArgument(comptime Argument: type) void {
+    switch (@typeInfo(Argument)) {
+        .null => {},
+        .pointer => |pointer_info| validatePreconditionerPointer(Argument, pointer_info),
+        .optional => |optional_info| {
+            const child = optional_info.child;
+            const child_info = @typeInfo(child);
+            if (child_info != .pointer) {
+                @compileError("cg.solve preconditioner must be null, *const P, or ?*const P");
+            }
+            validatePreconditionerPointer(child, child_info.pointer);
+        },
+        else => @compileError("cg.solve preconditioner must be null, *const P, or ?*const P"),
+    }
+}
+
+fn validatePreconditionerPointer(
+    comptime PointerType: type,
+    comptime pointer_info: std.builtin.Type.Pointer,
+) void {
+    if (pointer_info.size != .one) {
+        @compileError("cg.solve preconditioner pointer must be a single-item pointer, got " ++ @typeName(PointerType));
+    }
+    comptime PreconditionerConcept(pointer_info.child);
+}
+
+fn applyPreconditioner(preconditioner: anytype, z: []f64) void {
+    switch (@typeInfo(@TypeOf(preconditioner))) {
+        .null => {},
+        .pointer => preconditioner.apply(z),
+        .optional => if (preconditioner) |typed_preconditioner| {
+            typed_preconditioner.apply(z);
+        },
+        else => unreachable,
+    }
 }
 
 /// Scratch space for the CG solver — 4 vectors of length `vector_length`.
@@ -201,7 +266,7 @@ test "CG solves 3×3 diagonal system exactly" {
     var scratch = try Scratch.init(allocator, 3);
     defer scratch.deinit(allocator);
 
-    const result = solve(m, &b, &x, 1e-12, 100, null, null, scratch);
+    const result = solve(m, &b, &x, 1e-12, 100, null, scratch);
 
     try testing.expect(result.converged);
     try testing.expect(result.iterations <= 3);
@@ -233,7 +298,7 @@ test "CG solves dense SPD system" {
     var scratch = try Scratch.init(allocator, 2);
     defer scratch.deinit(allocator);
 
-    const result = solve(m, &b, &x, 1e-12, 100, null, null, scratch);
+    const result = solve(m, &b, &x, 1e-12, 100, null, scratch);
 
     try testing.expect(result.converged);
     try testing.expectApproxEqAbs(1.0 / 11.0, x[0], 1e-12);
@@ -291,11 +356,11 @@ test "PreconditionerConcept accepts a conforming type" {
 test "CG respects the iteration bound when tolerance is not met" {
     const allocator = testing.allocator;
 
-    var matrix = try weighted_path_laplacian(allocator, &[_]f64{ 1.0, 4.0, 9.0, 16.0 });
+    var matrix = try weighted_dirichlet_path_laplacian(allocator, &[_]f64{ 1.0, 4.0, 9.0, 16.0, 25.0 });
     defer matrix.deinit(allocator);
 
-    const rhs = [_]f64{ 1.0, 0.0, 0.0, 1.0, 2.0 };
-    var x = [_]f64{ 0.0, 0.0, 0.0, 0.0, 0.0 };
+    const rhs = [_]f64{ 1.0, 0.0, 0.0, 1.0 };
+    var x = [_]f64{ 0.0, 0.0, 0.0, 0.0 };
 
     var scratch = try Scratch.init(allocator, matrix.n_rows);
     defer scratch.deinit(allocator);
@@ -309,8 +374,8 @@ test "CG respects the iteration bound when tolerance is not met" {
 test "Jacobi preconditioner reduces iterations on a weighted Laplacian system" {
     const allocator = testing.allocator;
 
-    const edge_weights = [_]f64{ 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0 };
-    var matrix = try weighted_path_laplacian(allocator, &edge_weights);
+    const edge_weights = [_]f64{ 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0, 10000000.0 };
+    var matrix = try weighted_dirichlet_path_laplacian(allocator, &edge_weights);
     defer matrix.deinit(allocator);
 
     const exact_solution = [_]f64{ 0.25, -0.5, 0.75, -1.0, 1.25, -1.5, 1.75 };
@@ -399,35 +464,36 @@ test "CG solves Whitney mass matrix system" {
     }
 }
 
-fn weighted_path_laplacian(
+fn weighted_dirichlet_path_laplacian(
     allocator: std.mem.Allocator,
     edge_weights: []const f64,
 ) !sparse.CsrMatrix(f64) {
-    const node_count = edge_weights.len + 1;
-    const nonzero_count = 3 * node_count - 2;
+    std.debug.assert(edge_weights.len >= 2);
+
+    const interior_node_count = edge_weights.len - 1;
+    const nonzero_count = 3 * interior_node_count - 2;
 
     var matrix = try sparse.CsrMatrix(f64).init(
         allocator,
-        @intCast(node_count),
-        @intCast(node_count),
+        @intCast(interior_node_count),
+        @intCast(interior_node_count),
         @intCast(nonzero_count),
     );
     errdefer matrix.deinit(allocator);
 
-    var diagonal = try allocator.alloc(f64, node_count);
+    var diagonal = try allocator.alloc(f64, interior_node_count);
     defer allocator.free(diagonal);
     @memset(diagonal, 0.0);
-    for (edge_weights, 0..) |weight, edge_idx| {
-        diagonal[edge_idx] += weight;
-        diagonal[edge_idx + 1] += weight;
+    for (0..interior_node_count) |row_idx| {
+        diagonal[row_idx] = edge_weights[row_idx] + edge_weights[row_idx + 1];
     }
 
     var nnz_cursor: u32 = 0;
     matrix.row_ptr[0] = 0;
-    for (0..node_count) |row_idx| {
+    for (0..interior_node_count) |row_idx| {
         if (row_idx > 0) {
             matrix.col_idx[nnz_cursor] = @intCast(row_idx - 1);
-            matrix.values[nnz_cursor] = -edge_weights[row_idx - 1];
+            matrix.values[nnz_cursor] = -edge_weights[row_idx];
             nnz_cursor += 1;
         }
 
@@ -435,9 +501,9 @@ fn weighted_path_laplacian(
         matrix.values[nnz_cursor] = diagonal[row_idx];
         nnz_cursor += 1;
 
-        if (row_idx + 1 < node_count) {
+        if (row_idx + 1 < interior_node_count) {
             matrix.col_idx[nnz_cursor] = @intCast(row_idx + 1);
-            matrix.values[nnz_cursor] = -edge_weights[row_idx];
+            matrix.values[nnz_cursor] = -edge_weights[row_idx + 1];
             nnz_cursor += 1;
         }
 

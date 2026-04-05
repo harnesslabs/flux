@@ -132,8 +132,7 @@ pub fn solve_zero_form_dirichlet(
         reduced_solution,
         config.tolerance_relative,
         config.iteration_limit,
-        conjugate_gradient.DiagonalPreconditioner.apply,
-        @ptrCast(&preconditioner),
+        &preconditioner,
         scratch,
     );
     if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
