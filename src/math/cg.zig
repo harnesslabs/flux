@@ -266,11 +266,95 @@ test "CG with diagonal preconditioner converges faster" {
 
     var precond = DiagonalPreconditioner{ .diagonal = &[_]f64{ 100.0, 1.0 } };
 
-    const result = solve(m, &b, &x, 1e-12, 100, DiagonalPreconditioner.apply, @ptrCast(&precond), scratch);
+    const result = solve(m, &b, &x, 1e-12, 100, &precond, scratch);
 
     try testing.expect(result.converged);
     try testing.expectApproxEqAbs(@as(f64, 1.0), x[0], 1e-10);
     try testing.expectApproxEqAbs(@as(f64, 1.0), x[1], 1e-10);
+}
+
+const MockScalePreconditioner = struct {
+    scale: f64,
+
+    pub fn apply(self: *const @This(), z: []f64) void {
+        std.debug.assert(self.scale != 0.0);
+        for (z) |*zi| {
+            zi.* /= self.scale;
+        }
+    }
+};
+
+test "PreconditionerConcept accepts a conforming type" {
+    comptime PreconditionerConcept(MockScalePreconditioner);
+}
+
+test "CG respects the iteration bound when tolerance is not met" {
+    const allocator = testing.allocator;
+
+    var matrix = try weighted_path_laplacian(allocator, &[_]f64{ 1.0, 4.0, 9.0, 16.0 });
+    defer matrix.deinit(allocator);
+
+    const rhs = [_]f64{ 1.0, 0.0, 0.0, 1.0, 2.0 };
+    var x = [_]f64{ 0.0, 0.0, 0.0, 0.0, 0.0 };
+
+    var scratch = try Scratch.init(allocator, matrix.n_rows);
+    defer scratch.deinit(allocator);
+
+    const result = solve(matrix, &rhs, &x, 1e-18, 1, null, scratch);
+
+    try testing.expect(!result.converged);
+    try testing.expectEqual(@as(u32, 1), result.iterations);
+}
+
+test "Jacobi preconditioner reduces iterations on a weighted Laplacian system" {
+    const allocator = testing.allocator;
+
+    const edge_weights = [_]f64{ 1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0 };
+    var matrix = try weighted_path_laplacian(allocator, &edge_weights);
+    defer matrix.deinit(allocator);
+
+    const exact_solution = [_]f64{ 0.25, -0.5, 0.75, -1.0, 1.25, -1.5, 1.75 };
+    var rhs = [_]f64{0} ** exact_solution.len;
+    sparse.spmv(matrix, &exact_solution, &rhs);
+
+    var x_unpreconditioned = [_]f64{0} ** exact_solution.len;
+    var x_jacobi = [_]f64{0} ** exact_solution.len;
+
+    var scratch_unpreconditioned = try Scratch.init(allocator, matrix.n_rows);
+    defer scratch_unpreconditioned.deinit(allocator);
+    var scratch_jacobi = try Scratch.init(allocator, matrix.n_rows);
+    defer scratch_jacobi.deinit(allocator);
+
+    const diagonal = try diagonal_of(allocator, matrix);
+    defer allocator.free(diagonal);
+    var jacobi = DiagonalPreconditioner{ .diagonal = diagonal };
+
+    const unpreconditioned = solve(
+        matrix,
+        &rhs,
+        &x_unpreconditioned,
+        1e-10,
+        512,
+        null,
+        scratch_unpreconditioned,
+    );
+    const preconditioned = solve(
+        matrix,
+        &rhs,
+        &x_jacobi,
+        1e-10,
+        512,
+        &jacobi,
+        scratch_jacobi,
+    );
+
+    try testing.expect(unpreconditioned.converged);
+    try testing.expect(preconditioned.converged);
+    try testing.expect(preconditioned.iterations < unpreconditioned.iterations);
+
+    for (x_jacobi, exact_solution) |computed, expected| {
+        try testing.expectApproxEqAbs(expected, computed, 1e-8);
+    }
 }
 
 test "CG solves Whitney mass matrix system" {
@@ -302,7 +386,7 @@ test "CG solves Whitney mass matrix system" {
     var scratch = try Scratch.init(allocator, row_count);
     defer scratch.deinit(allocator);
 
-    const result = solve(mass, b_buf, x_buf, 1e-10, 1000, null, null, scratch);
+    const result = solve(mass, b_buf, x_buf, 1e-10, 1000, null, scratch);
     try testing.expect(result.converged);
 
     // Verify: Ax ≈ b.
@@ -313,4 +397,74 @@ test "CG solves Whitney mass matrix system" {
     for (ax, b_buf) |computed, expected| {
         try testing.expectApproxEqAbs(expected, computed, 1e-8);
     }
+}
+
+fn weighted_path_laplacian(
+    allocator: std.mem.Allocator,
+    edge_weights: []const f64,
+) !sparse.CsrMatrix(f64) {
+    const node_count = edge_weights.len + 1;
+    const nonzero_count = 3 * node_count - 2;
+
+    var matrix = try sparse.CsrMatrix(f64).init(
+        allocator,
+        @intCast(node_count),
+        @intCast(node_count),
+        @intCast(nonzero_count),
+    );
+    errdefer matrix.deinit(allocator);
+
+    var diagonal = try allocator.alloc(f64, node_count);
+    defer allocator.free(diagonal);
+    @memset(diagonal, 0.0);
+    for (edge_weights, 0..) |weight, edge_idx| {
+        diagonal[edge_idx] += weight;
+        diagonal[edge_idx + 1] += weight;
+    }
+
+    var nnz_cursor: u32 = 0;
+    matrix.row_ptr[0] = 0;
+    for (0..node_count) |row_idx| {
+        if (row_idx > 0) {
+            matrix.col_idx[nnz_cursor] = @intCast(row_idx - 1);
+            matrix.values[nnz_cursor] = -edge_weights[row_idx - 1];
+            nnz_cursor += 1;
+        }
+
+        matrix.col_idx[nnz_cursor] = @intCast(row_idx);
+        matrix.values[nnz_cursor] = diagonal[row_idx];
+        nnz_cursor += 1;
+
+        if (row_idx + 1 < node_count) {
+            matrix.col_idx[nnz_cursor] = @intCast(row_idx + 1);
+            matrix.values[nnz_cursor] = -edge_weights[row_idx];
+            nnz_cursor += 1;
+        }
+
+        matrix.row_ptr[row_idx + 1] = nnz_cursor;
+    }
+
+    std.debug.assert(nnz_cursor == nonzero_count);
+    return matrix;
+}
+
+fn diagonal_of(allocator: std.mem.Allocator, matrix: sparse.CsrMatrix(f64)) ![]f64 {
+    const diagonal = try allocator.alloc(f64, matrix.n_rows);
+    errdefer allocator.free(diagonal);
+
+    for (0..matrix.n_rows) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        diagonal[row_idx] = 0.0;
+
+        const row = matrix.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (col_idx != row_idx) continue;
+            diagonal[row_idx] = value;
+            break;
+        }
+
+        std.debug.assert(diagonal[row_idx] > 0.0);
+    }
+
+    return diagonal;
 }
