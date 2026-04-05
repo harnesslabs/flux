@@ -114,6 +114,17 @@ pub fn exterior_derivative(
     return apply_exterior_derivative(allocator, input);
 }
 
+pub fn assert_closed(
+    allocator: std.mem.Allocator,
+    input: anytype,
+    tolerance: f64,
+) !void {
+    _ = allocator;
+    _ = input;
+    _ = tolerance;
+    @panic("not yet implemented");
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
