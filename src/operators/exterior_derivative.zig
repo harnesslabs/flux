@@ -119,10 +119,22 @@ pub fn assert_closed(
     input: anytype,
     tolerance: f64,
 ) !void {
-    _ = allocator;
-    _ = input;
-    _ = tolerance;
-    @panic("not yet implemented");
+    const InputType = @TypeOf(input);
+    comptime {
+        if (!@hasDecl(InputType, "degree") or !@hasDecl(InputType, "MeshT")) {
+            @compileError("assert_closed requires a Cochain type");
+        }
+        if (InputType.degree >= InputType.MeshT.topological_dimension) {
+            @compileError("assert_closed requires a cochain degree with a defined exterior derivative");
+        }
+    }
+
+    var derivative = try apply_exterior_derivative(allocator, input);
+    defer derivative.deinit(allocator);
+
+    for (derivative.values) |value| {
+        try testing.expectApproxEqAbs(@as(f64, 0.0), value, tolerance);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -395,6 +407,14 @@ test "compile-time: d₀ returns a 1-cochain, d₁ returns a 2-cochain" {
     }
 }
 
+test "compile-time: 3D dₖ returns the next primal degree for k ∈ {0,1,2}" {
+    comptime {
+        try testing.expect(ExteriorDerivativeResult(C3D0) == C3D1);
+        try testing.expect(ExteriorDerivativeResult(C3D1) == C3D2);
+        try testing.expect(ExteriorDerivativeResult(C3D2) == C3D3);
+    }
+}
+
 test "compile-time: Cochain types of different degree are distinct" {
     comptime {
         try testing.expect(C0 != C1);
@@ -428,6 +448,14 @@ test "compile-time: d̃₀ maps dual 0-form to dual 1-form" {
 test "compile-time: d̃₁ maps dual 1-form to dual 2-form" {
     comptime {
         try testing.expect(ExteriorDerivativeResult(DualC1) == DualC2);
+    }
+}
+
+test "compile-time: 3D d̃ₖ maps dual forms to the next dual degree for k ∈ {0,1,2}" {
+    comptime {
+        try testing.expect(ExteriorDerivativeResult(DualC3D0) == DualC3D1);
+        try testing.expect(ExteriorDerivativeResult(DualC3D1) == DualC3D2);
+        try testing.expect(ExteriorDerivativeResult(DualC3D2) == DualC3D3);
     }
 }
 
