@@ -17,6 +17,49 @@ fn boundaryEffectiveDegree(comptime InputType: type) comptime_int {
         InputType.degree;
 }
 
+fn allocateMask(allocator: std.mem.Allocator, count: u32) ![]bool {
+    const mask = try allocator.alloc(bool, count);
+    @memset(mask, false);
+    return mask;
+}
+
+fn boundaryFaceMask3D(allocator: std.mem.Allocator, mesh: anytype) ![]bool {
+    const face_count = mesh.num_faces();
+    const mask = try allocateMask(allocator, face_count);
+    errdefer allocator.free(mask);
+
+    const incidence_count = try allocator.alloc(u8, face_count);
+    defer allocator.free(incidence_count);
+    @memset(incidence_count, 0);
+
+    for (0..mesh.num_tets()) |tet_idx_usize| {
+        const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        for (row.cols) |face_idx| {
+            incidence_count[face_idx] += 1;
+        }
+    }
+
+    for (incidence_count, 0..) |count, face_idx| {
+        if (count == 1) {
+            mask[face_idx] = true;
+        }
+    }
+
+    return mask;
+}
+
+fn canonicalRepresentative(representatives: []const u32, idx: u32) u32 {
+    var current = idx;
+    var step_count: usize = 0;
+    while (true) : (step_count += 1) {
+        std.debug.assert(step_count <= representatives.len);
+        const next = representatives[current];
+        std.debug.assert(next < representatives.len);
+        if (next == current) return current;
+        current = next;
+    }
+}
+
 fn BoundarySelection(comptime InputType: type) type {
     return struct {
         const Self = @This();
@@ -24,9 +67,87 @@ fn BoundarySelection(comptime InputType: type) type {
         mask: []bool,
 
         pub fn initBoundary(allocator: std.mem.Allocator, mesh: *const InputType.MeshT) !Self {
-            _ = allocator;
-            _ = mesh;
-            @panic("not yet implemented");
+            const effective_degree = boundaryEffectiveDegree(InputType);
+            const mask = try allocateMask(allocator, InputType.num_cells(mesh));
+            errdefer allocator.free(mask);
+
+            switch (InputType.MeshT.topological_dimension) {
+                2 => switch (effective_degree) {
+                    0 => {
+                        const edge_vertices = mesh.simplices(1).items(.vertices);
+                        for (mesh.boundary_edges) |edge_idx| {
+                            const edge = edge_vertices[edge_idx];
+                            mask[edge[0]] = true;
+                            mask[edge[1]] = true;
+                        }
+                    },
+                    1 => {
+                        for (mesh.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const boundary_edge_mask = try allocateMask(allocator, mesh.num_edges());
+                        defer allocator.free(boundary_edge_mask);
+
+                        for (mesh.boundary_edges) |edge_idx| {
+                            boundary_edge_mask[edge_idx] = true;
+                        }
+
+                        for (0..mesh.num_faces()) |face_idx_usize| {
+                            const row = mesh.boundary(2).row(@intCast(face_idx_usize));
+                            for (row.cols) |edge_idx| {
+                                if (!boundary_edge_mask[edge_idx]) continue;
+                                mask[face_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                3 => switch (effective_degree) {
+                    0 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        defer allocator.free(boundary_face_mask);
+
+                        const face_vertices = mesh.simplices(2).items(.vertices);
+                        for (boundary_face_mask, 0..) |is_boundary, face_idx| {
+                            if (!is_boundary) continue;
+                            const face = face_vertices[face_idx];
+                            mask[face[0]] = true;
+                            mask[face[1]] = true;
+                            mask[face[2]] = true;
+                        }
+                    },
+                    1 => {
+                        for (mesh.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        @memcpy(mask, boundary_face_mask);
+                        allocator.free(boundary_face_mask);
+                    },
+                    3 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        defer allocator.free(boundary_face_mask);
+
+                        for (0..mesh.num_tets()) |tet_idx_usize| {
+                            const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+                            for (row.cols) |face_idx| {
+                                if (!boundary_face_mask[face_idx]) continue;
+                                mask[tet_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                else => @compileError("boundary selection supports only 2D and 3D meshes"),
+            }
+
+            return .{ .mask = mask };
         }
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
@@ -34,6 +155,7 @@ fn BoundarySelection(comptime InputType: type) type {
         }
 
         pub fn contains(self: Self, idx: u32) bool {
+            std.debug.assert(idx < self.mask.len);
             return self.mask[idx];
         }
     };
@@ -93,10 +215,16 @@ pub fn Dirichlet(comptime InputType: type) type {
         }
 
         pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
-            _ = self;
-            _ = allocator;
-            _ = input;
-            @panic("not yet implemented");
+            var output = try InputType.init(allocator, input.mesh);
+            errdefer output.deinit(allocator);
+
+            @memcpy(output.values, input.values);
+            for (self.selection.mask, 0..) |selected, idx| {
+                if (!selected) continue;
+                output.values[idx] = self.boundary_values[idx];
+            }
+
+            return output;
         }
     };
 }
@@ -168,18 +296,35 @@ pub fn Periodic(comptime InputType: type) type {
         }
 
         pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
-            _ = self;
-            _ = allocator;
-            _ = input;
-            @panic("not yet implemented");
+            var sums = try allocator.alloc(f64, self.representatives.len);
+            defer allocator.free(sums);
+            @memset(sums, 0.0);
+
+            var counts = try allocator.alloc(u32, self.representatives.len);
+            defer allocator.free(counts);
+            @memset(counts, 0);
+
+            for (input.values, 0..) |value, idx| {
+                const representative = canonicalRepresentative(self.representatives, @intCast(idx));
+                sums[representative] += value;
+                counts[representative] += 1;
+            }
+
+            var output = try InputType.init(allocator, input.mesh);
+            errdefer output.deinit(allocator);
+
+            for (output.values, 0..) |*value, idx| {
+                const representative = canonicalRepresentative(self.representatives, @intCast(idx));
+                std.debug.assert(counts[representative] > 0);
+                value.* = sums[representative] / @as(f64, @floatFromInt(counts[representative]));
+            }
+
+            return output;
         }
     };
 }
 
-pub fn compose(first: anytype, second: anytype) type {
-    const First = @TypeOf(first);
-    const Second = @TypeOf(second);
-
+fn ComposedBoundaryCondition(comptime First: type, comptime Second: type) type {
     return struct {
         const Self = @This();
 
@@ -191,6 +336,13 @@ pub fn compose(first: anytype, second: anytype) type {
             defer intermediate.deinit(allocator);
             return try self.second.apply(allocator, intermediate);
         }
+    };
+}
+
+pub fn compose(first: anytype, second: anytype) ComposedBoundaryCondition(@TypeOf(first), @TypeOf(second)) {
+    return .{
+        .first = first,
+        .second = second,
     };
 }
 
@@ -240,7 +392,7 @@ test "boundary selection marks boundary edges on 3D mesh" {
     }
 
     try testing.expect(selected_count > 0);
-    try testing.expect(selected_count < mesh.num_edges());
+    try testing.expectEqual(@as(usize, mesh.boundary_edges.len), selected_count);
 }
 
 test "Dirichlet is idempotent on boundary vertices" {
