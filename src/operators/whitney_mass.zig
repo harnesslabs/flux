@@ -87,6 +87,90 @@ pub fn assemble_whitney_mass(
     return assembler.build(allocator);
 }
 
+pub fn assemble_whitney_mass_with_metric(
+    comptime k: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+    top_simplex_metric_tensors: []const [@TypeOf(mesh.*).topological_dimension][@TypeOf(mesh.*).topological_dimension]f64,
+) !sparse.CsrMatrix(f64) {
+    const MeshType = @TypeOf(mesh.*);
+    const n = MeshType.topological_dimension;
+
+    comptime {
+        if (MeshType.embedding_dimension != n) {
+            @compileError("metric-aware Whitney mass currently requires embedding_dimension == topological_dimension");
+        }
+        if (k <= 0 or k >= n) {
+            @compileError("Whitney mass is only defined for interior degrees 0 < k < n");
+        }
+        if (n > 3) {
+            @compileError("Whitney mass assembly is currently implemented for topological_dimension <= 3");
+        }
+    }
+
+    const simplex_count = mesh.num_cells(k);
+    const top_simplex_count = mesh.num_cells(n);
+    std.debug.assert(top_simplex_metric_tensors.len == top_simplex_count);
+
+    const simplex_vertices = mesh.simplices(k).items(.vertices);
+    const top_simplex_vertices = mesh.simplices(n).items(.vertices);
+    const top_simplex_volumes = mesh.simplices(n).items(.volume);
+    const coords = mesh.vertices.slice().items(.coords);
+    const local_faces = localFaces(n, k);
+
+    var simplex_index = std.AutoHashMap([k + 1]u32, u32).init(allocator);
+    defer simplex_index.deinit();
+    for (simplex_vertices, 0..) |vertices, global_idx| {
+        try simplex_index.put(vertices, @intCast(global_idx));
+    }
+
+    var assembler = sparse.TripletAssembler(f64).init(simplex_count, simplex_count);
+    defer assembler.deinit(allocator);
+
+    for (0..top_simplex_count) |top_idx| {
+        const top_vertices = top_simplex_vertices[top_idx];
+
+        var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
+        for (0..n + 1) |local_vertex_idx| {
+            top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
+        }
+
+        const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
+        const metric_tensor = top_simplex_metric_tensors[top_idx];
+        const metric_inverse = invertSmallMatrix(n, metric_tensor);
+        const metric_volume_scale = @sqrt(smallMatrixDeterminant(n, metric_tensor));
+        const local_mass = localWhitneyMassWithMetric(
+            MeshType.embedding_dimension,
+            n,
+            k,
+            gradients,
+            top_simplex_volumes[top_idx],
+            metric_inverse,
+            metric_volume_scale,
+        );
+
+        var global_indices: [local_faces.len]u32 = undefined;
+        var orientation_signs: [local_faces.len]i8 = undefined;
+        for (local_faces, 0..) |local_face, local_face_idx| {
+            const oriented_vertices = liftLocalFaceVertices(k, n, top_vertices, local_face);
+            const canonical_key = canonicalizeVertices(k + 1, oriented_vertices);
+            const global_idx = simplex_index.get(canonical_key).?;
+            global_indices[local_face_idx] = global_idx;
+            orientation_signs[local_face_idx] = orientationSign(k + 1, oriented_vertices, simplex_vertices[global_idx]);
+        }
+
+        for (0..local_faces.len) |i| {
+            const sign_i: f64 = @floatFromInt(orientation_signs[i]);
+            for (0..local_faces.len) |j| {
+                const sign_j: f64 = @floatFromInt(orientation_signs[j]);
+                try assembler.addEntry(allocator, global_indices[i], global_indices[j], sign_i * sign_j * local_mass[i][j]);
+            }
+        }
+    }
+
+    return assembler.build(allocator);
+}
+
 pub fn assemble_whitney_preconditioner(
     comptime k: comptime_int,
     allocator: std.mem.Allocator,
@@ -311,6 +395,51 @@ fn localWhitneyMass(
     return local_mass;
 }
 
+fn localWhitneyMassWithMetric(
+    comptime embedding_dimension: usize,
+    comptime n: comptime_int,
+    comptime k: comptime_int,
+    gradients: [n + 1][embedding_dimension]f64,
+    simplex_volume: f64,
+    metric_inverse: [n][n]f64,
+    metric_volume_scale: f64,
+) [choose(n + 1, k + 1)][choose(n + 1, k + 1)]f64 {
+    const local_faces = localFaces(n, k);
+    var local_mass: [local_faces.len][local_faces.len]f64 = undefined;
+    const lambda_integral_scale = simplex_volume * metric_volume_scale /
+        @as(f64, @floatFromInt((n + 1) * (n + 2)));
+    const whitney_scale = @as(f64, @floatFromInt(factorial(k) * factorial(k)));
+
+    for (local_faces, 0..) |left_face, left_idx| {
+        for (local_faces, 0..) |right_face, right_idx| {
+            var entry: f64 = 0.0;
+            inline for (0..k + 1) |left_omit| {
+                const left_basis = omitIndex(k + 1, left_face, left_omit);
+                const left_lambda = left_face[left_omit];
+                inline for (0..k + 1) |right_omit| {
+                    const right_basis = omitIndex(k + 1, right_face, right_omit);
+                    const right_lambda = right_face[right_omit];
+                    const sign: f64 = if ((left_omit + right_omit) % 2 == 0) 1.0 else -1.0;
+                    const lambda_inner: f64 = if (left_lambda == right_lambda) 2.0 else 1.0;
+                    entry += sign * lambda_inner *
+                        wedgeInnerProductWithMetric(
+                            embedding_dimension,
+                            n,
+                            k,
+                            metric_inverse,
+                            gradients[0..],
+                            left_basis,
+                            right_basis,
+                        );
+                }
+            }
+            local_mass[left_idx][right_idx] = whitney_scale * lambda_integral_scale * entry;
+        }
+    }
+
+    return local_mass;
+}
+
 fn omitIndex(comptime len: comptime_int, indices: [len]u8, omit: usize) [len - 1]u8 {
     var result: [len - 1]u8 = undefined;
     var write_idx: usize = 0;
@@ -338,6 +467,52 @@ fn wedgeInnerProduct(
         const b = vecDot(embedding_dimension, gradients[left_indices[0]], gradients[right_indices[1]]);
         const c = vecDot(embedding_dimension, gradients[left_indices[1]], gradients[right_indices[0]]);
         const d = vecDot(embedding_dimension, gradients[left_indices[1]], gradients[right_indices[1]]);
+        return a * d - b * c;
+    }
+
+    @compileError("Whitney wedge inner product is only implemented for k <= 2");
+}
+
+fn metricVectorDot(
+    comptime dimension: usize,
+    comptime n: comptime_int,
+    metric_inverse: [n][n]f64,
+    a: [dimension]f64,
+    b: [dimension]f64,
+) f64 {
+    var sum: f64 = 0.0;
+    inline for (0..n) |i| {
+        inline for (0..n) |j| {
+            sum += a[i] * metric_inverse[i][j] * b[j];
+        }
+    }
+    return sum;
+}
+
+fn wedgeInnerProductWithMetric(
+    comptime embedding_dimension: usize,
+    comptime n: comptime_int,
+    comptime k: comptime_int,
+    metric_inverse: [n][n]f64,
+    gradients: []const [embedding_dimension]f64,
+    left_indices: [k]u8,
+    right_indices: [k]u8,
+) f64 {
+    if (k == 1) {
+        return metricVectorDot(
+            embedding_dimension,
+            n,
+            metric_inverse,
+            gradients[left_indices[0]],
+            gradients[right_indices[0]],
+        );
+    }
+
+    if (k == 2) {
+        const a = metricVectorDot(embedding_dimension, n, metric_inverse, gradients[left_indices[0]], gradients[right_indices[0]]);
+        const b = metricVectorDot(embedding_dimension, n, metric_inverse, gradients[left_indices[0]], gradients[right_indices[1]]);
+        const c = metricVectorDot(embedding_dimension, n, metric_inverse, gradients[left_indices[1]], gradients[right_indices[0]]);
+        const d = metricVectorDot(embedding_dimension, n, metric_inverse, gradients[left_indices[1]], gradients[right_indices[1]]);
         return a * d - b * c;
     }
 
@@ -386,6 +561,30 @@ fn invertSmallMatrix(comptime n: comptime_int, matrix: [n][n]f64) [n][n]f64 {
     }
 
     @compileError("small matrix inversion is only implemented for n = 2 or n = 3");
+}
+
+fn smallMatrixDeterminant(comptime n: comptime_int, matrix: [n][n]f64) f64 {
+    if (n == 2) {
+        return matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+    }
+
+    if (n == 3) {
+        const a = matrix[0][0];
+        const b = matrix[0][1];
+        const c = matrix[0][2];
+        const d = matrix[1][0];
+        const e = matrix[1][1];
+        const f = matrix[1][2];
+        const g = matrix[2][0];
+        const h = matrix[2][1];
+        const i = matrix[2][2];
+
+        return a * (e * i - f * h) -
+            b * (d * i - f * g) +
+            c * (d * h - e * g);
+    }
+
+    @compileError("small matrix determinant is only implemented for n = 2 or n = 3");
 }
 
 fn accumulateDualFaceLengths(

@@ -323,3 +323,36 @@ and makes Jacobi preconditioning a normal Zig value instead of a function/contex
 pair. Requiring `apply(self: *const P, z)` also keeps preconditioner application
 structurally pure from the solver's perspective until a concrete mutable
 preconditioner use case exists.
+
+## 2026-04-05: Metric-aware Hodge star uses an explicit operator API while the existing operator context stays flat-specialized
+
+**Decision:** Introduce metric parameterization at the Hodge-star layer via an
+explicit `Metric(MeshType, mode)` type family plus `*_with_metric(...)` entry
+points. The existing `hodge_star(...)`, `hodge_star_inverse(...)`, and
+`OperatorContext` APIs remain the zero-cost flat specialization for now. The
+Riemannian implementation covers interior-degree Whitney/Galerkin stars and the
+top-degree diagonal star; primal 0-form Riemannian stars are deferred.
+
+**Alternatives considered:**
+1. Thread the metric through `OperatorContext`, codifferential, Laplacian, and
+   all downstream examples immediately: rejected because it turns issue #85
+   into a cross-component refactor spanning operator caching, assembled
+   Laplacians, and example systems before the metric-aware star itself is
+   validated.
+2. Make the metric an optional runtime argument on the existing `hodge_star`
+   surface: rejected because it obscures the flat fast path, weakens the type
+   signal from `Metric(.flat)` vs `Metric(.riemannian)`, and makes the intended
+   future generalization less explicit.
+3. Force full Riemannian support for all degrees immediately: rejected because
+   the current mesh stores only aggregate circumcentric dual volumes at
+   vertices. A correct piecewise-metric `★₀` needs per-cell dual contributions
+   or a redesigned dual-geometry representation, which is a separate topology
+   issue.
+
+**Rationale:** The vision says flatness must be an explicit specialization, not
+an implicit assumption. The new metric-aware API makes that true at the Hodge
+star boundary without paying a refactor tax across the rest of the operator
+stack yet. Keeping the flat path unchanged preserves existing callers and
+benchmarks. Deferring Riemannian `★₀` is honest: the missing data lives in the
+mesh layer, so pretending otherwise would bake in a mathematically dubious
+approximation.
