@@ -16,8 +16,14 @@ const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const conjugate_gradient = @import("../math/cg.zig");
 
-const cg_relative_tolerance: f64 = 1e-14;
-const cg_iteration_limit: u32 = 20000;
+pub const SolveError = error{
+    HodgeStarInverseDidNotConverge,
+};
+
+const WhitneyInverseSolveParams = struct {
+    relative_tolerance: f64,
+    iteration_limit: u32,
+};
 
 pub fn AssembledHodgeStar(comptime InputType: type) type {
     comptime validateHodgeStarInput(InputType);
@@ -131,28 +137,16 @@ pub fn apply_hodge_star_inverse(
     errdefer output.deinit(allocator);
 
     if (comptime supportsWhitneyMassDegree(InputType.MeshT, primal_degree)) {
-        // CG solve: Mₖ · x = b, with diagonal dual/primal ratio as a preconditioner.
-        const diagonal = input.mesh.whitney_preconditioner(primal_degree);
-        for (output.values, input.values, diagonal) |*out, in_val, diagonal_entry| {
-            std.debug.assert(diagonal_entry != 0.0);
-            out.* = in_val / diagonal_entry;
-        }
-
-        var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.values.len));
-        defer scratch.deinit(allocator);
-
-        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
-        const result = conjugate_gradient.solve(
+        const solve_params = whitneyInverseSolveParams(InputType.MeshT, primal_degree);
+        try solveWhitneyInverse(
+            allocator,
             input.mesh.whitney_mass(primal_degree),
+            input.mesh.whitney_preconditioner(primal_degree),
             input.values,
             output.values,
-            cg_relative_tolerance,
-            cg_iteration_limit,
-            conjugate_gradient.DiagonalPreconditioner.apply,
-            @ptrCast(&precond),
-            scratch,
+            solve_params.relative_tolerance,
+            solve_params.iteration_limit,
         );
-        std.debug.assert(result.converged);
         return output;
     }
 
@@ -236,31 +230,56 @@ pub fn apply_inverse_raw(
     output: []f64,
 ) !void {
     if (comptime supportsWhitneyMassDegree(MeshType, primal_degree)) {
-        const diagonal = mesh.whitney_preconditioner(primal_degree);
-        for (output, input, diagonal) |*out, in_val, diagonal_entry| {
-            std.debug.assert(diagonal_entry != 0.0);
-            out.* = in_val / diagonal_entry;
-        }
-
-        var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
-        defer scratch.deinit(allocator);
-
-        var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
-        const result = conjugate_gradient.solve(
+        const solve_params = whitneyInverseSolveParams(MeshType, primal_degree);
+        try solveWhitneyInverse(
+            allocator,
             mesh.whitney_mass(primal_degree),
+            mesh.whitney_preconditioner(primal_degree),
             input,
             output,
-            cg_relative_tolerance,
-            cg_iteration_limit,
-            conjugate_gradient.DiagonalPreconditioner.apply,
-            @ptrCast(&precond),
-            scratch,
+            solve_params.relative_tolerance,
+            solve_params.iteration_limit,
         );
-        std.debug.assert(result.converged);
         return;
     }
 
     try applyDiagonalInverse(allocator, MeshType, primal_degree, mesh, input, output);
+}
+
+fn solveWhitneyInverse(
+    allocator: std.mem.Allocator,
+    matrix: sparse.CsrMatrix(f64),
+    diagonal: []const f64,
+    input: []const f64,
+    output: []f64,
+    relative_tolerance: f64,
+    iteration_limit: u32,
+) !void {
+    std.debug.assert(diagonal.len == output.len);
+
+    // Use the diagonal DEC ratio as both preconditioner and initial guess.
+    for (output, input, diagonal) |*out, in_val, diagonal_entry| {
+        std.debug.assert(diagonal_entry != 0.0);
+        out.* = in_val / diagonal_entry;
+    }
+
+    var scratch = try conjugate_gradient.Scratch.init(allocator, @intCast(output.len));
+    defer scratch.deinit(allocator);
+
+    var precond = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
+    const result = conjugate_gradient.solve(
+        matrix,
+        input,
+        output,
+        relative_tolerance,
+        iteration_limit,
+        conjugate_gradient.DiagonalPreconditioner.apply,
+        @ptrCast(&precond),
+        scratch,
+    );
+    if (!result.converged) {
+        return SolveError.HodgeStarInverseDidNotConverge;
+    }
 }
 
 // ── Diagonal application ────────────────────────────────────────────────
@@ -329,9 +348,57 @@ fn supportsWhitneyMassDegree(comptime MeshType: type, comptime primal_degree: co
     return primal_degree > 0 and primal_degree < MeshType.topological_dimension;
 }
 
+fn whitneyInverseSolveParams(comptime MeshType: type, comptime primal_degree: comptime_int) WhitneyInverseSolveParams {
+    std.debug.assert(supportsWhitneyMassDegree(MeshType, primal_degree));
+
+    if (MeshType.topological_dimension <= 2) {
+        // Preserve the original 2D benchmarked solve target so the PR remains
+        // comparable to main on the existing hodge_star_inverse_1_cg row.
+        return .{
+            .relative_tolerance = 1e-10,
+            .iteration_limit = 1000,
+        };
+    }
+
+    // Random 3D tetrahedral meshes need a tighter residual target for the
+    // ★★⁻¹ identity property to hold across distorted cells.
+    return .{
+        .relative_tolerance = 1e-14,
+        .iteration_limit = 20000,
+    };
+}
+
 fn expectApproxEqRelOrAbs(expected: f64, actual: f64, relative_tolerance: f64, absolute_tolerance: f64) !void {
     const tolerance = @max(absolute_tolerance, @abs(expected) * relative_tolerance);
     try testing.expect(@abs(expected - actual) <= tolerance);
+}
+
+fn expectRoundTripIdentity3DForDegree(
+    comptime degree: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: *const Mesh3D,
+    random: std.Random,
+    trial_count: u32,
+    relative_tolerance: f64,
+    absolute_tolerance: f64,
+) !void {
+    const PrimalType = cochain.Cochain(Mesh3D, degree, cochain.Primal);
+
+    for (0..trial_count) |_| {
+        var omega = try PrimalType.init(allocator, mesh);
+        defer omega.deinit(allocator);
+        for (omega.values) |*value| value.* = random.float(f64) * 200.0 - 100.0;
+
+        var starred = try hodge_star(allocator, omega);
+        defer starred.deinit(allocator);
+
+        var round_trip = try hodge_star_inverse(allocator, starred);
+        defer round_trip.deinit(allocator);
+
+        for (omega.values, round_trip.values) |original, recovered| {
+            try expectApproxEqRelOrAbs(original, recovered, relative_tolerance, absolute_tolerance);
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -543,82 +610,65 @@ test "★⁻¹ ∘ ★ = identity for all degrees on random inputs" {
 
 test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
     const allocator = testing.allocator;
-    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    // Issue #82 asks for 1000 random 3D trials total. Spread them across
+    // multiple tetrahedral grids so the property test exercises both
+    // coefficient recovery and mesh-dependent orientation/geometry paths.
+    const mesh_count: u32 = 10;
+    const trials_per_mesh_per_degree: u32 = 25;
+
+    var mesh_rng = std.Random.DefaultPrng.init(0x823D_AE50);
+    for (0..mesh_count) |_| {
+        const nx: u32 = @intCast(mesh_rng.random().intRangeAtMost(u32, 1, 3));
+        const ny: u32 = @intCast(mesh_rng.random().intRangeAtMost(u32, 1, 3));
+        const nz: u32 = @intCast(mesh_rng.random().intRangeAtMost(u32, 1, 3));
+        const width = 0.5 + mesh_rng.random().float(f64) * 1.5;
+        const height = 0.5 + mesh_rng.random().float(f64) * 1.5;
+        const depth = 0.5 + mesh_rng.random().float(f64) * 1.5;
+
+        var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, nx, ny, nz, width, height, depth);
+        defer mesh.deinit(allocator);
+
+        var rng_0 = std.Random.DefaultPrng.init(mesh_rng.random().int(u64));
+        try expectRoundTripIdentity3DForDegree(0, allocator, &mesh, rng_0.random(), trials_per_mesh_per_degree, 1e-14, 0.0);
+
+        var rng_1 = std.Random.DefaultPrng.init(mesh_rng.random().int(u64));
+        try expectRoundTripIdentity3DForDegree(1, allocator, &mesh, rng_1.random(), trials_per_mesh_per_degree, 1e-7, 1e-10);
+
+        var rng_2 = std.Random.DefaultPrng.init(mesh_rng.random().int(u64));
+        try expectRoundTripIdentity3DForDegree(2, allocator, &mesh, rng_2.random(), trials_per_mesh_per_degree, 1e-7, 1e-10);
+
+        var rng_3 = std.Random.DefaultPrng.init(mesh_rng.random().int(u64));
+        try expectRoundTripIdentity3DForDegree(3, allocator, &mesh, rng_3.random(), trials_per_mesh_per_degree, 1e-14, 0.0);
+    }
+}
+
+test "★⁻¹ returns error when Whitney CG solve exhausts iteration limit" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    {
-        var rng = std.Random.DefaultPrng.init(0x82_3D_0000);
-        for (0..1000) |_| {
-            var omega = try PrimalC0_3D.init(allocator, &mesh);
-            defer omega.deinit(allocator);
-            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
-
-            var starred = try hodge_star(allocator, omega);
-            defer starred.deinit(allocator);
-
-            var round_trip = try hodge_star_inverse(allocator, starred);
-            defer round_trip.deinit(allocator);
-
-            for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, 1e-14);
-            }
-        }
+    var omega = try PrimalC1.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+    for (omega.values, 0..) |*value, idx| {
+        value.* = @as(f64, @floatFromInt(idx + 1));
     }
 
-    {
-        var rng = std.Random.DefaultPrng.init(0x82_3D_0001);
-        for (0..1000) |_| {
-            var omega = try PrimalC1_3D.init(allocator, &mesh);
-            defer omega.deinit(allocator);
-            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
+    var starred = try hodge_star(allocator, omega);
+    defer starred.deinit(allocator);
 
-            var starred = try hodge_star(allocator, omega);
-            defer starred.deinit(allocator);
+    var output = try PrimalC1.init(allocator, &mesh);
+    defer output.deinit(allocator);
 
-            var round_trip = try hodge_star_inverse(allocator, starred);
-            defer round_trip.deinit(allocator);
-
-            for (omega.values, round_trip.values) |original, recovered| {
-                try expectApproxEqRelOrAbs(original, recovered, 1e-7, 1e-10);
-            }
-        }
-    }
-
-    {
-        var rng = std.Random.DefaultPrng.init(0x82_3D_0002);
-        for (0..1000) |_| {
-            var omega = try PrimalC2_3D.init(allocator, &mesh);
-            defer omega.deinit(allocator);
-            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
-
-            var starred = try hodge_star(allocator, omega);
-            defer starred.deinit(allocator);
-
-            var round_trip = try hodge_star_inverse(allocator, starred);
-            defer round_trip.deinit(allocator);
-
-            for (omega.values, round_trip.values) |original, recovered| {
-                try expectApproxEqRelOrAbs(original, recovered, 1e-7, 1e-10);
-            }
-        }
-    }
-
-    {
-        var rng = std.Random.DefaultPrng.init(0x82_3D_0003);
-        for (0..1000) |_| {
-            var omega = try PrimalC3_3D.init(allocator, &mesh);
-            defer omega.deinit(allocator);
-            for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
-
-            var starred = try hodge_star(allocator, omega);
-            defer starred.deinit(allocator);
-
-            var round_trip = try hodge_star_inverse(allocator, starred);
-            defer round_trip.deinit(allocator);
-
-            for (omega.values, round_trip.values) |original, recovered| {
-                try testing.expectApproxEqRel(original, recovered, 1e-14);
-            }
-        }
-    }
+    try testing.expectError(
+        SolveError.HodgeStarInverseDidNotConverge,
+        solveWhitneyInverse(
+            allocator,
+            mesh.whitney_mass(1),
+            mesh.whitney_preconditioner(1),
+            starred.values,
+            output.values,
+            whitneyInverseSolveParams(Mesh2D, 1).relative_tolerance,
+            0,
+        ),
+    );
 }
