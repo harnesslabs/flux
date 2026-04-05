@@ -62,6 +62,7 @@ pub const math = struct {
     pub const cg = @import("math/cg.zig");
 };
 pub const operators = struct {
+    pub const boundary_conditions = @import("operators/boundary_conditions.zig");
     pub const codifferential = @import("operators/codifferential.zig");
     pub const compose = @import("operators/compose.zig");
     pub const context = @import("operators/context.zig");
@@ -128,6 +129,11 @@ pub const Simplex = topology.Simplex;
 
 /// Per-mesh owner of assembled DEC operators requested by a given problem.
 pub const OperatorContext = operators.context.OperatorContext;
+pub const BoundaryCondition = operators.boundary_conditions.BoundaryCondition;
+pub const Dirichlet = operators.boundary_conditions.Dirichlet;
+pub const PEC = operators.boundary_conditions.PEC;
+pub const NoSlip = operators.boundary_conditions.NoSlip;
+pub const Periodic = operators.boundary_conditions.Periodic;
 
 /// Apply a sequence of DEC operators with automatic intermediate allocation
 /// management. Degree/duality mismatches are compile errors.
