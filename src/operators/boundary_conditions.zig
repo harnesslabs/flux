@@ -1,0 +1,515 @@
+//! Composable boundary conditions for cochains on meshes with boundary.
+//!
+//! Each boundary condition is a value with a single public operation:
+//! `apply(allocator, input) -> output`. The input and output cochain types are
+//! identical, so boundary conditions compose without changing the field space.
+
+const std = @import("std");
+const testing = std.testing;
+const cochain = @import("../forms/cochain.zig");
+const topology = @import("../topology/mesh.zig");
+const exterior_derivative_mod = @import("exterior_derivative.zig");
+
+fn boundaryEffectiveDegree(comptime InputType: type) comptime_int {
+    return if (InputType.duality == cochain.Dual)
+        InputType.MeshT.topological_dimension - InputType.degree
+    else
+        InputType.degree;
+}
+
+fn allocateMask(allocator: std.mem.Allocator, count: u32) ![]bool {
+    const mask = try allocator.alloc(bool, count);
+    @memset(mask, false);
+    return mask;
+}
+
+fn boundaryFaceMask3D(allocator: std.mem.Allocator, mesh: anytype) ![]bool {
+    const face_count = mesh.num_faces();
+    const mask = try allocateMask(allocator, face_count);
+    errdefer allocator.free(mask);
+
+    const incidence_count = try allocator.alloc(u8, face_count);
+    defer allocator.free(incidence_count);
+    @memset(incidence_count, 0);
+
+    for (0..mesh.num_tets()) |tet_idx_usize| {
+        const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        for (row.cols) |face_idx| {
+            incidence_count[face_idx] += 1;
+        }
+    }
+
+    for (incidence_count, 0..) |count, face_idx| {
+        if (count == 1) {
+            mask[face_idx] = true;
+        }
+    }
+
+    return mask;
+}
+
+fn canonicalRepresentative(representatives: []const u32, idx: u32) u32 {
+    var current = idx;
+    var step_count: usize = 0;
+    while (true) : (step_count += 1) {
+        std.debug.assert(step_count <= representatives.len);
+        const next = representatives[current];
+        std.debug.assert(next < representatives.len);
+        if (next == current) return current;
+        current = next;
+    }
+}
+
+fn BoundarySelection(comptime InputType: type) type {
+    return struct {
+        const Self = @This();
+
+        mask: []bool,
+
+        pub fn initBoundary(allocator: std.mem.Allocator, mesh: *const InputType.MeshT) !Self {
+            const effective_degree = boundaryEffectiveDegree(InputType);
+            const mask = try allocateMask(allocator, InputType.num_cells(mesh));
+            errdefer allocator.free(mask);
+
+            switch (InputType.MeshT.topological_dimension) {
+                2 => switch (effective_degree) {
+                    0 => {
+                        const edge_vertices = mesh.simplices(1).items(.vertices);
+                        for (mesh.boundary_edges) |edge_idx| {
+                            const edge = edge_vertices[edge_idx];
+                            mask[edge[0]] = true;
+                            mask[edge[1]] = true;
+                        }
+                    },
+                    1 => {
+                        for (mesh.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const boundary_edge_mask = try allocateMask(allocator, mesh.num_edges());
+                        defer allocator.free(boundary_edge_mask);
+
+                        for (mesh.boundary_edges) |edge_idx| {
+                            boundary_edge_mask[edge_idx] = true;
+                        }
+
+                        for (0..mesh.num_faces()) |face_idx_usize| {
+                            const row = mesh.boundary(2).row(@intCast(face_idx_usize));
+                            for (row.cols) |edge_idx| {
+                                if (!boundary_edge_mask[edge_idx]) continue;
+                                mask[face_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                3 => switch (effective_degree) {
+                    0 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        defer allocator.free(boundary_face_mask);
+
+                        const face_vertices = mesh.simplices(2).items(.vertices);
+                        for (boundary_face_mask, 0..) |is_boundary, face_idx| {
+                            if (!is_boundary) continue;
+                            const face = face_vertices[face_idx];
+                            mask[face[0]] = true;
+                            mask[face[1]] = true;
+                            mask[face[2]] = true;
+                        }
+                    },
+                    1 => {
+                        for (mesh.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        @memcpy(mask, boundary_face_mask);
+                        allocator.free(boundary_face_mask);
+                    },
+                    3 => {
+                        const boundary_face_mask = try boundaryFaceMask3D(allocator, mesh);
+                        defer allocator.free(boundary_face_mask);
+
+                        for (0..mesh.num_tets()) |tet_idx_usize| {
+                            const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+                            for (row.cols) |face_idx| {
+                                if (!boundary_face_mask[face_idx]) continue;
+                                mask[tet_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                else => @compileError("boundary selection supports only 2D and 3D meshes"),
+            }
+
+            return .{ .mask = mask };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.mask);
+        }
+
+        pub fn contains(self: Self, idx: u32) bool {
+            std.debug.assert(idx < self.mask.len);
+            return self.mask[idx];
+        }
+    };
+}
+
+pub fn BoundaryCondition(comptime BC: type, comptime InputType: type) void {
+    comptime {
+        if (!@hasDecl(BC, "apply")) {
+            @compileError("boundary condition must declare apply(allocator, input)");
+        }
+
+        const apply_type = @TypeOf(BC.apply);
+        const info = @typeInfo(apply_type);
+        if (info != .@"fn") {
+            @compileError("boundary condition apply must be a function");
+        }
+
+        const fn_info = info.@"fn";
+        if (fn_info.params.len != 3) {
+            @compileError("boundary condition apply must accept self, allocator, input");
+        }
+        if (fn_info.return_type == null) {
+            @compileError("boundary condition apply must return an error union");
+        }
+
+        const return_info = @typeInfo(fn_info.return_type.?);
+        if (return_info != .error_union) {
+            @compileError("boundary condition apply must return an error union");
+        }
+        if (return_info.error_union.payload != InputType) {
+            @compileError("boundary condition apply must return the same cochain type");
+        }
+    }
+}
+
+pub fn Dirichlet(comptime InputType: type) type {
+    return struct {
+        const Self = @This();
+
+        selection: BoundarySelection(InputType),
+        boundary_values: []const f64,
+
+        pub fn initBoundary(
+            allocator: std.mem.Allocator,
+            mesh: *const InputType.MeshT,
+            boundary_values: []const f64,
+        ) !Self {
+            std.debug.assert(boundary_values.len == InputType.num_cells(mesh));
+            return .{
+                .selection = try BoundarySelection(InputType).initBoundary(allocator, mesh),
+                .boundary_values = boundary_values,
+            };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.selection.deinit(allocator);
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
+            var output = try InputType.init(allocator, input.mesh);
+            errdefer output.deinit(allocator);
+
+            @memcpy(output.values, input.values);
+            for (self.selection.mask, 0..) |selected, idx| {
+                if (!selected) continue;
+                output.values[idx] = self.boundary_values[idx];
+            }
+
+            return output;
+        }
+    };
+}
+
+pub fn PEC(comptime InputType: type) type {
+    return struct {
+        const Self = @This();
+
+        inner: Dirichlet(InputType),
+
+        pub fn initBoundary(allocator: std.mem.Allocator, mesh: *const InputType.MeshT) !Self {
+            const zero_values = try allocator.alloc(f64, InputType.num_cells(mesh));
+            @memset(zero_values, 0.0);
+            return .{
+                .inner = try Dirichlet(InputType).initBoundary(allocator, mesh, zero_values),
+            };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.inner.boundary_values);
+            self.inner.deinit(allocator);
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
+            return self.inner.apply(allocator, input);
+        }
+    };
+}
+
+pub fn NoSlip(comptime InputType: type) type {
+    return struct {
+        const Self = @This();
+
+        inner: Dirichlet(InputType),
+
+        pub fn initBoundary(allocator: std.mem.Allocator, mesh: *const InputType.MeshT) !Self {
+            const zero_values = try allocator.alloc(f64, InputType.num_cells(mesh));
+            @memset(zero_values, 0.0);
+            return .{
+                .inner = try Dirichlet(InputType).initBoundary(allocator, mesh, zero_values),
+            };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.inner.boundary_values);
+            self.inner.deinit(allocator);
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
+            return self.inner.apply(allocator, input);
+        }
+    };
+}
+
+pub fn Periodic(comptime InputType: type) type {
+    return struct {
+        const Self = @This();
+
+        representatives: []u32,
+
+        pub fn init(allocator: std.mem.Allocator, mesh: *const InputType.MeshT, representatives: []const u32) !Self {
+            std.debug.assert(representatives.len == InputType.num_cells(mesh));
+            const owned = try allocator.dupe(u32, representatives);
+            return .{ .representatives = owned };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.representatives);
+        }
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
+            var sums = try allocator.alloc(f64, self.representatives.len);
+            defer allocator.free(sums);
+            @memset(sums, 0.0);
+
+            var counts = try allocator.alloc(u32, self.representatives.len);
+            defer allocator.free(counts);
+            @memset(counts, 0);
+
+            for (input.values, 0..) |value, idx| {
+                const representative = canonicalRepresentative(self.representatives, @intCast(idx));
+                sums[representative] += value;
+                counts[representative] += 1;
+            }
+
+            var output = try InputType.init(allocator, input.mesh);
+            errdefer output.deinit(allocator);
+
+            for (output.values, 0..) |*value, idx| {
+                const representative = canonicalRepresentative(self.representatives, @intCast(idx));
+                std.debug.assert(counts[representative] > 0);
+                value.* = sums[representative] / @as(f64, @floatFromInt(counts[representative]));
+            }
+
+            return output;
+        }
+    };
+}
+
+fn ComposedBoundaryCondition(comptime First: type, comptime Second: type) type {
+    return struct {
+        const Self = @This();
+
+        first: First,
+        second: Second,
+
+        pub fn apply(self: Self, allocator: std.mem.Allocator, input: anytype) !@TypeOf(input) {
+            var intermediate = try self.first.apply(allocator, input);
+            defer intermediate.deinit(allocator);
+            return try self.second.apply(allocator, intermediate);
+        }
+    };
+}
+
+pub fn compose(first: anytype, second: anytype) ComposedBoundaryCondition(@TypeOf(first), @TypeOf(second)) {
+    return .{
+        .first = first,
+        .second = second,
+    };
+}
+
+const Mesh2D = topology.Mesh(2, 2);
+const Mesh3D = topology.Mesh(3, 3);
+const Primal0_2D = cochain.Cochain(Mesh2D, 0, cochain.Primal);
+const Primal1_2D = cochain.Cochain(Mesh2D, 1, cochain.Primal);
+const Primal1_3D = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+
+test "boundary condition concept accepts Dirichlet and periodic on cochains" {
+    BoundaryCondition(Dirichlet(Primal0_2D), Primal0_2D);
+    BoundaryCondition(PEC(Primal1_2D), Primal1_2D);
+    BoundaryCondition(NoSlip(Primal1_3D), Primal1_3D);
+    BoundaryCondition(Periodic(Primal0_2D), Primal0_2D);
+}
+
+test "boundary selection marks boundary vertices on 2D mesh" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var selection = try BoundarySelection(Primal0_2D).initBoundary(allocator, &mesh);
+    defer selection.deinit(allocator);
+
+    try testing.expect(selection.contains(0));
+    try testing.expect(selection.contains(1));
+    try testing.expect(selection.contains(2));
+    try testing.expect(selection.contains(3));
+    try testing.expect(!selection.contains(4));
+    try testing.expect(selection.contains(5));
+    try testing.expect(selection.contains(6));
+    try testing.expect(selection.contains(7));
+    try testing.expect(selection.contains(8));
+}
+
+test "boundary selection marks boundary edges on 3D mesh" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var selection = try BoundarySelection(Primal1_3D).initBoundary(allocator, &mesh);
+    defer selection.deinit(allocator);
+
+    var selected_count: usize = 0;
+    for (selection.mask) |selected| {
+        if (selected) selected_count += 1;
+    }
+
+    try testing.expect(selected_count > 0);
+    try testing.expectEqual(@as(usize, mesh.boundary_edges.len), selected_count);
+}
+
+test "Dirichlet is idempotent on boundary vertices" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var field = try Primal0_2D.init(allocator, &mesh);
+    defer field.deinit(allocator);
+    for (field.values, 0..) |*value, idx| {
+        value.* = @floatFromInt(idx);
+    }
+
+    const boundary_values = try allocator.alloc(f64, field.values.len);
+    defer allocator.free(boundary_values);
+    for (boundary_values, 0..) |*value, idx| {
+        value.* = 100.0 + @as(f64, @floatFromInt(idx));
+    }
+
+    var bc = try Dirichlet(Primal0_2D).initBoundary(allocator, &mesh, boundary_values);
+    defer bc.deinit(allocator);
+
+    var once = try bc.apply(allocator, field);
+    defer once.deinit(allocator);
+
+    var twice = try bc.apply(allocator, once);
+    defer twice.deinit(allocator);
+
+    for (once.values, twice.values) |lhs, rhs| {
+        try testing.expectEqual(lhs, rhs);
+    }
+}
+
+test "PEC is idempotent on boundary edges" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var field = try Primal1_2D.init(allocator, &mesh);
+    defer field.deinit(allocator);
+    for (field.values, 0..) |*value, idx| {
+        value.* = 1.0 + @as(f64, @floatFromInt(idx));
+    }
+
+    var bc = try PEC(Primal1_2D).initBoundary(allocator, &mesh);
+    defer bc.deinit(allocator);
+
+    var once = try bc.apply(allocator, field);
+    defer once.deinit(allocator);
+
+    var twice = try bc.apply(allocator, once);
+    defer twice.deinit(allocator);
+
+    for (once.values, twice.values) |lhs, rhs| {
+        try testing.expectEqual(lhs, rhs);
+    }
+}
+
+test "periodic averages paired boundary vertices and is idempotent" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var field = try Primal0_2D.init(allocator, &mesh);
+    defer field.deinit(allocator);
+    field.values[0] = 2.0;
+    field.values[1] = 4.0;
+    field.values[2] = 10.0;
+    field.values[3] = 14.0;
+
+    const representatives = [_]u32{ 0, 1, 0, 1 };
+    var bc = try Periodic(Primal0_2D).init(allocator, &mesh, &representatives);
+    defer bc.deinit(allocator);
+
+    var once = try bc.apply(allocator, field);
+    defer once.deinit(allocator);
+
+    var twice = try bc.apply(allocator, once);
+    defer twice.deinit(allocator);
+
+    try testing.expectEqual(@as(f64, 6.0), once.values[0]);
+    try testing.expectEqual(@as(f64, 6.0), once.values[2]);
+    try testing.expectEqual(@as(f64, 9.0), once.values[1]);
+    try testing.expectEqual(@as(f64, 9.0), once.values[3]);
+
+    for (once.values, twice.values) |lhs, rhs| {
+        try testing.expectEqual(lhs, rhs);
+    }
+}
+
+test "Dirichlet composed with exterior derivative zeros boundary-edge gradient for constant boundary data" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var field = try Primal0_2D.init(allocator, &mesh);
+    defer field.deinit(allocator);
+
+    const coords = mesh.vertices.slice().items(.coords);
+    for (field.values, coords) |*value, coord| {
+        value.* = coord[0] + 2.0 * coord[1];
+    }
+
+    const boundary_values = try allocator.alloc(f64, field.values.len);
+    defer allocator.free(boundary_values);
+    @memset(boundary_values, 5.0);
+
+    var bc = try Dirichlet(Primal0_2D).initBoundary(allocator, &mesh, boundary_values);
+    defer bc.deinit(allocator);
+
+    var constrained = try bc.apply(allocator, field);
+    defer constrained.deinit(allocator);
+
+    var derivative = try exterior_derivative_mod.exterior_derivative(allocator, constrained);
+    defer derivative.deinit(allocator);
+
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expectApproxEqAbs(@as(f64, 0.0), derivative.values[edge_idx], 1e-12);
+    }
+}

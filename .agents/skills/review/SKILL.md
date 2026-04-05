@@ -78,6 +78,10 @@ These are the findings the user is least likely to catch:
 - Labels correct: `type/`, `domain/`, `priority/` all set?
 - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
 - Are there follow-on issues that should be opened before this merges?
+- If review exposes **non-blocking but real** follow-on work that should not bloat the current PR:
+  - Check whether it is already tracked
+  - If not, recommend opening a **non-milestone** issue with concrete scope and labels
+  - When operating autonomously on project hygiene, opening that issue directly is preferred to leaving the work implicit
 
 ## Output format
 

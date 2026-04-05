@@ -385,3 +385,29 @@ stack yet. Keeping the flat path unchanged preserves existing callers and
 benchmarks. Deferring Riemannian `★₀` is honest: the missing data lives in the
 mesh layer, so pretending otherwise would bake in a mathematically dubious
 approximation.
+
+## 2026-04-05: Boundary conditions are same-space projections; periodic uses explicit representatives
+
+**Decision:** Boundary conditions in `src/operators/boundary_conditions.zig`
+apply to a cochain and return the same cochain type
+(`apply(allocator, input) -> InputType`). Dirichlet-like conditions derive
+their constrained DOFs from topology-driven boundary masks. Periodic conditions
+take an explicit representative map over DOFs instead of inferring pairings
+from mesh geometry.
+
+**Alternatives considered:**
+1. In-place mutation only (`apply(*cochain)`): rejected because the BC library
+   is easier to compose when each BC is a projection value rather than a
+   mutation convention, and keeping a single public entrypoint avoids a
+   parallel API.
+2. Put automatic periodic pairing on `Mesh`: rejected because the topology
+   layer owns incidence and geometry, not domain-identification policy.
+   Baking periodic pairing into mesh construction would force rectangle/cuboid
+   assumptions into a mesh-generic library.
+
+**Rationale:** Dirichlet, PEC, and no-slip are all projections onto constrained
+subspaces, so a same-space return type is the cleanest common model and fits
+future BC composition. Periodic pairing is a simulation-setup choice rather
+than a topological invariant. An explicit representative map keeps the
+topology component honest and leaves room for later geometry-driven helpers
+without freezing that policy into `Mesh` now.
