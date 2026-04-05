@@ -15,10 +15,34 @@ const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const conjugate_gradient = @import("../math/cg.zig");
+const whitney_mass = @import("whitney_mass.zig");
 
 pub const SolveError = error{
     HodgeStarInverseDidNotConverge,
 };
+
+pub const MetricMode = enum {
+    flat,
+    riemannian,
+};
+
+pub const MetricError = error{
+    MetricNotYetImplemented,
+    UnsupportedMetricDegree,
+};
+
+pub fn Metric(comptime MeshType: type, comptime mode: MetricMode) type {
+    return switch (mode) {
+        .flat => struct {
+            pub const metric_mode = MetricMode.flat;
+        },
+        .riemannian => struct {
+            pub const metric_mode = MetricMode.riemannian;
+
+            top_simplex_tensors: []const [MeshType.topological_dimension][MeshType.topological_dimension]f64,
+        },
+    };
+}
 
 const WhitneyInverseSolveParams = struct {
     relative_tolerance: f64,
@@ -168,6 +192,126 @@ pub fn hodge_star_inverse(
     return apply_hodge_star_inverse(allocator, input);
 }
 
+pub fn apply_hodge_star_with_metric(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarResult(@TypeOf(input)) {
+    return switch (@TypeOf(metric).metric_mode) {
+        .flat => apply_hodge_star(allocator, input),
+        .riemannian => apply_hodge_star_riemannian(allocator, metric, input),
+    };
+}
+
+pub fn apply_hodge_star_inverse_with_metric(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarInverseResult(@TypeOf(input)) {
+    return switch (@TypeOf(metric).metric_mode) {
+        .flat => apply_hodge_star_inverse(allocator, input),
+        .riemannian => apply_hodge_star_inverse_riemannian(allocator, metric, input),
+    };
+}
+
+pub fn hodge_star_with_metric(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarResult(@TypeOf(input)) {
+    return apply_hodge_star_with_metric(allocator, metric, input);
+}
+
+pub fn hodge_star_inverse_with_metric(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarInverseResult(@TypeOf(input)) {
+    return apply_hodge_star_inverse_with_metric(allocator, metric, input);
+}
+
+fn apply_hodge_star_riemannian(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarResult(@TypeOf(input)) {
+    const InputType = @TypeOf(input);
+    comptime validateHodgeStarInput(InputType);
+
+    const MeshType = InputType.MeshT;
+    const k = InputType.degree;
+    const n = MeshType.topological_dimension;
+    std.debug.assert(metric.top_simplex_tensors.len == input.mesh.num_cells(n));
+
+    var output = try HodgeStarResult(InputType).init(allocator, input.mesh);
+    errdefer output.deinit(allocator);
+
+    if (comptime supportsWhitneyMassDegree(MeshType, k)) {
+        var matrix = try whitney_mass.assemble_whitney_mass_with_metric(k, allocator, input.mesh, metric.top_simplex_tensors);
+        defer matrix.deinit(allocator);
+        sparse.spmv(matrix, input.values, output.values);
+        return output;
+    }
+
+    if (k == n) {
+        const primal_volumes = input.mesh.simplices(n).items(.volume);
+        for (output.values, input.values, primal_volumes, metric.top_simplex_tensors) |*out, in_value, volume, tensor| {
+            const metric_volume = volume * @sqrt(metricTensorDeterminant(n, tensor));
+            std.debug.assert(metric_volume != 0.0);
+            out.* = in_value / metric_volume;
+        }
+        return output;
+    }
+
+    return MetricError.UnsupportedMetricDegree;
+}
+
+fn apply_hodge_star_inverse_riemannian(
+    allocator: std.mem.Allocator,
+    metric: anytype,
+    input: anytype,
+) !HodgeStarInverseResult(@TypeOf(input)) {
+    const InputType = @TypeOf(input);
+    comptime validateHodgeStarInverseInput(InputType);
+
+    const MeshType = InputType.MeshT;
+    const n = MeshType.topological_dimension;
+    const primal_degree = n - InputType.degree;
+    std.debug.assert(metric.top_simplex_tensors.len == input.mesh.num_cells(n));
+
+    var output = try HodgeStarInverseResult(InputType).init(allocator, input.mesh);
+    errdefer output.deinit(allocator);
+
+    if (comptime supportsWhitneyMassDegree(MeshType, primal_degree)) {
+        var matrix = try whitney_mass.assemble_whitney_mass_with_metric(primal_degree, allocator, input.mesh, metric.top_simplex_tensors);
+        defer matrix.deinit(allocator);
+
+        const diagonal = try assembleMatrixDiagonal(allocator, matrix);
+        defer allocator.free(diagonal);
+
+        try solveWhitneyInverse(
+            allocator,
+            matrix,
+            diagonal,
+            input.values,
+            output.values,
+            whitneyInverseSolveParams(MeshType, primal_degree).relative_tolerance,
+            whitneyInverseSolveParams(MeshType, primal_degree).iteration_limit,
+        );
+        return output;
+    }
+
+    if (primal_degree == n) {
+        const primal_volumes = input.mesh.simplices(n).items(.volume);
+        for (output.values, input.values, primal_volumes, metric.top_simplex_tensors) |*out, in_value, volume, tensor| {
+            out.* = in_value * volume * @sqrt(metricTensorDeterminant(n, tensor));
+        }
+        return output;
+    }
+
+    return MetricError.UnsupportedMetricDegree;
+}
+
 // ── Return type helpers ──────────────────────────────────────────────────
 
 fn HodgeStarResult(comptime InputType: type) type {
@@ -281,6 +425,26 @@ fn solveWhitneyInverse(
     }
 }
 
+fn assembleMatrixDiagonal(
+    allocator: std.mem.Allocator,
+    matrix: sparse.CsrMatrix(f64),
+) ![]f64 {
+    const diagonal = try allocator.alloc(f64, matrix.n_rows);
+    errdefer allocator.free(diagonal);
+    @memset(diagonal, 0.0);
+
+    for (0..matrix.n_rows) |row_idx| {
+        const row = matrix.row(@intCast(row_idx));
+        for (row.cols, row.vals) |col_idx, value| {
+            if (col_idx != row_idx) continue;
+            diagonal[row_idx] += value;
+        }
+        std.debug.assert(diagonal[row_idx] > 0.0);
+    }
+
+    return diagonal;
+}
+
 // ── Diagonal application ────────────────────────────────────────────────
 
 fn applyDiagonalForward(
@@ -347,6 +511,32 @@ fn supportsWhitneyMassDegree(comptime MeshType: type, comptime primal_degree: co
     return primal_degree > 0 and primal_degree < MeshType.topological_dimension;
 }
 
+fn metricTensorDeterminant(
+    comptime n: comptime_int,
+    tensor: [n][n]f64,
+) f64 {
+    if (n == 2) {
+        return tensor[0][0] * tensor[1][1] - tensor[0][1] * tensor[1][0];
+    }
+
+    if (n == 3) {
+        const a = tensor[0][0];
+        const b = tensor[0][1];
+        const c = tensor[0][2];
+        const d = tensor[1][0];
+        const e = tensor[1][1];
+        const f = tensor[1][2];
+        const g = tensor[2][0];
+        const h = tensor[2][1];
+        const i = tensor[2][2];
+        return a * (e * i - f * h) -
+            b * (d * i - f * g) +
+            c * (d * h - e * g);
+    }
+
+    @compileError("metric tensor determinant is only implemented for n = 2 or n = 3");
+}
+
 fn whitneyInverseSolveParams(comptime MeshType: type, comptime primal_degree: comptime_int) WhitneyInverseSolveParams {
     std.debug.assert(supportsWhitneyMassDegree(MeshType, primal_degree));
 
@@ -370,6 +560,13 @@ fn whitneyInverseSolveParams(comptime MeshType: type, comptime primal_degree: co
 fn expectApproxEqRelOrAbs(expected: f64, actual: f64, relative_tolerance: f64, absolute_tolerance: f64) !void {
     const tolerance = @max(absolute_tolerance, @abs(expected) * relative_tolerance);
     try testing.expect(@abs(expected - actual) <= tolerance);
+}
+
+fn expectSlicesApproxEqAbs(expected: []const f64, actual: []const f64, tolerance: f64) !void {
+    try testing.expectEqual(expected.len, actual.len);
+    for (expected, actual) |expected_value, actual_value| {
+        try testing.expectApproxEqAbs(expected_value, actual_value, tolerance);
+    }
 }
 
 fn expectRoundTripIdentity3DForDegree(
@@ -527,6 +724,146 @@ test "★₂ scales by 1 / face area" {
     const face_volumes = mesh.simplices(2).items(.volume);
     for (result.values, face_volumes) |r, volume| {
         try testing.expectApproxEqAbs(1.0 / volume, r, 1e-15);
+    }
+}
+
+test "Metric(.flat) reproduces Euclidean Hodge star exactly for all 2D degrees" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    const metric = Metric(Mesh2D, .flat){};
+
+    {
+        var omega = try PrimalC0.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+        for (omega.values, 0..) |*value, idx| value.* = @as(f64, @floatFromInt(idx + 1)) * 0.5;
+
+        var baseline = try hodge_star(allocator, omega);
+        defer baseline.deinit(allocator);
+
+        var metric_result = try hodge_star_with_metric(allocator, metric, omega);
+        defer metric_result.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(baseline.values, metric_result.values, 1e-15);
+    }
+
+    {
+        var omega = try PrimalC1.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+        for (omega.values, 0..) |*value, idx| value.* = @as(f64, @floatFromInt(idx + 1)) * -0.25;
+
+        var baseline = try hodge_star(allocator, omega);
+        defer baseline.deinit(allocator);
+
+        var metric_result = try hodge_star_with_metric(allocator, metric, omega);
+        defer metric_result.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(baseline.values, metric_result.values, 1e-15);
+    }
+
+    {
+        var omega = try PrimalC2.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+        for (omega.values, 0..) |*value, idx| value.* = @as(f64, @floatFromInt(idx + 1)) * 0.75;
+
+        var baseline = try hodge_star(allocator, omega);
+        defer baseline.deinit(allocator);
+
+        var metric_result = try hodge_star_with_metric(allocator, metric, omega);
+        defer metric_result.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(baseline.values, metric_result.values, 1e-15);
+    }
+}
+
+test "Metric(.riemannian) on a constant tensor matches Euclidean star on the pulled-back mesh" {
+    const allocator = testing.allocator;
+    const faces = [_][3]u32{
+        .{ 0, 1, 2 },
+        .{ 0, 2, 3 },
+    };
+    const euclidean_vertices = [_][2]f64{
+        .{ 0.0, 0.0 },
+        .{ 1.0, 0.0 },
+        .{ 1.0, 1.0 },
+        .{ 0.0, 1.0 },
+    };
+    const transformed_vertices = [_][2]f64{
+        .{ 0.0, 0.0 },
+        .{ 2.0, 0.0 },
+        .{ 2.0, 1.0 },
+        .{ 0.0, 1.0 },
+    };
+
+    var base_mesh = try Mesh2D.from_triangles(allocator, &euclidean_vertices, &faces);
+    defer base_mesh.deinit(allocator);
+
+    var transformed_mesh = try Mesh2D.from_triangles(allocator, &transformed_vertices, &faces);
+    defer transformed_mesh.deinit(allocator);
+
+    const tensors = [_][2][2]f64{
+        .{ .{ 4.0, 0.0 }, .{ 0.0, 1.0 } },
+        .{ .{ 4.0, 0.0 }, .{ 0.0, 1.0 } },
+    };
+    const metric = Metric(Mesh2D, .riemannian){
+        .top_simplex_tensors = &tensors,
+    };
+
+    var omega_base = try PrimalC1.init(allocator, &base_mesh);
+    defer omega_base.deinit(allocator);
+    var omega_transformed = try PrimalC1.init(allocator, &transformed_mesh);
+    defer omega_transformed.deinit(allocator);
+
+    for (omega_base.values, 0..) |*value, idx| {
+        value.* = @as(f64, @floatFromInt(idx + 1)) * 0.25;
+        omega_transformed.values[idx] = value.*;
+    }
+
+    var metric_result = try hodge_star_with_metric(allocator, metric, omega_base);
+    defer metric_result.deinit(allocator);
+
+    var transformed_result = try hodge_star(allocator, omega_transformed);
+    defer transformed_result.deinit(allocator);
+
+    try expectSlicesApproxEqAbs(transformed_result.values, metric_result.values, 1e-12);
+}
+
+test "Metric(.riemannian) preserves ★⁻¹ ∘ ★ = id for 2D primal 1-forms" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const face_count = mesh.num_faces();
+    const tensors = try allocator.alloc([2][2]f64, face_count);
+    defer allocator.free(tensors);
+    for (tensors, 0..) |*tensor, face_idx| {
+        if ((face_idx % 2) == 0) {
+            tensor.* = .{ .{ 2.0, 0.25 }, .{ 0.25, 1.5 } };
+        } else {
+            tensor.* = .{ .{ 1.5, -0.1 }, .{ -0.1, 1.25 } };
+        }
+    }
+
+    const metric = Metric(Mesh2D, .riemannian){
+        .top_simplex_tensors = tensors,
+    };
+
+    var rng = std.Random.DefaultPrng.init(0x85_600D);
+    for (0..100) |_| {
+        var omega = try PrimalC1.init(allocator, &mesh);
+        defer omega.deinit(allocator);
+        for (omega.values) |*value| value.* = rng.random().float(f64) * 20.0 - 10.0;
+
+        var starred = try hodge_star_with_metric(allocator, metric, omega);
+        defer starred.deinit(allocator);
+
+        var round_trip = try hodge_star_inverse_with_metric(allocator, metric, starred);
+        defer round_trip.deinit(allocator);
+
+        for (omega.values, round_trip.values) |expected, actual| {
+            try testing.expectApproxEqRel(expected, actual, 1e-6);
+        }
     }
 }
 
