@@ -521,6 +521,140 @@ test "vtu all cell types are triangle (type 5)" {
     try testing.expectEqual(mesh.num_faces(), @as(u32, @intCast(count)));
 }
 
+test "vtu 3D piece counts use tetrahedra as cells" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const expected_piece = try std.fmt.allocPrint(allocator, "NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\"", .{
+        mesh.num_vertices(),
+        mesh.num_tets(),
+    });
+    defer allocator.free(expected_piece);
+
+    try testing.expect(std.mem.indexOf(u8, output.items, expected_piece) != null);
+}
+
+test "vtu tetrahedral connectivity matches mesh tet vertices" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const xml = output.items;
+    const conn_start_tag = "Name=\"connectivity\" format=\"ascii\">";
+    const conn_start = std.mem.indexOf(u8, xml, conn_start_tag).? + conn_start_tag.len;
+    const conn_end = std.mem.indexOfPos(u8, xml, conn_start, "</DataArray>").?;
+    const conn_block = xml[conn_start..conn_end];
+
+    const tet_verts = mesh.simplices(3).items(.vertices);
+    var tet_idx: usize = 0;
+    var line_iter = std.mem.tokenizeScalar(u8, conn_block, '\n');
+    while (line_iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        var tok = std.mem.tokenizeScalar(u8, trimmed, ' ');
+        const token0 = tok.next();
+        const token1 = tok.next();
+        const token2 = tok.next();
+        const token3 = tok.next();
+        try testing.expect(token0 != null);
+        try testing.expect(token1 != null);
+        try testing.expect(token2 != null);
+        try testing.expect(token3 != null);
+
+        const v0 = try std.fmt.parseInt(u32, token0.?, 10);
+        const v1 = try std.fmt.parseInt(u32, token1.?, 10);
+        const v2 = try std.fmt.parseInt(u32, token2.?, 10);
+        const v3 = try std.fmt.parseInt(u32, token3.?, 10);
+
+        try testing.expectEqual(tet_verts[tet_idx][0], v0);
+        try testing.expectEqual(tet_verts[tet_idx][1], v1);
+        try testing.expectEqual(tet_verts[tet_idx][2], v2);
+        try testing.expectEqual(tet_verts[tet_idx][3], v3);
+        try testing.expect(tok.next() == null);
+        tet_idx += 1;
+    }
+
+    try testing.expectEqual(mesh.num_tets(), @as(u32, @intCast(tet_idx)));
+}
+
+test "vtu 3D cell types are tetrahedron (type 10)" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const xml = output.items;
+    const types_start_tag = "Name=\"types\" format=\"ascii\">";
+    const types_start = std.mem.indexOf(u8, xml, types_start_tag).? + types_start_tag.len;
+    const types_end = std.mem.indexOfPos(u8, xml, types_start, "</DataArray>").?;
+    const types_block = xml[types_start..types_end];
+
+    var count: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, types_block, " \t\n\r");
+    while (tok.next()) |t| {
+        const val = try std.fmt.parseInt(u8, t, 10);
+        try testing.expectEqual(@as(u8, 10), val);
+        count += 1;
+    }
+
+    try testing.expectEqual(mesh.num_tets(), @as(u32, @intCast(count)));
+}
+
+test "vtu 3D PointData and CellData round-trip with tetrahedral mesh" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const point_values = try allocator.alloc(f64, mesh.num_vertices());
+    defer allocator.free(point_values);
+    for (point_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) + 0.25;
+    }
+
+    const cell_values = try allocator.alloc(f64, mesh.num_tets());
+    defer allocator.free(cell_values);
+    for (cell_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) * 2.0 + 0.5;
+    }
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    const pd = [_]DataArraySlice{.{ .name = "temperature_3d", .values = point_values }};
+    const cd = [_]DataArraySlice{.{ .name = "pressure_3d", .values = cell_values }};
+    try write(output.writer(allocator), 3, 3, mesh, &pd, &cd);
+
+    const parsed_point = try parseDataArray(allocator, output.items, "temperature_3d");
+    defer allocator.free(parsed_point);
+    try testing.expectEqual(point_values.len, parsed_point.len);
+    for (point_values, parsed_point) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
+
+    const parsed_cell = try parseDataArray(allocator, output.items, "pressure_3d");
+    defer allocator.free(parsed_cell);
+    try testing.expectEqual(cell_values.len, parsed_cell.len);
+    for (cell_values, parsed_cell) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Parsing
 // ───────────────────────────────────────────────────────────────────────────
