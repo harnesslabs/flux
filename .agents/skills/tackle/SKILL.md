@@ -86,7 +86,7 @@ Design the public interface before implementing internals.
 1. Write function signatures, struct definitions, and type-level constraints as stubs.
 2. Use `@compileError("not yet implemented")` or `unreachable` for function bodies.
 3. Verify the tests compile against the stubs (they should fail at runtime, not compile time).
-4. **Checkpoint: present the API surface to the user.** Show the type signatures, struct layout, and how tests use them. This is where design choices surface — ask for confirmation before proceeding.
+4. **Default-forward checkpoint:** present the API surface to the user briefly, but continue without waiting for confirmation unless the design is materially uncertain, introduces a cross-component interface, or would be expensive to unwind if wrong. Ask for confirmation only in those cases.
 5. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
    - Read the current epoch's `decision_log.md`
    - Append the decision in the standard format (see `/decide`)
