@@ -114,6 +114,11 @@ Fill in the stubs until tests pass.
    - If benchmark methodology changes for a row, bump that row's per-benchmark `version` only for the affected benchmarks.
    - Do not claim a base-vs-PR speedup from a row whose benchmark `version` changed.
    - If the base branch lacks a benchmark for the claimed win, add a same-run comparison benchmark so the PR still demonstrates the improvement.
+9. Maintain a short list of **scoped-out follow-on work** discovered while implementing:
+   - API annoyances, missing topology hooks, duplicated logic, naming drift, or cleanup that became obvious only because you were in the code
+   - Do **not** expand the current PR to include these unless they are required to finish the issue correctly
+   - Before creating anything, check whether the follow-on is already tracked
+   - If it is real, untracked, and worth doing later, open a **non-milestone** GitHub issue with the normal labels (`type/`, `domain/`, `priority/`) and explicitly leave milestone unset
 
 The rhythm is: **write → test → commit → push → repeat**.
 
@@ -129,11 +134,12 @@ The rhythm is: **write → test → commit → push → repeat**.
    - Does existing documentation need updating?
    - Does this change the public API in a way that affects other modules?
    - Are there follow-on issues that should be opened?
-4. Mark the PR as ready for review:
+4. If you discovered real follow-on work during implementation and it is not already tracked, open the non-milestone issue(s) now and mention them in the PR description.
+5. Mark the PR as ready for review:
    ```sh
    gh pr ready <number>
    ```
-5. Report the PR URL and **STOP**. Do not merge.
+6. Report the PR URL and **STOP**. Do not merge.
 
 The user reviews API shape and test coverage. The agent (via `/review`) reviews implementation details.
 
