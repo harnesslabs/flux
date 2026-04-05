@@ -248,3 +248,31 @@ faces across adjacent cells, and provides a clean foundation for M2 invariant
 tests. The tradeoff is a larger tetrahedron count than a 5-tet scheme, which
 is acceptable here because correctness and orientation regularity matter more
 than minimizing element count in the initial 3D test-bed constructor.
+
+## 2026-04-04: Interior-degree Hodge stars are stored as a degree-indexed Whitney family on the mesh
+
+**Decision:** Replace the mesh's single `whitney_mass_1`/`preconditioner_1`
+fields with a degree-indexed `whitney_operators` family covering every
+interior degree `1..n-1`. The Hodge star dispatch remains simple:
+boundary degrees `k = 0` and `k = n` use diagonal geometric ratios, while
+every interior degree uses the Whitney/Galerkin mass matrix `M_k` for forward
+application and PCG for `★⁻¹`, initialized from the diagonal dual/primal ratio.
+
+**Alternatives considered:**
+1. Keep a special `whitney_mass_1` path and add a separate 3D-only `k = 2`
+   implementation beside it: rejected because it hard-codes today's dimensions
+   into the API and duplicates the same ownership/lifetime pattern under
+   different names.
+2. Keep the old diagonal 3D interior Hodge formulas as public execution paths:
+   rejected because on barycentric duals they are preconditioners, not the
+   correct Galerkin operator, so preserving them as peers would repeat the
+   same mistake issue #70 fixed for 2D `★₁`.
+
+**Rationale:** The geometry/topology layer already owns the data every Whitney
+Hodge star needs: primal measures, dual measures, simplex incidence, and
+barycenters. Storing interior operators by degree keeps the public surface at
+one obvious rule, removes dimension-specific API bloat, and leaves the correct
+mathematical specialization in the implementation rather than in caller-visible
+field names. Using the diagonal ratio as the PCG preconditioner and initial
+guess preserves the DEC intuition as a fast spectral approximation without
+pretending it is the operator itself.

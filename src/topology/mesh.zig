@@ -11,6 +11,16 @@ const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 const whitney = @import("../operators/whitney_mass.zig");
 
+pub const WhitneyMassOperator = struct {
+    mass: sparse.CsrMatrix(f64),
+    preconditioner: []f64,
+
+    pub fn deinit(self: *WhitneyMassOperator, allocator: std.mem.Allocator) void {
+        allocator.free(self.preconditioner);
+        self.mass.deinit(allocator);
+    }
+};
+
 /// Boundary operators use packed sign storage: one bit per stored incidence.
 pub const BoundaryMatrix = sparse.PackedIncidenceMatrix;
 const DenseBoundaryMatrix = sparse.CsrMatrix(i8);
@@ -148,22 +158,17 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// Precomputed during construction for use by boundary condition routines.
         boundary_edges: []u32,
 
-        /// Whitney 1-form mass matrix M₁ for the Galerkin Hodge star ★₁.
-        /// M₁(eᵢ, eⱼ) = ∫_Ω Wᵢ · Wⱼ dA — sparse SPD, exact on any triangulation.
-        /// Used by hodge_star for k=1 (SpMV) and hodge_star_inverse for k=1 (CG solve).
-        whitney_mass_1: sparse.CsrMatrix(f64),
-
-        /// Diagonal preconditioner for CG solves with whitney_mass_1.
-        /// Values are the diagonal ★₁ = dual_volume / volume per edge —
-        /// spectrally equivalent to M₁, giving mesh-independent iteration counts.
-        preconditioner_1: []f64,
+        /// Whitney/Galerkin Hodge-star data for interior degrees `1..n-1`.
+        /// Slot `k-1` stores the mass matrix and diagonal preconditioner for degree `k`.
+        whitney_operators: [topological_dimension - 1]WhitneyMassOperator,
 
         // -- Lifetime --
 
         /// Free all entity storage and boundary matrices.
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.preconditioner_1);
-            self.whitney_mass_1.deinit(allocator);
+            inline for (&self.whitney_operators) |*operator| {
+                operator.deinit(allocator);
+            }
             allocator.free(self.boundary_edges);
             allocator.free(self.dual_edge_volumes);
             self.vertices.deinit(allocator);
@@ -218,6 +223,26 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return @intCast(self.simplex_lists[k - 1].len);
         }
 
+        pub fn whitney_mass(self: *const Self, comptime k: comptime_int) sparse.CsrMatrix(f64) {
+            if (k <= 0 or k >= topological_dimension) {
+                @compileError(std.fmt.comptimePrint(
+                    "no interior Whitney mass exists for degree {d} on a {d}-dimensional mesh",
+                    .{ k, topological_dimension },
+                ));
+            }
+            return self.whitney_operators[k - 1].mass;
+        }
+
+        pub fn whitney_preconditioner(self: *const Self, comptime k: comptime_int) []const f64 {
+            if (k <= 0 or k >= topological_dimension) {
+                @compileError(std.fmt.comptimePrint(
+                    "no interior Whitney preconditioner exists for degree {d} on a {d}-dimensional mesh",
+                    .{ k, topological_dimension },
+                ));
+            }
+            return self.whitney_operators[k - 1].preconditioner;
+        }
+
         /// Number of vertices in the mesh.
         pub fn num_vertices(self: Self) u32 {
             return self.num_cells(0);
@@ -236,6 +261,32 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// Number of tetrahedra in the mesh (only for topological_dimension ≥ 3).
         pub fn num_tets(self: Self) u32 {
             return self.num_cells(3);
+        }
+
+        fn assembleWhitneyOperators(allocator: std.mem.Allocator, mesh: *const Self) ![topological_dimension - 1]WhitneyMassOperator {
+            var operators: [topological_dimension - 1]WhitneyMassOperator = undefined;
+            var initialized_count: usize = 0;
+            errdefer {
+                for (operators[0..initialized_count]) |*operator| {
+                    operator.deinit(allocator);
+                }
+            }
+
+            inline for (1..topological_dimension) |k| {
+                var mass = try whitney.assemble_whitney_mass(k, allocator, mesh);
+                errdefer mass.deinit(allocator);
+
+                const preconditioner = try whitney.assemble_whitney_preconditioner(k, allocator, mesh);
+                errdefer allocator.free(preconditioner);
+
+                operators[k - 1] = .{
+                    .mass = mass,
+                    .preconditioner = preconditioner,
+                };
+                initialized_count += 1;
+            }
+
+            return operators;
         }
 
         // ───────────────────────────────────────────────────────────────────
@@ -584,24 +635,9 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
                 .boundaries = .{ boundary_1, boundary_2 },
                 .dual_edge_volumes = dual_edge_volumes,
                 .boundary_edges = boundary_edge_buf,
-                .whitney_mass_1 = undefined,
-                .preconditioner_1 = undefined,
+                .whitney_operators = undefined,
             };
-
-            var mass = try whitney.assemble_whitney_mass_1(allocator, &partial);
-            errdefer mass.deinit(allocator);
-
-            const precond = try allocator.alloc(f64, edge_count);
-            errdefer allocator.free(precond);
-            {
-                const edge_volumes = edges_list.slice().items(.volume);
-                for (precond, edge_volumes, dual_edge_volumes) |*p, volume, dual_volume| {
-                    p.* = dual_volume / volume;
-                }
-            }
-
-            partial.whitney_mass_1 = mass;
-            partial.preconditioner_1 = precond;
+            partial.whitney_operators = try assembleWhitneyOperators(allocator, &partial);
             return partial;
         }
 
@@ -937,21 +973,17 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             }
             std.debug.assert(boundary_edge_write == boundary_edge_count);
 
-            var dummy_mass = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
-            errdefer dummy_mass.deinit(allocator);
-
-            const preconditioner = try allocator.alloc(f64, 0);
-            errdefer allocator.free(preconditioner);
-
-            return .{
+            var partial = Self{
                 .vertices = vertices,
                 .simplex_lists = .{ edges_list, faces_list, tets_list },
                 .boundaries = .{ boundary_1, boundary_2, boundary_3 },
                 .dual_edge_volumes = dual_edge_volumes,
                 .boundary_edges = boundary_edges,
-                .whitney_mass_1 = dummy_mass,
-                .preconditioner_1 = preconditioner,
+                .whitney_operators = undefined,
             };
+            partial.whitney_operators = try assembleWhitneyOperators(allocator, &partial);
+
+            return partial;
         }
 
         // ───────────────────────────────────────────────────────────────────
@@ -1641,20 +1673,16 @@ fn build_single_tet(allocator: std.mem.Allocator) !Mesh(3, 3) {
         .barycenter = .{ 0.25, 0.25, 0.25 },
     });
 
-    // Whitney mass and preconditioner are placeholders for 3D
-    // (Whitney 1-form mass on tets is a different formula, tracked by #82).
-    const dummy_mass = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
-    errdefer dummy_mass.deinit(allocator);
-
-    return .{
+    var mesh = M{
         .vertices = vertices,
         .simplex_lists = .{ edges, faces, tets },
         .boundaries = .{ boundary_1, boundary_2, boundary_3 },
         .dual_edge_volumes = dual_edge_volumes,
         .boundary_edges = &.{},
-        .whitney_mass_1 = dummy_mass,
-        .preconditioner_1 = &.{},
+        .whitney_operators = undefined,
     };
+    mesh.whitney_operators = try M.assembleWhitneyOperators(allocator, &mesh);
+    return mesh;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

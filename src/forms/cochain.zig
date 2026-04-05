@@ -179,12 +179,7 @@ pub fn Cochain(comptime MeshType: type, comptime k: comptime_int, comptime D: ty
                 MeshType.topological_dimension - k
             else
                 k;
-            return switch (effective_degree) {
-                0 => mesh.num_vertices(),
-                1 => mesh.num_edges(),
-                2 => mesh.num_faces(),
-                else => @compileError("unsupported degree for num_cells lookup"),
-            };
+            return mesh.num_cells(effective_degree);
         }
 
         /// Allocate a zero-initialized cochain on the given mesh.

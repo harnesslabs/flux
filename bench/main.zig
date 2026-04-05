@@ -30,6 +30,7 @@ const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);
 const OperatorContext2D = flux.OperatorContext(Mesh2D);
 const MaxwellState2D = maxwell.State(Mesh2D);
 const ArithmeticMesh = struct {
+    pub const embedding_dimension = 2;
     pub const topological_dimension = 2;
 
     vertices: u32,
@@ -46,6 +47,15 @@ const ArithmeticMesh = struct {
 
     pub fn num_faces(self: *const @This()) u32 {
         return self.faces;
+    }
+
+    pub fn num_cells(self: *const @This(), comptime k: comptime_int) u32 {
+        return switch (k) {
+            0 => self.num_vertices(),
+            1 => self.num_edges(),
+            2 => self.num_faces(),
+            else => @compileError("ArithmeticMesh only supports cell counts for degrees 0, 1, and 2"),
+        };
     }
 };
 const ArithmeticC1 = flux.Cochain(ArithmeticMesh, 1, flux.Primal);
