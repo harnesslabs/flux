@@ -44,15 +44,77 @@ pub const Error = error{
 };
 
 pub fn parse_obj(allocator: std.mem.Allocator, bytes: []const u8) !RawMesh {
-    _ = allocator;
-    _ = bytes;
-    return Error.NotYetImplemented;
+    var raw_mesh = RawMesh{};
+    errdefer raw_mesh.deinit(allocator);
+
+    var line_iter = std.mem.splitScalar(u8, bytes, '\n');
+    while (line_iter.next()) |line_raw| {
+        const line = std.mem.trim(u8, line_raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+
+        if (std.mem.startsWith(u8, line, "v ")) {
+            var tokens = std.mem.tokenizeAny(u8, line[2..], " \t");
+            const x_text = tokens.next() orelse return Error.InvalidVertexRecord;
+            const y_text = tokens.next() orelse return Error.InvalidVertexRecord;
+            const z_text = tokens.next() orelse return Error.InvalidVertexRecord;
+            const x = try std.fmt.parseFloat(f64, x_text);
+            const y = try std.fmt.parseFloat(f64, y_text);
+            const z = try std.fmt.parseFloat(f64, z_text);
+            try raw_mesh.vertices.append(allocator, .{ x, y, z });
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "f ")) {
+            const face_start: u32 = @intCast(raw_mesh.face_vertex_indices.items.len);
+            var face_len: u32 = 0;
+            var tokens = std.mem.tokenizeAny(u8, line[2..], " \t");
+            while (tokens.next()) |token| {
+                if (token.len == 0) continue;
+                var vertex_token_iter = std.mem.splitScalar(u8, token, '/');
+                const vertex_token = vertex_token_iter.first();
+                const vertex_index_1_based = try std.fmt.parseInt(i32, vertex_token, 10);
+                if (vertex_index_1_based <= 0) {
+                    if (vertex_index_1_based < 0) return Error.NegativeIndexNotSupported;
+                    return Error.InvalidIndex;
+                }
+                const vertex_index: u32 = @intCast(vertex_index_1_based - 1);
+                if (vertex_index >= raw_mesh.vertices.items.len) return Error.InvalidIndex;
+                try raw_mesh.face_vertex_indices.append(allocator, vertex_index);
+                face_len += 1;
+            }
+
+            if (face_len < 3) return Error.EmptyFace;
+            try raw_mesh.faces.append(allocator, .{ .start = face_start, .len = face_len });
+        }
+    }
+
+    return raw_mesh;
 }
 
 pub fn triangulate(allocator: std.mem.Allocator, raw_mesh: *const RawMesh) !TriangulatedSurface {
-    _ = allocator;
-    _ = raw_mesh;
-    return Error.NotYetImplemented;
+    var triangle_count: usize = 0;
+    for (raw_mesh.faces.items) |face| {
+        triangle_count += face.len - 2;
+    }
+
+    const triangles = try allocator.alloc([3]u32, triangle_count);
+    errdefer allocator.free(triangles);
+
+    var triangle_write: usize = 0;
+    for (raw_mesh.faces.items) |face| {
+        const vertex_indices = raw_mesh.face_vertex_indices.items[face.start .. face.start + face.len];
+        const anchor = vertex_indices[0];
+        for (1..vertex_indices.len - 1) |idx| {
+            triangles[triangle_write] = .{ anchor, vertex_indices[idx], vertex_indices[idx + 1] };
+            triangle_write += 1;
+        }
+    }
+    std.debug.assert(triangle_write == triangle_count);
+
+    return .{
+        .vertex_coords = raw_mesh.vertices.items,
+        .triangles = triangles,
+    };
 }
 
 test "OBJ parser preserves quad face valence in RawMesh" {

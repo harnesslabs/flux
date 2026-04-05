@@ -276,3 +276,26 @@ mathematical specialization in the implementation rather than in caller-visible
 field names. Using the diagonal ratio as the PCG preconditioner and initial
 guess preserves the DEC intuition as a fast spectral approximation without
 pretending it is the operator itself.
+
+## 2026-04-05: Dirichlet Poisson solve uses symmetric row/column elimination on the stiffness system
+
+**Decision:** Enforce Dirichlet boundary conditions for the scalar Poisson solve
+by reducing the symmetric stiffness system `S u = ★₀ f` to interior vertices:
+remove boundary rows and columns, move the eliminated boundary contribution into
+the right-hand side, and solve the reduced SPD system with CG.
+
+**Alternatives considered:**
+1. Penalty method: rejected because it introduces a large artificial parameter,
+   perturbs the operator being verified, and weakens the convergence claim.
+2. Row overwrite only (`u_i = g_i` on boundary rows): rejected because it breaks
+   symmetry unless columns are also handled carefully, which is unnecessary
+   complexity when we already have a clean reduced formulation.
+3. Solve the full Laplacian `Δ₀ u = f` directly: rejected because the assembled
+   operator is stored as `Δ₀ = ★₀⁻¹ S`; the stiffness form is the natural SPD
+   object for Dirichlet elimination and CG.
+
+**Rationale:** The reduced system preserves the exact discrete operator on the
+interior, keeps the matrix SPD for CG, and makes the boundary treatment explicit.
+This fits the operator-context architecture: topology owns geometric facts,
+operators own assembled algebra, and boundary handling is a solver-layer concern
+rather than a mutation of the mesh or Laplacian operator itself.

@@ -38,13 +38,165 @@ pub fn solve_zero_form_dirichlet(
     boundary_values: []const f64,
     config: SolveConfig,
 ) !SolveResult {
-    _ = MeshType;
-    _ = allocator;
-    _ = operator_context;
-    _ = forcing_values;
-    _ = boundary_values;
-    _ = config;
-    return error.NotYetImplemented;
+    const mesh = operator_context.mesh;
+    std.debug.assert(forcing_values.len == mesh.num_vertices());
+    std.debug.assert(boundary_values.len == mesh.num_vertices());
+
+    try operator_context.withLaplacian(0);
+    const laplacian = operator_context.laplacian(0);
+    const stiffness = laplacian.stiffness;
+    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+
+    const boundary_mask = try boundary_vertex_mask(MeshType, allocator, mesh);
+    defer allocator.free(boundary_mask);
+
+    const reduced_index = try allocator.alloc(u32, mesh.num_vertices());
+    defer allocator.free(reduced_index);
+    @memset(reduced_index, std.math.maxInt(u32));
+
+    var free_count: u32 = 0;
+    for (0..mesh.num_vertices()) |vertex_idx_usize| {
+        const vertex_idx: u32 = @intCast(vertex_idx_usize);
+        if (boundary_mask[vertex_idx]) continue;
+        reduced_index[vertex_idx] = free_count;
+        free_count += 1;
+    }
+
+    const full_rhs = try allocator.alloc(f64, mesh.num_vertices());
+    defer allocator.free(full_rhs);
+    for (full_rhs, forcing_values, dual_volumes) |*rhs_value, forcing_value, dual_volume| {
+        rhs_value.* = forcing_value * dual_volume;
+    }
+
+    if (free_count == 0) {
+        const solution = try allocator.dupe(f64, boundary_values);
+        return .{
+            .solution = solution,
+            .cg_result = .{ .iterations = 0, .relative_residual = 0.0, .converged = true },
+        };
+    }
+
+    var triplets = @import("../math/sparse.zig").TripletAssembler(f64).init(free_count, free_count);
+    defer triplets.deinit(allocator);
+
+    const reduced_rhs = try allocator.alloc(f64, free_count);
+    defer allocator.free(reduced_rhs);
+    @memset(reduced_rhs, 0.0);
+
+    for (0..mesh.num_vertices()) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        if (boundary_mask[row_idx]) continue;
+
+        const reduced_row = reduced_index[row_idx];
+        var rhs_value = full_rhs[row_idx];
+        const row = stiffness.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (boundary_mask[col_idx]) {
+                rhs_value -= value * boundary_values[col_idx];
+            } else {
+                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], value);
+            }
+        }
+        reduced_rhs[reduced_row] = rhs_value;
+    }
+
+    var reduced_matrix = try triplets.build(allocator);
+    defer reduced_matrix.deinit(allocator);
+
+    const diagonal = try allocator.alloc(f64, free_count);
+    defer allocator.free(diagonal);
+    @memset(diagonal, 0.0);
+    for (0..free_count) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const row = reduced_matrix.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (col_idx == row_idx) {
+                diagonal[row_idx] = value;
+                break;
+            }
+        }
+        std.debug.assert(diagonal[row_idx] > 0.0);
+    }
+
+    var preconditioner = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
+    const reduced_solution = try allocator.alloc(f64, free_count);
+    defer allocator.free(reduced_solution);
+    @memset(reduced_solution, 0.0);
+
+    var scratch = try conjugate_gradient.Scratch.init(allocator, free_count);
+    defer scratch.deinit(allocator);
+
+    const cg_result = conjugate_gradient.solve(
+        reduced_matrix,
+        reduced_rhs,
+        reduced_solution,
+        config.tolerance_relative,
+        config.iteration_limit,
+        conjugate_gradient.DiagonalPreconditioner.apply,
+        @ptrCast(&preconditioner),
+        scratch,
+    );
+    if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
+
+    const solution = try allocator.alloc(f64, mesh.num_vertices());
+    errdefer allocator.free(solution);
+    for (0..mesh.num_vertices()) |vertex_idx_usize| {
+        const vertex_idx: u32 = @intCast(vertex_idx_usize);
+        solution[vertex_idx] = if (boundary_mask[vertex_idx])
+            boundary_values[vertex_idx]
+        else
+            reduced_solution[reduced_index[vertex_idx]];
+    }
+
+    return .{
+        .solution = solution,
+        .cg_result = cg_result,
+    };
+}
+
+fn boundary_vertex_mask(
+    comptime MeshType: type,
+    allocator: std.mem.Allocator,
+    mesh: *const MeshType,
+) ![]bool {
+    const mask = try allocator.alloc(bool, mesh.num_vertices());
+    @memset(mask, false);
+
+    switch (MeshType.topological_dimension) {
+        2 => {
+            const edge_vertices = mesh.simplices(1).items(.vertices);
+            for (mesh.boundary_edges) |edge_idx| {
+                const edge = edge_vertices[edge_idx];
+                mask[edge[0]] = true;
+                mask[edge[1]] = true;
+            }
+        },
+        3 => {
+            const face_count = mesh.num_faces();
+            const face_incidence_count = try allocator.alloc(u8, face_count);
+            defer allocator.free(face_incidence_count);
+            @memset(face_incidence_count, 0);
+
+            for (0..mesh.num_tets()) |tet_idx_usize| {
+                const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+                for (row.cols) |face_idx| {
+                    face_incidence_count[face_idx] += 1;
+                }
+            }
+
+            const face_vertices = mesh.simplices(2).items(.vertices);
+            for (0..face_count) |face_idx_usize| {
+                if (face_incidence_count[face_idx_usize] != 1) continue;
+                const face = face_vertices[face_idx_usize];
+                mask[face[0]] = true;
+                mask[face[1]] = true;
+                mask[face[2]] = true;
+            }
+        },
+        else => @compileError("boundary_vertex_mask supports only 2D and 3D meshes"),
+    }
+
+    return mask;
 }
 
 fn exact_solution_2d(coords: [2]f64) f64 {
