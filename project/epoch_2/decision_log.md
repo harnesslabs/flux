@@ -277,6 +277,35 @@ field names. Using the diagonal ratio as the PCG preconditioner and initial
 guess preserves the DEC intuition as a fast spectral approximation without
 pretending it is the operator itself.
 
+## 2026-04-05: Wedge product is defined by Whitney interpolation and de Rham projection
+
+**Decision:** Define the primal-primal wedge as the lowest-order FEEC/Whitney
+product induced by interpolation and projection:
+`wedge(α, β) := R(Wα ∧ Wβ)`, where `W` is the Whitney map and `R` is the de Rham
+map back to simplicial cochains. The implementation computes the equivalent
+local simplex formula directly instead of constructing the interpolated forms at
+runtime.
+
+**Alternatives considered:**
+1. Treat wedge as a purely combinatorial cochain product with no FEEC/Whitney
+   interpretation: rejected because flux has already committed to Whitney-based
+   operators for correctness on the Hodge-star path, so a nonlinear product with
+   a separate mathematical story would fragment the operator stack.
+2. Delay wedge until a full higher-order FEEC field layer exists: rejected
+   because M3 needs a usable wedge now for vorticity and helicity work, and the
+   lowest-order Whitney-induced product is a coherent stepping stone.
+3. Require strict associativity on arbitrary cochains: rejected because the
+   projected lowest-order Whitney product does not satisfy it in general. The
+   correct guarantee is graded commutativity and Leibniz exactly, with
+   associativity only for closed forms.
+
+**Rationale:** This choice points the codebase toward the FEEC/Whitney future
+instead of enshrining cochains as the only semantic layer, while still exposing
+the simple operator surface the current library needs. It also leaves a clean
+upgrade path: future work can make `W` and `R` explicit, add richer finite
+element form spaces, and represent nonlinear products without immediately
+collapsing them back to the lowest-order cochain complex.
+
 ## 2026-04-05: Dirichlet Poisson solve uses symmetric row/column elimination on the stiffness system
 
 **Decision:** Enforce Dirichlet boundary conditions for the scalar Poisson solve
