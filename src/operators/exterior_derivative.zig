@@ -125,6 +125,15 @@ const C2 = cochain.Cochain(Mesh2D, 2, cochain.Primal);
 const DualC0 = cochain.Cochain(Mesh2D, 0, cochain.Dual);
 const DualC1 = cochain.Cochain(Mesh2D, 1, cochain.Dual);
 const DualC2 = cochain.Cochain(Mesh2D, 2, cochain.Dual);
+const Mesh3D = topology.Mesh(3, 3);
+const C3D0 = cochain.Cochain(Mesh3D, 0, cochain.Primal);
+const C3D1 = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+const C3D2 = cochain.Cochain(Mesh3D, 2, cochain.Primal);
+const C3D3 = cochain.Cochain(Mesh3D, 3, cochain.Primal);
+const DualC3D0 = cochain.Cochain(Mesh3D, 0, cochain.Dual);
+const DualC3D1 = cochain.Cochain(Mesh3D, 1, cochain.Dual);
+const DualC3D2 = cochain.Cochain(Mesh3D, 2, cochain.Dual);
+const DualC3D3 = cochain.Cochain(Mesh3D, 3, cochain.Dual);
 
 test "d₀ of constant function is zero" {
     // A constant 0-form has zero gradient everywhere.
@@ -265,6 +274,100 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
     }
 }
 
+test "dd = 0 for random 0-forms on tetrahedral meshes (1000 trials)" {
+    const allocator = testing.allocator;
+    const mesh_sizes = [_][3]u32{
+        .{ 1, 1, 1 },
+        .{ 2, 1, 1 },
+        .{ 1, 2, 1 },
+        .{ 1, 1, 2 },
+        .{ 2, 2, 1 },
+    };
+    var rng = std.Random.DefaultPrng.init(0x3D_DD_00);
+
+    for (mesh_sizes) |size| {
+        var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, size[0], size[1], size[2], 1.0, 1.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        for (0..200) |_| {
+            var omega = try C3D0.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+
+            for (omega.values) |*value| {
+                value.* = rng.random().float(f64) * 200.0 - 100.0;
+            }
+
+            var d_omega = try exterior_derivative(allocator, omega);
+            defer d_omega.deinit(allocator);
+
+            var dd_omega = try exterior_derivative(allocator, d_omega);
+            defer dd_omega.deinit(allocator);
+
+            for (dd_omega.values) |value| {
+                try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-11);
+            }
+        }
+    }
+}
+
+test "dd = 0 for random 1-forms on tetrahedral meshes (1000 trials)" {
+    const allocator = testing.allocator;
+    const mesh_sizes = [_][3]u32{
+        .{ 1, 1, 1 },
+        .{ 2, 1, 1 },
+        .{ 1, 2, 1 },
+        .{ 1, 1, 2 },
+        .{ 2, 2, 1 },
+    };
+    var rng = std.Random.DefaultPrng.init(0x3D_DD_01);
+
+    for (mesh_sizes) |size| {
+        var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, size[0], size[1], size[2], 1.0, 1.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        for (0..200) |_| {
+            var omega = try C3D1.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+
+            for (omega.values) |*value| {
+                value.* = rng.random().float(f64) * 200.0 - 100.0;
+            }
+
+            var d_omega = try exterior_derivative(allocator, omega);
+            defer d_omega.deinit(allocator);
+
+            var dd_omega = try exterior_derivative(allocator, d_omega);
+            defer dd_omega.deinit(allocator);
+
+            for (dd_omega.values) |value| {
+                try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-11);
+            }
+        }
+    }
+}
+
+test "d₂B = 0 structural assertion on exact 2-forms in 3D" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x3D_B_00);
+
+    for (0..1000) |_| {
+        var potential = try C3D1.init(allocator, &mesh);
+        defer potential.deinit(allocator);
+
+        for (potential.values) |*value| {
+            value.* = rng.random().float(f64) * 200.0 - 100.0;
+        }
+
+        var magnetic_flux = try exterior_derivative(allocator, potential);
+        defer magnetic_flux.deinit(allocator);
+
+        try assert_closed(allocator, magnetic_flux, 1e-11);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Compile-time degree enforcement tests
 // ═══════════════════════════════════════════════════════════════════════════
@@ -381,6 +484,78 @@ test "d̃d̃ = 0 for random dual 0-forms (1000 trials)" {
 
         for (dd_omega.values) |v| {
             try testing.expectApproxEqAbs(@as(f64, 0), v, 1e-11);
+        }
+    }
+}
+
+test "d̃d̃ = 0 for random dual 0-forms on tetrahedral meshes (1000 trials)" {
+    const allocator = testing.allocator;
+    const mesh_sizes = [_][3]u32{
+        .{ 1, 1, 1 },
+        .{ 2, 1, 1 },
+        .{ 1, 2, 1 },
+        .{ 1, 1, 2 },
+        .{ 2, 2, 1 },
+    };
+    var rng = std.Random.DefaultPrng.init(0x3D_DD_D0);
+
+    for (mesh_sizes) |size| {
+        var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, size[0], size[1], size[2], 1.0, 1.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        for (0..200) |_| {
+            var omega = try DualC3D0.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+
+            for (omega.values) |*value| {
+                value.* = rng.random().float(f64) * 200.0 - 100.0;
+            }
+
+            var d_omega = try exterior_derivative(allocator, omega);
+            defer d_omega.deinit(allocator);
+
+            var dd_omega = try exterior_derivative(allocator, d_omega);
+            defer dd_omega.deinit(allocator);
+
+            for (dd_omega.values) |value| {
+                try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-11);
+            }
+        }
+    }
+}
+
+test "d̃d̃ = 0 for random dual 1-forms on tetrahedral meshes (1000 trials)" {
+    const allocator = testing.allocator;
+    const mesh_sizes = [_][3]u32{
+        .{ 1, 1, 1 },
+        .{ 2, 1, 1 },
+        .{ 1, 2, 1 },
+        .{ 1, 1, 2 },
+        .{ 2, 2, 1 },
+    };
+    var rng = std.Random.DefaultPrng.init(0x3D_DD_D1);
+
+    for (mesh_sizes) |size| {
+        var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, size[0], size[1], size[2], 1.0, 1.0, 1.0);
+        defer mesh.deinit(allocator);
+
+        for (0..200) |_| {
+            var omega = try DualC3D1.init(allocator, &mesh);
+            defer omega.deinit(allocator);
+
+            for (omega.values) |*value| {
+                value.* = rng.random().float(f64) * 200.0 - 100.0;
+            }
+
+            var d_omega = try exterior_derivative(allocator, omega);
+            defer d_omega.deinit(allocator);
+
+            var dd_omega = try exterior_derivative(allocator, d_omega);
+            defer dd_omega.deinit(allocator);
+
+            for (dd_omega.values) |value| {
+                try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-11);
+            }
         }
     }
 }
