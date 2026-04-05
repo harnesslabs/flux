@@ -13,20 +13,23 @@ const topology = @import("../topology/mesh.zig");
 
 /// VTK cell type for triangles (linear triangle, type 5 in the VTK spec).
 const vtk_triangle: u8 = 5;
+/// VTK cell type for tetrahedra (linear tetrahedron, type 10 in the VTK spec).
+const vtk_tetrahedron: u8 = 10;
 
 /// Named field to attach to VTK output as PointData or CellData.
 pub const DataArraySlice = struct {
     name: []const u8,
     values: []const f64,
+    num_components: u8 = 1,
 };
 
-/// Write a VTK Unstructured Grid (.vtu) XML file for a 2D mesh.
+/// Write a VTK Unstructured Grid (.vtu) XML file for a simplicial mesh.
 ///
 /// The .vtu format stores:
-/// - `<Points>`: vertex coordinates (3-component, z = 0 for 2D)
-/// - `<Cells>`: triangle connectivity, offsets, types
-/// - `<PointData>`: scalar fields on vertices (0-forms)
-/// - `<CellData>`: scalar fields on cells (1-forms on edges, 2-forms on faces)
+/// - `<Points>`: vertex coordinates (3-component, padded with zeros for embeddings < 3)
+/// - `<Cells>`: top-dimensional simplex connectivity, offsets, and VTK types
+/// - `<PointData>`: scalar or vector fields on vertices
+/// - `<CellData>`: scalar or vector fields on top-dimensional cells
 ///
 /// All numeric data is written in ASCII. This is not the fastest format
 /// but is portable, human-readable, and sufficient for visualization.
@@ -42,20 +45,21 @@ pub fn write(
     cell_data: []const DataArraySlice,
 ) !void {
     const num_vertices = mesh.num_vertices();
-    const num_faces = mesh.num_faces();
+    const num_cells = cellCount(mesh, topological_dimension);
 
     // -- XML header and VTKFile element --
     try writer.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     try writer.writeAll("<VTKFile type=\"UnstructuredGrid\" version=\"0.1\" byte_order=\"LittleEndian\">\n");
     try writer.writeAll("  <UnstructuredGrid>\n");
-    try writer.print("    <Piece NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\">\n", .{ num_vertices, num_faces });
+    try writer.print("    <Piece NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\">\n", .{ num_vertices, num_cells });
 
     // -- PointData (0-forms: one value per vertex) --
     if (point_data.len > 0) {
         try writer.writeAll("      <PointData>\n");
         for (point_data) |pd| {
-            std.debug.assert(pd.values.len == num_vertices);
-            try writeDataArray(writer, pd.name, pd.values);
+            std.debug.assert(pd.num_components > 0);
+            std.debug.assert(pd.values.len == num_vertices * pd.num_components);
+            try writeDataArray(writer, pd.name, pd.values, pd.num_components);
         }
         try writer.writeAll("      </PointData>\n");
     }
@@ -64,8 +68,9 @@ pub fn write(
     if (cell_data.len > 0) {
         try writer.writeAll("      <CellData>\n");
         for (cell_data) |cd| {
-            std.debug.assert(cd.values.len == num_faces);
-            try writeDataArray(writer, cd.name, cd.values);
+            std.debug.assert(cd.num_components > 0);
+            std.debug.assert(cd.values.len == num_cells * cd.num_components);
+            try writeDataArray(writer, cd.name, cd.values, cd.num_components);
         }
         try writer.writeAll("      </CellData>\n");
     }
@@ -95,38 +100,19 @@ pub fn write(
     // -- Cells --
     try writer.writeAll("      <Cells>\n");
 
-    // Connectivity: vertex indices for each triangle
+    // Connectivity: vertex indices for each top-dimensional cell.
     try writer.writeAll("        <DataArray type=\"UInt32\" Name=\"connectivity\" format=\"ascii\">\n");
-    {
-        const face_verts = mesh.simplices(2).items(.vertices);
-        for (face_verts) |verts| {
-            try writer.print("          {d} {d} {d}\n", .{ verts[0], verts[1], verts[2] });
-        }
-    }
+    try writeConnectivity(writer, mesh, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
-    // Offsets: cumulative vertex count per cell (3, 6, 9, ...)
+    // Offsets: cumulative vertex count per cell.
     try writer.writeAll("        <DataArray type=\"UInt32\" Name=\"offsets\" format=\"ascii\">\n");
-    {
-        try writer.writeAll("          ");
-        for (0..num_faces) |f| {
-            if (f > 0) try writer.writeByte(' ');
-            try writer.print("{d}", .{(f + 1) * 3});
-        }
-        try writer.writeByte('\n');
-    }
+    try writeOffsets(writer, num_cells, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
-    // Types: all triangles (VTK type 5)
+    // Types: one VTK cell type code per top-dimensional cell.
     try writer.writeAll("        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n");
-    {
-        try writer.writeAll("          ");
-        for (0..num_faces) |f| {
-            if (f > 0) try writer.writeByte(' ');
-            try writer.print("{d}", .{vtk_triangle});
-        }
-        try writer.writeByte('\n');
-    }
+    try writeCellTypes(writer, num_cells, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
     try writer.writeAll("      </Cells>\n");
@@ -137,9 +123,77 @@ pub fn write(
     try writer.writeAll("</VTKFile>\n");
 }
 
-/// Write a single `<DataArray>` element with Float64 scalar data.
-fn writeDataArray(writer: anytype, name: []const u8, values: []const f64) !void {
-    try writer.print("        <DataArray type=\"Float64\" Name=\"{s}\" format=\"ascii\">\n", .{name});
+fn cellCount(mesh: anytype, comptime topological_dimension: usize) u32 {
+    return switch (topological_dimension) {
+        2 => mesh.num_faces(),
+        3 => mesh.num_tets(),
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn verticesPerCell(comptime topological_dimension: usize) u32 {
+    return switch (topological_dimension) {
+        2 => 3,
+        3 => 4,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn cellTypeForDimension(comptime topological_dimension: usize) u8 {
+    return switch (topological_dimension) {
+        2 => vtk_triangle,
+        3 => vtk_tetrahedron,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn writeConnectivity(writer: anytype, mesh: anytype, comptime topological_dimension: usize) !void {
+    switch (topological_dimension) {
+        2 => {
+            const face_verts = mesh.simplices(2).items(.vertices);
+            for (face_verts) |verts| {
+                try writer.print("          {d} {d} {d}\n", .{ verts[0], verts[1], verts[2] });
+            }
+        },
+        3 => {
+            const tet_verts = mesh.simplices(3).items(.vertices);
+            for (tet_verts) |verts| {
+                try writer.print("          {d} {d} {d} {d}\n", .{ verts[0], verts[1], verts[2], verts[3] });
+            }
+        },
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    }
+}
+
+fn writeOffsets(writer: anytype, num_cells: u32, comptime topological_dimension: usize) !void {
+    try writer.writeAll("          ");
+    for (0..num_cells) |cell_index| {
+        if (cell_index > 0) try writer.writeByte(' ');
+        try writer.print("{d}", .{(cell_index + 1) * verticesPerCell(topological_dimension)});
+    }
+    try writer.writeByte('\n');
+}
+
+fn writeCellTypes(writer: anytype, num_cells: u32, comptime topological_dimension: usize) !void {
+    try writer.writeAll("          ");
+    for (0..num_cells) |cell_index| {
+        if (cell_index > 0) try writer.writeByte(' ');
+        try writer.print("{d}", .{cellTypeForDimension(topological_dimension)});
+    }
+    try writer.writeByte('\n');
+}
+
+/// Write a single `<DataArray>` element with Float64 scalar or vector data.
+fn writeDataArray(writer: anytype, name: []const u8, values: []const f64, num_components: u8) !void {
+    std.debug.assert(num_components > 0);
+    if (num_components == 1) {
+        try writer.print("        <DataArray type=\"Float64\" Name=\"{s}\" format=\"ascii\">\n", .{name});
+    } else {
+        try writer.print(
+            "        <DataArray type=\"Float64\" Name=\"{s}\" NumberOfComponents=\"{d}\" format=\"ascii\">\n",
+            .{ name, num_components },
+        );
+    }
     try writer.writeAll("          ");
     for (values, 0..) |v, i| {
         if (i > 0) try writer.writeByte(' ');
@@ -519,6 +573,182 @@ test "vtu all cell types are triangle (type 5)" {
         count += 1;
     }
     try testing.expectEqual(mesh.num_faces(), @as(u32, @intCast(count)));
+}
+
+test "vtu 3D piece counts use tetrahedra as cells" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const expected_piece = try std.fmt.allocPrint(allocator, "NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\"", .{
+        mesh.num_vertices(),
+        mesh.num_tets(),
+    });
+    defer allocator.free(expected_piece);
+
+    try testing.expect(std.mem.indexOf(u8, output.items, expected_piece) != null);
+}
+
+test "vtu tetrahedral connectivity matches mesh tet vertices" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const xml = output.items;
+    const conn_start_tag = "Name=\"connectivity\" format=\"ascii\">";
+    const conn_start = std.mem.indexOf(u8, xml, conn_start_tag).? + conn_start_tag.len;
+    const conn_end = std.mem.indexOfPos(u8, xml, conn_start, "</DataArray>").?;
+    const conn_block = xml[conn_start..conn_end];
+
+    const tet_verts = mesh.simplices(3).items(.vertices);
+    var tet_idx: usize = 0;
+    var line_iter = std.mem.tokenizeScalar(u8, conn_block, '\n');
+    while (line_iter.next()) |line| {
+        const trimmed = std.mem.trim(u8, line, " \t\r");
+        if (trimmed.len == 0) continue;
+
+        var tok = std.mem.tokenizeScalar(u8, trimmed, ' ');
+        const token0 = tok.next();
+        const token1 = tok.next();
+        const token2 = tok.next();
+        const token3 = tok.next();
+        try testing.expect(token0 != null);
+        try testing.expect(token1 != null);
+        try testing.expect(token2 != null);
+        try testing.expect(token3 != null);
+
+        const v0 = try std.fmt.parseInt(u32, token0.?, 10);
+        const v1 = try std.fmt.parseInt(u32, token1.?, 10);
+        const v2 = try std.fmt.parseInt(u32, token2.?, 10);
+        const v3 = try std.fmt.parseInt(u32, token3.?, 10);
+
+        try testing.expectEqual(tet_verts[tet_idx][0], v0);
+        try testing.expectEqual(tet_verts[tet_idx][1], v1);
+        try testing.expectEqual(tet_verts[tet_idx][2], v2);
+        try testing.expectEqual(tet_verts[tet_idx][3], v3);
+        try testing.expect(tok.next() == null);
+        tet_idx += 1;
+    }
+
+    try testing.expectEqual(mesh.num_tets(), @as(u32, @intCast(tet_idx)));
+}
+
+test "vtu 3D cell types are tetrahedron (type 10)" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+
+    const xml = output.items;
+    const types_start_tag = "Name=\"types\" format=\"ascii\">";
+    const types_start = std.mem.indexOf(u8, xml, types_start_tag).? + types_start_tag.len;
+    const types_end = std.mem.indexOfPos(u8, xml, types_start, "</DataArray>").?;
+    const types_block = xml[types_start..types_end];
+
+    var count: usize = 0;
+    var tok = std.mem.tokenizeAny(u8, types_block, " \t\n\r");
+    while (tok.next()) |t| {
+        const val = try std.fmt.parseInt(u8, t, 10);
+        try testing.expectEqual(@as(u8, 10), val);
+        count += 1;
+    }
+
+    try testing.expectEqual(mesh.num_tets(), @as(u32, @intCast(count)));
+}
+
+test "vtu 3D PointData and CellData round-trip with tetrahedral mesh" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const point_values = try allocator.alloc(f64, mesh.num_vertices());
+    defer allocator.free(point_values);
+    for (point_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) + 0.25;
+    }
+
+    const cell_values = try allocator.alloc(f64, mesh.num_tets());
+    defer allocator.free(cell_values);
+    for (cell_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) * 2.0 + 0.5;
+    }
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    const pd = [_]DataArraySlice{.{ .name = "temperature_3d", .values = point_values }};
+    const cd = [_]DataArraySlice{.{ .name = "pressure_3d", .values = cell_values }};
+    try write(output.writer(allocator), 3, 3, mesh, &pd, &cd);
+
+    const parsed_point = try parseDataArray(allocator, output.items, "temperature_3d");
+    defer allocator.free(parsed_point);
+    try testing.expectEqual(point_values.len, parsed_point.len);
+    for (point_values, parsed_point) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
+
+    const parsed_cell = try parseDataArray(allocator, output.items, "pressure_3d");
+    defer allocator.free(parsed_cell);
+    try testing.expectEqual(cell_values.len, parsed_cell.len);
+    for (cell_values, parsed_cell) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
+}
+
+test "vtu 3D vector PointData and CellData preserve component count and layout" {
+    const allocator = testing.allocator;
+    var mesh = try topology.Mesh(3, 3).uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const point_values = try allocator.alloc(f64, mesh.num_vertices() * 3);
+    defer allocator.free(point_values);
+    for (point_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) * 0.25;
+    }
+
+    const cell_values = try allocator.alloc(f64, mesh.num_tets() * 3);
+    defer allocator.free(cell_values);
+    for (cell_values, 0..) |*value, i| {
+        value.* = @as(f64, @floatFromInt(i)) * 0.5;
+    }
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    const pd = [_]DataArraySlice{.{ .name = "velocity_3d", .values = point_values, .num_components = 3 }};
+    const cd = [_]DataArraySlice{.{ .name = "flux_3d", .values = cell_values, .num_components = 3 }};
+    try write(output.writer(allocator), 3, 3, mesh, &pd, &cd);
+
+    try testing.expect(std.mem.indexOf(u8, output.items, "Name=\"velocity_3d\" NumberOfComponents=\"3\"") != null);
+    try testing.expect(std.mem.indexOf(u8, output.items, "Name=\"flux_3d\" NumberOfComponents=\"3\"") != null);
+
+    const parsed_point = try parseDataArray(allocator, output.items, "velocity_3d");
+    defer allocator.free(parsed_point);
+    try testing.expectEqual(point_values.len, parsed_point.len);
+    for (point_values, parsed_point) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
+
+    const parsed_cell = try parseDataArray(allocator, output.items, "flux_3d");
+    defer allocator.free(parsed_cell);
+    try testing.expectEqual(cell_values.len, parsed_cell.len);
+    for (cell_values, parsed_cell) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-15);
+    }
 }
 
 // ───────────────────────────────────────────────────────────────────────────
