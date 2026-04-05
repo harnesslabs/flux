@@ -70,6 +70,7 @@ pub const operators = struct {
     pub const laplacian = @import("operators/laplacian.zig");
     pub const poisson = @import("operators/poisson.zig");
     pub const whitney_mass = @import("operators/whitney_mass.zig");
+    pub const wedge_product = @import("operators/wedge_product.zig");
 };
 pub const topology = @import("topology/mesh.zig");
 pub const time_stepper = @import("time_stepper.zig");
@@ -131,6 +132,10 @@ pub const OperatorContext = operators.context.OperatorContext;
 /// Apply a sequence of DEC operators with automatic intermediate allocation
 /// management. Degree/duality mismatches are compile errors.
 pub const chain = operators.compose.chain;
+
+/// Primal-primal discrete wedge product induced by Whitney interpolation and
+/// de Rham projection.
+pub const wedge = operators.wedge_product.wedge;
 
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
