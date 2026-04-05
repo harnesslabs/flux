@@ -13,6 +13,8 @@ const topology = @import("../topology/mesh.zig");
 
 /// VTK cell type for triangles (linear triangle, type 5 in the VTK spec).
 const vtk_triangle: u8 = 5;
+/// VTK cell type for tetrahedra (linear tetrahedron, type 10 in the VTK spec).
+const vtk_tetrahedron: u8 = 10;
 
 /// Named field to attach to VTK output as PointData or CellData.
 pub const DataArraySlice = struct {
@@ -42,13 +44,13 @@ pub fn write(
     cell_data: []const DataArraySlice,
 ) !void {
     const num_vertices = mesh.num_vertices();
-    const num_faces = mesh.num_faces();
+    const num_cells = cellCount(mesh, topological_dimension);
 
     // -- XML header and VTKFile element --
     try writer.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
     try writer.writeAll("<VTKFile type=\"UnstructuredGrid\" version=\"0.1\" byte_order=\"LittleEndian\">\n");
     try writer.writeAll("  <UnstructuredGrid>\n");
-    try writer.print("    <Piece NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\">\n", .{ num_vertices, num_faces });
+    try writer.print("    <Piece NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\">\n", .{ num_vertices, num_cells });
 
     // -- PointData (0-forms: one value per vertex) --
     if (point_data.len > 0) {
@@ -64,7 +66,7 @@ pub fn write(
     if (cell_data.len > 0) {
         try writer.writeAll("      <CellData>\n");
         for (cell_data) |cd| {
-            std.debug.assert(cd.values.len == num_faces);
+            std.debug.assert(cd.values.len == num_cells);
             try writeDataArray(writer, cd.name, cd.values);
         }
         try writer.writeAll("      </CellData>\n");
@@ -95,38 +97,19 @@ pub fn write(
     // -- Cells --
     try writer.writeAll("      <Cells>\n");
 
-    // Connectivity: vertex indices for each triangle
+    // Connectivity: vertex indices for each top-dimensional cell.
     try writer.writeAll("        <DataArray type=\"UInt32\" Name=\"connectivity\" format=\"ascii\">\n");
-    {
-        const face_verts = mesh.simplices(2).items(.vertices);
-        for (face_verts) |verts| {
-            try writer.print("          {d} {d} {d}\n", .{ verts[0], verts[1], verts[2] });
-        }
-    }
+    try writeConnectivity(writer, mesh, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
-    // Offsets: cumulative vertex count per cell (3, 6, 9, ...)
+    // Offsets: cumulative vertex count per cell.
     try writer.writeAll("        <DataArray type=\"UInt32\" Name=\"offsets\" format=\"ascii\">\n");
-    {
-        try writer.writeAll("          ");
-        for (0..num_faces) |f| {
-            if (f > 0) try writer.writeByte(' ');
-            try writer.print("{d}", .{(f + 1) * 3});
-        }
-        try writer.writeByte('\n');
-    }
+    try writeOffsets(writer, num_cells, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
-    // Types: all triangles (VTK type 5)
+    // Types: one VTK cell type code per top-dimensional cell.
     try writer.writeAll("        <DataArray type=\"UInt8\" Name=\"types\" format=\"ascii\">\n");
-    {
-        try writer.writeAll("          ");
-        for (0..num_faces) |f| {
-            if (f > 0) try writer.writeByte(' ');
-            try writer.print("{d}", .{vtk_triangle});
-        }
-        try writer.writeByte('\n');
-    }
+    try writeCellTypes(writer, num_cells, topological_dimension);
     try writer.writeAll("        </DataArray>\n");
 
     try writer.writeAll("      </Cells>\n");
@@ -135,6 +118,61 @@ pub fn write(
     try writer.writeAll("    </Piece>\n");
     try writer.writeAll("  </UnstructuredGrid>\n");
     try writer.writeAll("</VTKFile>\n");
+}
+
+fn cellCount(mesh: anytype, comptime topological_dimension: usize) u32 {
+    return switch (topological_dimension) {
+        2 => mesh.num_faces(),
+        3 => unreachable,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn verticesPerCell(comptime topological_dimension: usize) u32 {
+    return switch (topological_dimension) {
+        2 => 3,
+        3 => unreachable,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn cellTypeForDimension(comptime topological_dimension: usize) u8 {
+    return switch (topological_dimension) {
+        2 => vtk_triangle,
+        3 => unreachable,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    };
+}
+
+fn writeConnectivity(writer: anytype, mesh: anytype, comptime topological_dimension: usize) !void {
+    switch (topological_dimension) {
+        2 => {
+            const face_verts = mesh.simplices(2).items(.vertices);
+            for (face_verts) |verts| {
+                try writer.print("          {d} {d} {d}\n", .{ verts[0], verts[1], verts[2] });
+            }
+        },
+        3 => unreachable,
+        else => @compileError("VTK export currently supports only topological dimensions 2 and 3"),
+    }
+}
+
+fn writeOffsets(writer: anytype, num_cells: u32, comptime topological_dimension: usize) !void {
+    try writer.writeAll("          ");
+    for (0..num_cells) |cell_index| {
+        if (cell_index > 0) try writer.writeByte(' ');
+        try writer.print("{d}", .{(cell_index + 1) * verticesPerCell(topological_dimension)});
+    }
+    try writer.writeByte('\n');
+}
+
+fn writeCellTypes(writer: anytype, num_cells: u32, comptime topological_dimension: usize) !void {
+    try writer.writeAll("          ");
+    for (0..num_cells) |cell_index| {
+        if (cell_index > 0) try writer.writeByte(' ');
+        try writer.print("{d}", .{cellTypeForDimension(topological_dimension)});
+    }
+    try writer.writeByte('\n');
 }
 
 /// Write a single `<DataArray>` element with Float64 scalar data.
