@@ -299,3 +299,27 @@ interior, keeps the matrix SPD for CG, and makes the boundary treatment explicit
 This fits the operator-context architecture: topology owns geometric facts,
 operators own assembled algebra, and boundary handling is a solver-layer concern
 rather than a mutation of the mesh or Laplacian operator itself.
+
+## 2026-04-05: CG preconditioners use a comptime concept and typed pointer argument
+
+**Decision:** The conjugate-gradient solver accepts the preconditioner as a
+typed pointer argument (`null`, `?*const P`, or `*const P`) validated by a
+`PreconditionerConcept(P)` comptime check. A conforming preconditioner exposes
+`pub fn apply(self: *const P, z: []f64) void`, mutating only the work vector.
+
+**Alternatives considered:**
+1. Keep the erased interface (`fn ([]f64, *const anyopaque) void` plus a
+   separate context pointer): rejected because it discards the preconditioner
+   type exactly where Zig can validate it, and every call site must keep the
+   function and context in sync manually.
+2. Add a second typed solve entry point but keep the erased `solve(...)`
+   public as well: rejected because this is pre-release code with no real
+   compatibility pressure. Two public solver entry points for one algorithm
+   would violate the "one obvious way" rule.
+
+**Rationale:** The typed-pointer design keeps solver call sites honest, matches
+the existing concept-driven style already used for time stepping and meshes,
+and makes Jacobi preconditioning a normal Zig value instead of a function/context
+pair. Requiring `apply(self: *const P, z)` also keeps preconditioner application
+structurally pure from the solver's perspective until a concrete mutable
+preconditioner use case exists.

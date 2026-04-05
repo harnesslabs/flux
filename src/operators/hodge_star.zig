@@ -273,8 +273,7 @@ fn solveWhitneyInverse(
         output,
         relative_tolerance,
         iteration_limit,
-        conjugate_gradient.DiagonalPreconditioner.apply,
-        @ptrCast(&precond),
+        &precond,
         scratch,
     );
     if (!result.converged) {
