@@ -18,6 +18,11 @@ pub const Config = struct {
     dt: f64 = 0.01,
     output_dir: ?[]const u8 = null,
     output_interval: u32 = 0,
+
+    fn snapshotCount(self: Config) u32 {
+        if (self.output_dir == null or self.output_interval == 0) return 0;
+        return self.steps / self.output_interval;
+    }
 };
 
 pub fn State(comptime MeshType: type) type {
@@ -111,9 +116,51 @@ pub fn leapfrogStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void
 }
 
 pub fn runSimulation(allocator: std.mem.Allocator, state: *MaxwellState3D, config: Config) !void {
+    const snapshot_count_max = config.snapshotCount();
+    var pvd_entries: []flux.io.PvdEntry = &.{};
+    var filename_bufs: [][flux.io.max_snapshot_filename_length]u8 = &.{};
+
+    if (snapshot_count_max > 0) {
+        pvd_entries = try allocator.alloc(flux.io.PvdEntry, snapshot_count_max);
+        filename_bufs = try allocator.alloc([flux.io.max_snapshot_filename_length]u8, snapshot_count_max);
+    }
+    defer {
+        if (snapshot_count_max > 0) {
+            allocator.free(filename_bufs);
+            allocator.free(pvd_entries);
+        }
+    }
+
+    var snapshot_count: u32 = 0;
+    if (config.output_dir) |output_dir| {
+        try ensureDir(output_dir);
+    }
+
     var step_index: u32 = 0;
     while (step_index < config.steps) : (step_index += 1) {
         try leapfrogStep(allocator, state, config.dt);
+
+        if (config.output_dir) |output_dir| {
+            if (config.output_interval > 0 and (step_index + 1) % config.output_interval == 0) {
+                const filename = flux.io.snapshot_filename(
+                    &filename_bufs[snapshot_count],
+                    "maxwell_3d",
+                    snapshot_count,
+                );
+                try writeSnapshotFile(allocator, output_dir, filename, state);
+                pvd_entries[snapshot_count] = .{
+                    .timestep = @as(f64, @floatFromInt(step_index + 1)) * config.dt,
+                    .filename = filename,
+                };
+                snapshot_count += 1;
+            }
+        }
+    }
+
+    if (config.output_dir) |output_dir| {
+        if (snapshot_count > 0) {
+            try writePvdFile(allocator, output_dir, "maxwell_3d", pvd_entries[0..snapshot_count]);
+        }
     }
 }
 
@@ -198,27 +245,180 @@ pub fn writeSnapshot(
     );
 }
 
+fn writeSnapshotFile(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    filename: []const u8,
+    state: *const MaxwellState3D,
+) !void {
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try writeSnapshot(allocator, output.writer(allocator), state);
+
+    var dir = try std.fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(filename, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn writePvdFile(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    base_name: []const u8,
+    entries: []const flux.io.PvdEntry,
+) !void {
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try flux.io.write_pvd(output.writer(allocator), entries);
+
+    var pvd_buf: [flux.io.max_snapshot_filename_length]u8 = undefined;
+    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
+        return error.FilenameTooLong;
+
+    var dir = try std.fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(pvd_name, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn ensureDir(path: []const u8) !void {
+    std.fs.cwd().makeDir(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
+const ParseError = error{InvalidArgument};
+
+fn parseArgs(args: []const [:0]const u8) ParseError!Config {
+    var config = Config{};
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (eql(arg, "--help") or eql(arg, "-h")) {
+            printUsage();
+            std.process.exit(0);
+        } else if (eql(arg, "--steps")) {
+            config.steps = parseU32(args, &i, "--steps") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--nx")) {
+            config.nx = parseU32(args, &i, "--nx") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--ny")) {
+            config.ny = parseU32(args, &i, "--ny") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--nz")) {
+            config.nz = parseU32(args, &i, "--nz") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--width")) {
+            config.width = parseF64(args, &i, "--width") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--height")) {
+            config.height = parseF64(args, &i, "--height") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--depth")) {
+            config.depth = parseF64(args, &i, "--depth") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--dt")) {
+            config.dt = parseF64(args, &i, "--dt") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--output")) {
+            config.output_dir = nextArg(args, &i) orelse return flagError("--output");
+        } else if (eql(arg, "--output-interval")) {
+            config.output_interval = parseU32(args, &i, "--output-interval") orelse return ParseError.InvalidArgument;
+        } else {
+            std.debug.print("error: unknown argument '{s}'\n\n", .{arg});
+            printUsage();
+            return ParseError.InvalidArgument;
+        }
+    }
+    return config;
+}
+
+fn eql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
+}
+
+fn nextArg(args: []const [:0]const u8, i: *usize) ?[]const u8 {
+    if (i.* + 1 >= args.len) return null;
+    i.* += 1;
+    return args[i.*];
+}
+
+fn flagError(flag: []const u8) ParseError {
+    std.debug.print("error: {s} requires a value\n", .{flag});
+    return ParseError.InvalidArgument;
+}
+
+fn parseU32(args: []const [:0]const u8, i: *usize, flag: []const u8) ?u32 {
+    const value = nextArg(args, i) orelse {
+        std.debug.print("error: {s} requires a value\n", .{flag});
+        return null;
+    };
+    return std.fmt.parseInt(u32, value, 10) catch {
+        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
+        return null;
+    };
+}
+
+fn parseF64(args: []const [:0]const u8, i: *usize, flag: []const u8) ?f64 {
+    const value = nextArg(args, i) orelse {
+        std.debug.print("error: {s} requires a value\n", .{flag});
+        return null;
+    };
+    return std.fmt.parseFloat(f64, value) catch {
+        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
+        return null;
+    };
+}
+
+fn printUsage() void {
+    std.debug.print(
+        \\
+        \\  maxwell_3d — 3D cavity resonance on tetrahedral meshes
+        \\
+        \\  usage:
+        \\    zig build -Doptimize=ReleaseFast example-maxwell3d -- [options]
+        \\
+        \\  mesh:
+        \\    --nx N              tetrahedral cells in x (default: 2)
+        \\    --ny N              tetrahedral cells in y (default: 2)
+        \\    --nz N              tetrahedral cells in z (default: 2)
+        \\    --width L           cavity width  (default: 1.0)
+        \\    --height L          cavity height (default: 1.0)
+        \\    --depth L           cavity depth  (default: 1.0)
+        \\
+        \\  time stepping:
+        \\    --steps N           leapfrog steps (default: 1000)
+        \\    --dt DT             fixed timestep (default: 0.01)
+        \\
+        \\  output:
+        \\    --output DIR        write VTK snapshots into DIR
+        \\    --output-interval N write every N steps when output is enabled
+        \\
+    , .{});
+}
+
 pub fn runCli() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var mesh = try makeCavityMesh(allocator, .{});
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const config = parseArgs(args) catch return;
+
+    var mesh = try makeCavityMesh(allocator, config);
     defer mesh.deinit(allocator);
 
     var state = try MaxwellState3D.init(allocator, &mesh);
     defer state.deinit(allocator);
 
     try seedClosedMagneticField(allocator, &state);
-    try runSimulation(allocator, &state, .{});
+    try runSimulation(allocator, &state, config);
 
-    var stdout_buffer = std.ArrayListUnmanaged(u8){};
-    defer stdout_buffer.deinit(allocator);
-    try writeSnapshot(allocator, stdout_buffer.writer(allocator), &state);
+    const divergence = try divergenceNorm(allocator, &state);
     const stdout = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
     try stdout.print(
-        "maxwell_3d completed {d} steps on {d} tetrahedra\n",
-        .{ state.timestep, mesh.num_tets() },
+        "maxwell_3d completed {d} steps on {d} tetrahedra; ||dB||₂ = {e}\n",
+        .{ state.timestep, mesh.num_tets(), divergence },
     );
 }
 
