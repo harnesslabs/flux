@@ -25,6 +25,7 @@ Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-s
 ```sh
 uv run tools/visualize.py output --field B_flux --output animation.png
 uv run tools/visualize.py output --field B_flux --output animation.gif
+uv run tools/visualize.py output/euler_2d --output animation.png
 ```
 
 APNG is now the default recommendation because it preserves full color. Use
@@ -40,6 +41,7 @@ APNG is now the default recommendation because it preserves full color. Use
 | [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole` |
 | [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity` |
 | [**maxwell_3d**](maxwell_3d/README.md) | Source-free TM₁₁₀ rectangular cavity mode on tetrahedra with 3D convergence check | `zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025` |
+| [**euler_2d**](euler_2d/README.md) | Incompressible vorticity-stream evolution with conservative circulation transport | `zig build -Doptimize=ReleaseFast example-euler2d -- --grid 32 --steps 1000` |
 
 ---
 
@@ -105,7 +107,8 @@ uv run tools/visualize.py <input_dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--field` | `B_flux` | Which CellData array to plot |
+| `--field` | auto | Scalar field to plot; auto-selects `tracer`, `vorticity`, `B_flux`, `E_intensity`, or another available scalar |
+| `--vectors` | auto | Optional 2D vector overlay; auto-selects `velocity` when present, use `none` to disable |
 | `--output` | `<dir>/animation.png` | Output animation path; `.png`/`.apng` writes full-color APNG, `.gif` writes palette-limited GIF |
 | `--fps` | 12 | Frames per second |
 
@@ -115,6 +118,10 @@ Available fields:
 |-------|-----------|
 | `B_flux` | Magnetic flux per face (primal 2-form) |
 | `E_intensity` | Electric field averaged to faces (primal 1-form projected) |
+| `tracer` | Passive tracer transported by the 2D Euler showcase demo |
+| `vorticity` | Face-centered 2D Euler vorticity |
+| `stream_function` | Vertex-centered stream function |
+| `velocity` | 2D Euler face velocity (vector overlay) |
 
 ### ParaView
 
