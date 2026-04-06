@@ -32,6 +32,77 @@ pub const Config = struct {
     }
 };
 
+fn Progress(comptime Writer: type) type {
+    return struct {
+        const Self = @This();
+
+        writer: Writer,
+        total: u32,
+        timer: std.time.Timer,
+        last_draw_ns: u64 = 0,
+        bar_width: u32 = 40,
+
+        fn init(writer: Writer, total: u32) Self {
+            return .{
+                .writer = writer,
+                .total = total,
+                .timer = std.time.Timer.start() catch
+                    @panic("OS timer unavailable — cannot run simulation"),
+            };
+        }
+
+        fn update(self: *Self, step: u32) void {
+            const elapsed_ns = self.timer.read();
+            if (elapsed_ns - self.last_draw_ns < 50_000_000 and step < self.total) return;
+            self.last_draw_ns = elapsed_ns;
+
+            const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            const frac = @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(self.total));
+            const pct = frac * 100.0;
+            const steps_per_sec = if (elapsed_s > 0.01) @as(f64, @floatFromInt(step)) / elapsed_s else 0.0;
+            const remaining = @as(f64, @floatFromInt(self.total - step));
+            const eta_s = if (steps_per_sec > 0.01) remaining / steps_per_sec else 0.0;
+            const filled: u32 = @intFromFloat(frac * @as(f64, @floatFromInt(self.bar_width)));
+
+            var bar: [64]u8 = undefined;
+            for (0..self.bar_width) |j| {
+                bar[j] = if (j < filled) '#' else '-';
+            }
+
+            var elapsed_buf: [16]u8 = undefined;
+            var eta_buf: [16]u8 = undefined;
+            self.writer.print("\r  {s}  {d:>5.1}%  {d}/{d}  {s}  ETA {s}  {d:.0} steps/s    ", .{
+                bar[0..self.bar_width],
+                pct,
+                step,
+                self.total,
+                formatDuration(&elapsed_buf, elapsed_s),
+                formatDuration(&eta_buf, eta_s),
+                steps_per_sec,
+            }) catch return;
+        }
+
+        fn finish(self: *Self) void {
+            self.writer.writeAll("\r") catch return;
+            for (0..120) |_| self.writer.writeByte(' ') catch return;
+            self.writer.writeAll("\r") catch return;
+        }
+
+        fn elapsed(self: *Self) f64 {
+            return @as(f64, @floatFromInt(self.timer.read())) / 1_000_000_000.0;
+        }
+    };
+}
+
+fn formatDuration(buf: *[16]u8, seconds: f64) []const u8 {
+    if (seconds < 60.0) {
+        return std.fmt.bufPrint(buf, "{d:.1}s", .{seconds}) catch "??";
+    }
+    const mins: u32 = @intFromFloat(seconds / 60.0);
+    const secs: u32 = @intFromFloat(@mod(seconds, 60.0));
+    return std.fmt.bufPrint(buf, "{d}m{d:0>2}s", .{ mins, secs }) catch "??";
+}
+
 pub fn State(comptime MeshType: type) type {
     return struct {
         const Self = @This();
@@ -134,7 +205,17 @@ pub fn leapfrogStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void
     state.timestep += 1;
 }
 
-pub fn runSimulation(allocator: std.mem.Allocator, state: *MaxwellState3D, config: Config) !void {
+const SimResult = struct {
+    elapsed_s: f64,
+    snapshot_count: u32,
+};
+
+pub fn runSimulation(
+    allocator: std.mem.Allocator,
+    state: *MaxwellState3D,
+    config: Config,
+    writer: anytype,
+) !SimResult {
     const snapshot_count_max = config.snapshotCount();
     var pvd_entries: []flux.io.PvdEntry = &.{};
     var filename_bufs: [][flux.io.max_snapshot_filename_length]u8 = &.{};
@@ -154,6 +235,7 @@ pub fn runSimulation(allocator: std.mem.Allocator, state: *MaxwellState3D, confi
     if (config.output_dir) |output_dir| {
         try ensureDir(output_dir);
     }
+    var progress = Progress(@TypeOf(writer)).init(writer, config.steps);
 
     var step_index: u32 = 0;
     while (step_index < config.steps) : (step_index += 1) {
@@ -174,13 +256,21 @@ pub fn runSimulation(allocator: std.mem.Allocator, state: *MaxwellState3D, confi
                 snapshot_count += 1;
             }
         }
+
+        progress.update(step_index + 1);
     }
+    progress.finish();
 
     if (config.output_dir) |output_dir| {
         if (snapshot_count > 0) {
             try writePvdFile(allocator, output_dir, "maxwell_3d", pvd_entries[0..snapshot_count]);
         }
     }
+
+    return .{
+        .elapsed_s = progress.elapsed(),
+        .snapshot_count = snapshot_count,
+    };
 }
 
 fn projectEdgesToTets(
@@ -535,6 +625,7 @@ pub fn runCli() !void {
     defer std.process.argsFree(allocator, args);
 
     const config = parseArgs(args) catch return;
+    const stderr = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
 
     var mesh = try makeCavityMesh(allocator, config);
     defer mesh.deinit(allocator);
@@ -543,15 +634,48 @@ pub fn runCli() !void {
     defer state.deinit(allocator);
 
     try seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
-    try runSimulation(allocator, &state, config);
+    const omega = tm110AngularFrequency(config.width, config.height);
+
+    try stderr.writeAll("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n");
+    try stderr.print("  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n", .{
+        config.width, config.height, config.depth,
+    });
+    try stderr.print("  grid      {d}×{d}×{d} ({d} tetrahedra)\n", .{
+        config.nx, config.ny, config.nz, mesh.num_tets(),
+    });
+    try stderr.print("  spacing   h_min = {d:.6}\n", .{config.gridSpacingMin()});
+    try stderr.print("  timestep  dt = {d:.6}\n", .{config.dt});
+    try stderr.print("  mode      TM₁₁₀  (ω = {d:.6})\n", .{omega});
+    try stderr.print("  mesh      {d} vertices  {d} edges  {d} faces  {d} tets\n\n", .{
+        mesh.num_vertices(), mesh.num_edges(), mesh.num_faces(), mesh.num_tets(),
+    });
+
+    const result = try runSimulation(allocator, &state, config, stderr);
 
     const divergence = try divergenceNorm(allocator, &state);
-    const omega = tm110AngularFrequency(config.width, config.height);
-    const stdout = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
-    try stdout.print(
-        "maxwell_3d completed {d} steps on {d} tetrahedra; ω = {d:.6}; ||dB||₂ = {e}\n",
-        .{ state.timestep, mesh.num_tets(), omega, divergence },
-    );
+    const steps_per_sec = @as(f64, @floatFromInt(config.steps)) / result.elapsed_s;
+    var duration_buf: [16]u8 = undefined;
+
+    try stderr.writeAll("\n  ── Results ─────────────────────────────────\n\n");
+    try stderr.print("  steps    {d}\n", .{state.timestep});
+    try stderr.print("  omega    {d:.6}\n", .{omega});
+    try stderr.print("  ||dB||₂  {e}\n", .{divergence});
+    try stderr.print("  elapsed  {s} ({d:.0} steps/s)\n", .{
+        formatDuration(&duration_buf, result.elapsed_s),
+        steps_per_sec,
+    });
+    if (result.snapshot_count > 0 and config.output_dir != null) {
+        try stderr.print("  output   {d} frames → {s}/\n", .{
+            result.snapshot_count,
+            config.output_dir.?,
+        });
+        try stderr.print("\n  ▸ uv run tools/visualize.py {s} --field B_flux --output {s}/animation.png\n\n", .{
+            config.output_dir.?,
+            config.output_dir.?,
+        });
+    } else {
+        try stderr.writeAll("\n");
+    }
 }
 
 fn makeCavityMesh(allocator: std.mem.Allocator, config: Config) !Mesh3D {
