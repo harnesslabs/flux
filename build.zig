@@ -193,6 +193,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_maxwell3d_tests = b.addRunArtifact(maxwell3d_tests);
 
+    // -- example-euler2d step --
+    // Builds and runs the 2D incompressible Euler vorticity-stream example.
+    const euler2d_exe = b.addExecutable(.{
+        .name = "euler_2d",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/euler_2d/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(euler2d_exe);
+    const euler2d_run = b.addRunArtifact(euler2d_exe);
+    euler2d_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        euler2d_run.addArgs(args);
+    }
+    const euler2d_step = b.step("example-euler2d", "Run the 2D incompressible Euler example");
+    euler2d_step.dependOn(&euler2d_run.step);
+
+    const euler2d_tests = b.addTest(.{
+        .root_module = euler2d_exe.root_module,
+    });
+    const run_euler2d_tests = b.addRunArtifact(euler2d_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -201,6 +228,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_maxwell2d_tests.step);
     test_step.dependOn(&run_maxwell3d_tests.step);
+    test_step.dependOn(&run_euler2d_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
