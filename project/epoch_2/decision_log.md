@@ -258,6 +258,29 @@ boundary degrees `k = 0` and `k = n` use diagonal geometric ratios, while
 every interior degree uses the Whitney/Galerkin mass matrix `M_k` for forward
 application and PCG for `★⁻¹`, initialized from the diagonal dual/primal ratio.
 
+## 2026-04-05: Observers live beside operators and evaluate explicitly, not inside `TimeStepper`
+
+**Decision:** Add the M3 diagnostic framework as standalone observer values in
+`src/operators/observers.zig`, with explicit `evaluate(allocator, state, step)`
+methods plus a tuple-based `evaluateAll(...)` helper. Do not extend
+`TimeStepper` yet.
+
+**Alternatives considered:**
+1. Add observer attachment directly to `TimeStepper`: rejected because there is
+   no shared runner API yet, so baking storage and output policy into the
+   wrapper would force an early interface around an unknown consumer.
+2. Hide allocation inside observer objects so `evaluate(state, step)` stays
+   allocator-free: rejected because diagnostics like divergence norm and
+   helicity legitimately allocate temporary cochains today. Hiding that would
+   violate the project's explicit-allocation rule.
+
+**Rationale:** The current milestone needs reusable diagnostics more urgently
+than it needs a universal simulation runner. Standalone observers give every
+example and future runner one obvious hook to call after each step, keep
+allocation explicit, and preserve the option to let a later runner own the
+policy for buffering, formatting, and persistence without first unwinding an
+over-eager `TimeStepper` interface.
+
 **Alternatives considered:**
 1. Keep a special `whitney_mass_1` path and add a separate 3D-only `k = 2`
    implementation beside it: rejected because it hard-codes today's dimensions
