@@ -74,32 +74,152 @@ pub fn State(comptime MeshType: type) type {
 
 pub const MaxwellState3D = State(Mesh3D);
 
-pub fn faradayStep(_: std.mem.Allocator, _: anytype, _: f64) !void {
-    return error.NotImplemented;
+pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    var derivative = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, state.E);
+    defer derivative.deinit(allocator);
+
+    derivative.scale(dt);
+    state.B.sub(derivative);
 }
 
-pub fn ampereStep(_: std.mem.Allocator, _: anytype, _: f64) !void {
-    return error.NotImplemented;
+pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    var star_b = try state.operators.hodgeStar(2).apply(allocator, state.B);
+    defer star_b.deinit(allocator);
+
+    var derivative = try state.operators.exteriorDerivative(cochain.Dual, 1).apply(allocator, star_b);
+    defer derivative.deinit(allocator);
+
+    var curl_b = try state.operators.hodgeStarInverse(1).apply(allocator, derivative);
+    defer curl_b.deinit(allocator);
+
+    for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
+        electric.* += dt * (curl_value - current);
+    }
 }
 
-pub fn applyPecBoundary(_: std.mem.Allocator, _: anytype) !void {
-    return error.NotImplemented;
+pub fn applyPecBoundary(_: std.mem.Allocator, state: anytype) !void {
+    for (state.mesh.boundary_edges) |edge_idx| {
+        state.E.values[edge_idx] = 0.0;
+    }
 }
 
-pub fn leapfrogStep(_: std.mem.Allocator, _: anytype, _: f64) !void {
-    return error.NotImplemented;
+pub fn leapfrogStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    try faradayStep(allocator, state, dt);
+    try ampereStep(allocator, state, dt);
+    try applyPecBoundary(allocator, state);
+    state.timestep += 1;
 }
 
-pub fn runSimulation(_: std.mem.Allocator, _: *MaxwellState3D, _: Config) !void {
-    return error.NotImplemented;
+pub fn runSimulation(allocator: std.mem.Allocator, state: *MaxwellState3D, config: Config) !void {
+    var step_index: u32 = 0;
+    while (step_index < config.steps) : (step_index += 1) {
+        try leapfrogStep(allocator, state, config.dt);
+    }
 }
 
-pub fn writeSnapshot(_: std.mem.Allocator, _: anytype, _: *const MaxwellState3D) !void {
-    return error.NotImplemented;
+fn projectEdgesToTets(
+    allocator: std.mem.Allocator,
+    mesh: *const Mesh3D,
+    edge_values: []const f64,
+) ![]f64 {
+    const tet_count = mesh.num_tets();
+    const output = try allocator.alloc(f64, tet_count);
+    errdefer allocator.free(output);
+    const touched = try allocator.alloc(bool, mesh.num_edges());
+    defer allocator.free(touched);
+
+    for (0..tet_count) |tet_idx_usize| {
+        @memset(touched, false);
+        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        var sum: f64 = 0.0;
+        var count: u32 = 0;
+
+        for (tet_row.cols) |face_idx| {
+            const face_row = mesh.boundary(2).row(face_idx);
+            for (face_row.cols) |edge_idx| {
+                if (touched[edge_idx]) continue;
+                touched[edge_idx] = true;
+                sum += @abs(edge_values[edge_idx]);
+                count += 1;
+            }
+        }
+
+        std.debug.assert(count > 0);
+        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(count));
+    }
+
+    return output;
+}
+
+fn projectFacesToTets(
+    allocator: std.mem.Allocator,
+    mesh: *const Mesh3D,
+    face_values: []const f64,
+) ![]f64 {
+    const tet_count = mesh.num_tets();
+    const output = try allocator.alloc(f64, tet_count);
+    errdefer allocator.free(output);
+
+    for (0..tet_count) |tet_idx_usize| {
+        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        var sum: f64 = 0.0;
+        for (tet_row.cols) |face_idx| {
+            sum += @abs(face_values[face_idx]);
+        }
+        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(tet_row.cols.len));
+    }
+
+    return output;
+}
+
+pub fn writeSnapshot(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    state: *const MaxwellState3D,
+) !void {
+    const e_projected = try projectEdgesToTets(allocator, state.mesh, state.E.values);
+    defer allocator.free(e_projected);
+
+    const b_projected = try projectFacesToTets(allocator, state.mesh, state.B.values);
+    defer allocator.free(b_projected);
+
+    const cell_data = [_]flux.io.DataArraySlice{
+        .{ .name = "E_intensity", .values = e_projected },
+        .{ .name = "B_flux", .values = b_projected },
+    };
+
+    try flux.io.write(
+        writer,
+        Mesh3D.embedding_dimension,
+        Mesh3D.topological_dimension,
+        state.mesh.*,
+        &.{},
+        &cell_data,
+    );
 }
 
 pub fn runCli() !void {
-    return error.NotImplemented;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var mesh = try makeCavityMesh(allocator, .{});
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try seedClosedMagneticField(allocator, &state);
+    try runSimulation(allocator, &state, .{});
+
+    var stdout_buffer = std.ArrayListUnmanaged(u8){};
+    defer stdout_buffer.deinit(allocator);
+    try writeSnapshot(allocator, stdout_buffer.writer(allocator), &state);
+    const stdout = (std.fs.File{ .handle = std.posix.STDOUT_FILENO }).deprecatedWriter();
+    try stdout.print(
+        "maxwell_3d completed {d} steps on {d} tetrahedra\n",
+        .{ state.timestep, mesh.num_tets() },
+    );
 }
 
 fn makeCavityMesh(allocator: std.mem.Allocator, config: Config) !Mesh3D {
