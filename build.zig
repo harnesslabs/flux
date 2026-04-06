@@ -166,6 +166,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_maxwell2d_tests = b.addRunArtifact(maxwell2d_tests);
 
+    // -- example-maxwell3d step --
+    // Builds and runs the 3D Maxwell cavity example on tetrahedral meshes.
+    const maxwell3d_exe = b.addExecutable(.{
+        .name = "maxwell_3d",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/maxwell_3d/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(maxwell3d_exe);
+    const maxwell3d_run = b.addRunArtifact(maxwell3d_exe);
+    maxwell3d_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        maxwell3d_run.addArgs(args);
+    }
+    const maxwell3d_step = b.step("example-maxwell3d", "Run the 3D Maxwell cavity example");
+    maxwell3d_step.dependOn(&maxwell3d_run.step);
+
+    const maxwell3d_tests = b.addTest(.{
+        .root_module = maxwell3d_exe.root_module,
+    });
+    const run_maxwell3d_tests = b.addRunArtifact(maxwell3d_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -173,6 +200,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_maxwell2d_tests.step);
+    test_step.dependOn(&run_maxwell3d_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
@@ -257,6 +285,8 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&exe_tests.step);
     check_step.dependOn(&maxwell2d_exe.step);
     check_step.dependOn(&maxwell2d_tests.step);
+    check_step.dependOn(&maxwell3d_exe.step);
+    check_step.dependOn(&maxwell3d_tests.step);
 
     // -- ci step --
     // Runs build + test + fmt in one command: `zig build ci`
@@ -265,5 +295,6 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
     ci_step.dependOn(&run_maxwell2d_tests.step);
+    ci_step.dependOn(&run_maxwell3d_tests.step);
     ci_step.dependOn(&fmt_cmd.step);
 }

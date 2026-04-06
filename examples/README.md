@@ -1,7 +1,7 @@
 # Examples
 
-2D electromagnetic simulations demonstrating the flux Maxwell solver on
-triangulated PEC cavities.
+Electromagnetic examples demonstrating the flux Maxwell solver on
+triangulated and tetrahedral PEC cavities.
 
 ![TE10 cavity animation](../assets/cavity-512-grid-10000-steps.png)
 
@@ -14,6 +14,7 @@ For realistic throughput numbers, run the example in `ReleaseFast`:
 ```sh
 zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
 zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
+zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025
 ```
 
 The default `zig build` mode is `Debug`, which is useful for development but
@@ -38,6 +39,7 @@ APNG is now the default recommendation because it preserves full color. Use
 |------|-------------|---------|
 | [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole` |
 | [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity` |
+| [**maxwell_3d**](maxwell_3d/README.md) | Source-free TM₁₁₀ rectangular cavity mode on tetrahedra with 3D convergence check | `zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025` |
 
 ---
 
@@ -92,8 +94,10 @@ steps per period.
 
 ### tools/visualize.py — animated APNG/GIF
 
-Parses VTK `.vtu` files and renders an animation with matplotlib. No ParaView
-needed — `uv` handles dependencies automatically.
+Parses VTK `.vtu` files and renders an animation with matplotlib. Triangle
+meshes render as 2D pseudocolor plots; tetrahedral meshes render as 3D
+cell-barycenter animations. No ParaView needed — `uv` handles dependencies
+automatically.
 
 ```sh
 uv run tools/visualize.py <input_dir> [options]

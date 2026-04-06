@@ -1,0 +1,889 @@
+const std = @import("std");
+const testing = std.testing;
+const flux = @import("flux");
+
+const cochain = flux.forms;
+const topology = flux.topology;
+
+pub const Mesh3D = topology.Mesh(3, 3);
+
+pub const Config = struct {
+    steps: u32 = 1000,
+    nx: u32 = 2,
+    ny: u32 = 2,
+    nz: u32 = 2,
+    width: f64 = 1.0,
+    height: f64 = 1.0,
+    depth: f64 = 1.0,
+    dt: f64 = 0.01,
+    output_dir: ?[]const u8 = null,
+    output_interval: u32 = 0,
+
+    fn gridSpacingMin(self: Config) f64 {
+        const dx = self.width / @as(f64, @floatFromInt(self.nx));
+        const dy = self.height / @as(f64, @floatFromInt(self.ny));
+        const dz = self.depth / @as(f64, @floatFromInt(self.nz));
+        return @min(dx, @min(dy, dz));
+    }
+
+    fn snapshotCount(self: Config) u32 {
+        if (self.output_dir == null or self.output_interval == 0) return 0;
+        return self.steps / self.output_interval;
+    }
+};
+
+fn writeAllToStderr(bytes: []const u8) void {
+    var written: usize = 0;
+    while (written < bytes.len) {
+        const count = std.posix.write(std.posix.STDERR_FILENO, bytes[written..]) catch return;
+        if (count == 0) return;
+        written += count;
+    }
+}
+
+fn stderrPrint(comptime fmt: []const u8, args: anytype) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeAllToStderr(msg);
+}
+
+fn Progress() type {
+    return struct {
+        const Self = @This();
+
+        total: u32,
+        timer: std.time.Timer,
+        last_draw_ns: u64 = 0,
+        bar_width: u32 = 40,
+
+        fn init(total: u32) Self {
+            return .{
+                .total = total,
+                .timer = std.time.Timer.start() catch
+                    @panic("OS timer unavailable — cannot run simulation"),
+            };
+        }
+
+        fn update(self: *Self, step: u32) void {
+            const elapsed_ns = self.timer.read();
+            if (elapsed_ns - self.last_draw_ns < 50_000_000 and step < self.total) return;
+            self.last_draw_ns = elapsed_ns;
+
+            const elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0;
+            const frac = @as(f64, @floatFromInt(step)) / @as(f64, @floatFromInt(self.total));
+            const pct = frac * 100.0;
+            const steps_per_sec = if (elapsed_s > 0.01) @as(f64, @floatFromInt(step)) / elapsed_s else 0.0;
+            const remaining = @as(f64, @floatFromInt(self.total - step));
+            const eta_s = if (steps_per_sec > 0.01) remaining / steps_per_sec else 0.0;
+            const filled: u32 = @intFromFloat(frac * @as(f64, @floatFromInt(self.bar_width)));
+
+            var bar: [64]u8 = undefined;
+            for (0..self.bar_width) |j| {
+                bar[j] = if (j < filled) '#' else '-';
+            }
+
+            var elapsed_buf: [16]u8 = undefined;
+            var eta_buf: [16]u8 = undefined;
+            stderrPrint("\r  {s}  {d:>5.1}%  {d}/{d}  {s}  ETA {s}  {d:.0} steps/s    ", .{
+                bar[0..self.bar_width],
+                pct,
+                step,
+                self.total,
+                formatDuration(&elapsed_buf, elapsed_s),
+                formatDuration(&eta_buf, eta_s),
+                steps_per_sec,
+            });
+        }
+
+        fn finish(self: *Self) void {
+            _ = self;
+            stderrPrint("\r{s}\r", .{"                                                                                                                        "});
+        }
+
+        fn elapsed(self: *Self) f64 {
+            return @as(f64, @floatFromInt(self.timer.read())) / 1_000_000_000.0;
+        }
+    };
+}
+
+fn formatDuration(buf: *[16]u8, seconds: f64) []const u8 {
+    if (seconds < 60.0) {
+        return std.fmt.bufPrint(buf, "{d:.1}s", .{seconds}) catch "??";
+    }
+    const mins: u32 = @intFromFloat(seconds / 60.0);
+    const secs: u32 = @intFromFloat(@mod(seconds, 60.0));
+    return std.fmt.bufPrint(buf, "{d}m{d:0>2}s", .{ mins, secs }) catch "??";
+}
+
+pub fn State(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
+        pub const TwoForm = cochain.Cochain(MeshType, 2, cochain.Primal);
+
+        E: OneForm,
+        B: TwoForm,
+        J: OneForm,
+        mesh: *const MeshType,
+        operators: *flux.OperatorContext(MeshType),
+        timestep: u64,
+
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
+            var electric = try OneForm.init(allocator, mesh);
+            errdefer electric.deinit(allocator);
+
+            var magnetic = try TwoForm.init(allocator, mesh);
+            errdefer magnetic.deinit(allocator);
+
+            var current = try OneForm.init(allocator, mesh);
+            errdefer current.deinit(allocator);
+
+            const operators = try flux.OperatorContext(MeshType).init(allocator, mesh);
+            errdefer operators.deinit();
+
+            try operators.withExteriorDerivative(cochain.Primal, 1);
+            try operators.withExteriorDerivative(cochain.Primal, 2);
+            try operators.withExteriorDerivative(cochain.Dual, 1);
+            try operators.withHodgeStar(2);
+            try operators.withHodgeStarInverse(1);
+
+            return .{
+                .E = electric,
+                .B = magnetic,
+                .J = current,
+                .mesh = mesh,
+                .operators = operators,
+                .timestep = 0,
+            };
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.operators.deinit();
+            self.J.deinit(allocator);
+            self.B.deinit(allocator);
+            self.E.deinit(allocator);
+        }
+    };
+}
+
+pub const MaxwellState3D = State(Mesh3D);
+
+fn tm110WaveNumbers(width: f64, height: f64) struct { kx: f64, ky: f64 } {
+    return .{
+        .kx = std.math.pi / width,
+        .ky = std.math.pi / height,
+    };
+}
+
+fn tm110AngularFrequency(width: f64, height: f64) f64 {
+    const wave = tm110WaveNumbers(width, height);
+    return std.math.sqrt(wave.kx * wave.kx + wave.ky * wave.ky);
+}
+
+pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    var derivative = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, state.E);
+    defer derivative.deinit(allocator);
+
+    derivative.scale(dt);
+    state.B.sub(derivative);
+}
+
+pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    var star_b = try state.operators.hodgeStar(2).apply(allocator, state.B);
+    defer star_b.deinit(allocator);
+
+    var derivative = try state.operators.exteriorDerivative(cochain.Dual, 1).apply(allocator, star_b);
+    defer derivative.deinit(allocator);
+
+    var curl_b = try state.operators.hodgeStarInverse(1).apply(allocator, derivative);
+    defer curl_b.deinit(allocator);
+
+    for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
+        electric.* += dt * (curl_value - current);
+    }
+}
+
+pub fn applyPecBoundary(_: std.mem.Allocator, state: anytype) !void {
+    for (state.mesh.boundary_edges) |edge_idx| {
+        state.E.values[edge_idx] = 0.0;
+    }
+}
+
+pub fn leapfrogStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    try faradayStep(allocator, state, dt);
+    try ampereStep(allocator, state, dt);
+    try applyPecBoundary(allocator, state);
+    state.timestep += 1;
+}
+
+const SimResult = struct {
+    elapsed_s: f64,
+    snapshot_count: u32,
+};
+
+pub fn runSimulation(
+    allocator: std.mem.Allocator,
+    state: *MaxwellState3D,
+    config: Config,
+) !SimResult {
+    const snapshot_count_max = config.snapshotCount();
+    var pvd_entries: []flux.io.PvdEntry = &.{};
+    var filename_bufs: [][flux.io.max_snapshot_filename_length]u8 = &.{};
+
+    if (snapshot_count_max > 0) {
+        pvd_entries = try allocator.alloc(flux.io.PvdEntry, snapshot_count_max);
+        filename_bufs = try allocator.alloc([flux.io.max_snapshot_filename_length]u8, snapshot_count_max);
+    }
+    defer {
+        if (snapshot_count_max > 0) {
+            allocator.free(filename_bufs);
+            allocator.free(pvd_entries);
+        }
+    }
+
+    var snapshot_count: u32 = 0;
+    if (config.output_dir) |output_dir| {
+        try ensureDir(output_dir);
+    }
+    var progress = Progress().init(config.steps);
+
+    var step_index: u32 = 0;
+    while (step_index < config.steps) : (step_index += 1) {
+        try leapfrogStep(allocator, state, config.dt);
+
+        if (config.output_dir) |output_dir| {
+            if (config.output_interval > 0 and (step_index + 1) % config.output_interval == 0) {
+                const filename = flux.io.snapshot_filename(
+                    &filename_bufs[snapshot_count],
+                    "maxwell_3d",
+                    snapshot_count,
+                );
+                try writeSnapshotFile(allocator, output_dir, filename, state);
+                pvd_entries[snapshot_count] = .{
+                    .timestep = @as(f64, @floatFromInt(step_index + 1)) * config.dt,
+                    .filename = filename,
+                };
+                snapshot_count += 1;
+            }
+        }
+
+        progress.update(step_index + 1);
+    }
+    progress.finish();
+
+    if (config.output_dir) |output_dir| {
+        if (snapshot_count > 0) {
+            try writePvdFile(allocator, output_dir, "maxwell_3d", pvd_entries[0..snapshot_count]);
+        }
+    }
+
+    return .{
+        .elapsed_s = progress.elapsed(),
+        .snapshot_count = snapshot_count,
+    };
+}
+
+fn projectEdgesToTets(
+    allocator: std.mem.Allocator,
+    mesh: *const Mesh3D,
+    edge_values: []const f64,
+) ![]f64 {
+    const tet_count = mesh.num_tets();
+    const output = try allocator.alloc(f64, tet_count);
+    errdefer allocator.free(output);
+    const touched = try allocator.alloc(bool, mesh.num_edges());
+    defer allocator.free(touched);
+
+    for (0..tet_count) |tet_idx_usize| {
+        @memset(touched, false);
+        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        var sum: f64 = 0.0;
+        var count: u32 = 0;
+
+        for (tet_row.cols) |face_idx| {
+            const face_row = mesh.boundary(2).row(face_idx);
+            for (face_row.cols) |edge_idx| {
+                if (touched[edge_idx]) continue;
+                touched[edge_idx] = true;
+                sum += @abs(edge_values[edge_idx]);
+                count += 1;
+            }
+        }
+
+        std.debug.assert(count > 0);
+        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(count));
+    }
+
+    return output;
+}
+
+/// Project the analytical TM₁₁₀ cavity electric field onto mesh edges.
+///
+/// TM₁₁₀ on a PEC box [0,a]×[0,b]×[0,c] with c = 1 has:
+///   E = (0, 0, sin(πx/a) sin(πy/b) sin(ωt))
+///   B = ( (k_y/ω) sin(k_x x) cos(k_y y) cos(ωt),
+///        -(k_x/ω) cos(k_x x) sin(k_y y) cos(ωt),
+///         0 )
+/// with ω² = k_x² + k_y². This mode is uniform in z and still satisfies
+/// PEC because E is normal to the z-walls and vanishes on x/y walls.
+pub fn project_tm110_e(
+    mesh: *const Mesh3D,
+    values: []f64,
+    t: f64,
+    width: f64,
+    height: f64,
+) void {
+    const wave = tm110WaveNumbers(width, height);
+    const omega = tm110AngularFrequency(width, height);
+    const edge_verts = mesh.simplices(1).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+
+    for (values, edge_verts) |*value, verts| {
+        const p0 = coords[verts[0]];
+        const p1 = coords[verts[1]];
+        const mx = 0.5 * (p0[0] + p1[0]);
+        const my = 0.5 * (p0[1] + p1[1]);
+        const dz = p1[2] - p0[2];
+
+        value.* = @sin(wave.kx * mx) * @sin(wave.ky * my) * @sin(omega * t) * dz;
+    }
+}
+
+pub fn project_tm110_potential(
+    mesh: *const Mesh3D,
+    values: []f64,
+    t: f64,
+    width: f64,
+    height: f64,
+) void {
+    const wave = tm110WaveNumbers(width, height);
+    const omega = tm110AngularFrequency(width, height);
+    const edge_verts = mesh.simplices(1).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+
+    for (values, edge_verts) |*value, verts| {
+        const p0 = coords[verts[0]];
+        const p1 = coords[verts[1]];
+        const mx = 0.5 * (p0[0] + p1[0]);
+        const my = 0.5 * (p0[1] + p1[1]);
+        const dz = p1[2] - p0[2];
+
+        value.* = (1.0 / omega) * @sin(wave.kx * mx) * @sin(wave.ky * my) * @cos(omega * t) * dz;
+    }
+}
+
+/// Project the analytical TM₁₁₀ magnetic field onto mesh faces.
+///
+/// Each primal 2-form entry is a flux integral approximated by the face
+/// centroid sample times the oriented face area vector.
+pub fn project_tm110_b(
+    mesh: *const Mesh3D,
+    values: []f64,
+    t: f64,
+    width: f64,
+    height: f64,
+) void {
+    const wave = tm110WaveNumbers(width, height);
+    const omega = tm110AngularFrequency(width, height);
+    const face_verts = mesh.simplices(2).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+
+    for (values, face_verts) |*value, verts| {
+        const p0 = coords[verts[0]];
+        const p1 = coords[verts[1]];
+        const p2 = coords[verts[2]];
+
+        const centroid_x = (p0[0] + p1[0] + p2[0]) / 3.0;
+        const centroid_y = (p0[1] + p1[1] + p2[1]) / 3.0;
+
+        const bx = (wave.ky / omega) * @sin(wave.kx * centroid_x) * @cos(wave.ky * centroid_y) * @cos(omega * t);
+        const by = -(wave.kx / omega) * @cos(wave.kx * centroid_x) * @sin(wave.ky * centroid_y) * @cos(omega * t);
+
+        const edge_a = [3]f64{ p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2] };
+        const edge_b = [3]f64{ p2[0] - p0[0], p2[1] - p0[1], p2[2] - p0[2] };
+        const area_vector = [3]f64{
+            0.5 * (edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1]),
+            0.5 * (edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2]),
+            0.5 * (edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0]),
+        };
+
+        value.* = bx * area_vector[0] + by * area_vector[1];
+    }
+}
+
+fn seedTm110Mode(
+    allocator: std.mem.Allocator,
+    state: *MaxwellState3D,
+    dt: f64,
+    width: f64,
+    height: f64,
+) !void {
+    @memset(state.E.values, 0.0);
+
+    var potential = try MaxwellState3D.OneForm.init(allocator, state.mesh);
+    defer potential.deinit(allocator);
+    project_tm110_potential(state.mesh, potential.values, -dt / 2.0, width, height);
+
+    var exact_flux = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, potential);
+    defer exact_flux.deinit(allocator);
+    @memcpy(state.B.values, exact_flux.values);
+}
+
+fn projectFacesToTets(
+    allocator: std.mem.Allocator,
+    mesh: *const Mesh3D,
+    face_values: []const f64,
+) ![]f64 {
+    const tet_count = mesh.num_tets();
+    const output = try allocator.alloc(f64, tet_count);
+    errdefer allocator.free(output);
+
+    for (0..tet_count) |tet_idx_usize| {
+        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        var sum: f64 = 0.0;
+        for (tet_row.cols) |face_idx| {
+            sum += @abs(face_values[face_idx]);
+        }
+        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(tet_row.cols.len));
+    }
+
+    return output;
+}
+
+pub fn writeSnapshot(
+    allocator: std.mem.Allocator,
+    writer: anytype,
+    state: *const MaxwellState3D,
+) !void {
+    const e_projected = try projectEdgesToTets(allocator, state.mesh, state.E.values);
+    defer allocator.free(e_projected);
+
+    const b_projected = try projectFacesToTets(allocator, state.mesh, state.B.values);
+    defer allocator.free(b_projected);
+
+    const cell_data = [_]flux.io.DataArraySlice{
+        .{ .name = "E_intensity", .values = e_projected },
+        .{ .name = "B_flux", .values = b_projected },
+    };
+
+    try flux.io.write(
+        writer,
+        Mesh3D.embedding_dimension,
+        Mesh3D.topological_dimension,
+        state.mesh.*,
+        &.{},
+        &cell_data,
+    );
+}
+
+fn writeSnapshotFile(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    filename: []const u8,
+    state: *const MaxwellState3D,
+) !void {
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try writeSnapshot(allocator, output.writer(allocator), state);
+
+    var dir = try std.fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(filename, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn writePvdFile(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    base_name: []const u8,
+    entries: []const flux.io.PvdEntry,
+) !void {
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try flux.io.write_pvd(output.writer(allocator), entries);
+
+    var pvd_buf: [flux.io.max_snapshot_filename_length]u8 = undefined;
+    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
+        return error.FilenameTooLong;
+
+    var dir = try std.fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(pvd_name, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn ensureDir(path: []const u8) !void {
+    std.fs.cwd().makeDir(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+}
+
+const ParseError = error{InvalidArgument};
+
+fn parseArgs(args: []const [:0]const u8) ParseError!Config {
+    var config = Config{};
+    var i: usize = 1;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (eql(arg, "--help") or eql(arg, "-h")) {
+            printUsage();
+            std.process.exit(0);
+        } else if (eql(arg, "--steps")) {
+            config.steps = parseU32(args, &i, "--steps") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--nx")) {
+            config.nx = parseU32(args, &i, "--nx") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--ny")) {
+            config.ny = parseU32(args, &i, "--ny") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--nz")) {
+            config.nz = parseU32(args, &i, "--nz") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--width")) {
+            config.width = parseF64(args, &i, "--width") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--height")) {
+            config.height = parseF64(args, &i, "--height") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--depth")) {
+            config.depth = parseF64(args, &i, "--depth") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--dt")) {
+            config.dt = parseF64(args, &i, "--dt") orelse return ParseError.InvalidArgument;
+        } else if (eql(arg, "--output")) {
+            config.output_dir = nextArg(args, &i) orelse return flagError("--output");
+        } else if (eql(arg, "--output-interval")) {
+            config.output_interval = parseU32(args, &i, "--output-interval") orelse return ParseError.InvalidArgument;
+        } else {
+            std.debug.print("error: unknown argument '{s}'\n\n", .{arg});
+            printUsage();
+            return ParseError.InvalidArgument;
+        }
+    }
+    return config;
+}
+
+fn eql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
+}
+
+fn nextArg(args: []const [:0]const u8, i: *usize) ?[]const u8 {
+    if (i.* + 1 >= args.len) return null;
+    i.* += 1;
+    return args[i.*];
+}
+
+fn flagError(flag: []const u8) ParseError {
+    std.debug.print("error: {s} requires a value\n", .{flag});
+    return ParseError.InvalidArgument;
+}
+
+fn parseU32(args: []const [:0]const u8, i: *usize, flag: []const u8) ?u32 {
+    const value = nextArg(args, i) orelse {
+        std.debug.print("error: {s} requires a value\n", .{flag});
+        return null;
+    };
+    return std.fmt.parseInt(u32, value, 10) catch {
+        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
+        return null;
+    };
+}
+
+fn parseF64(args: []const [:0]const u8, i: *usize, flag: []const u8) ?f64 {
+    const value = nextArg(args, i) orelse {
+        std.debug.print("error: {s} requires a value\n", .{flag});
+        return null;
+    };
+    return std.fmt.parseFloat(f64, value) catch {
+        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
+        return null;
+    };
+}
+
+fn printUsage() void {
+    std.debug.print(
+        \\
+        \\  maxwell_3d — 3D cavity resonance on tetrahedral meshes
+        \\
+        \\  usage:
+        \\    zig build -Doptimize=ReleaseFast example-maxwell3d -- [options]
+        \\
+        \\  mesh:
+        \\    --nx N              tetrahedral cells in x (default: 2)
+        \\    --ny N              tetrahedral cells in y (default: 2)
+        \\    --nz N              tetrahedral cells in z (default: 2)
+        \\    --width L           cavity width  (default: 1.0)
+        \\    --height L          cavity height (default: 1.0)
+        \\    --depth L           cavity depth  (default: 1.0)
+        \\
+        \\  time stepping:
+        \\    --steps N           leapfrog steps (default: 1000)
+        \\    --dt DT             fixed timestep (default: 0.01)
+        \\
+        \\  output:
+        \\    --output DIR        write VTK snapshots into DIR
+        \\    --output-interval N write every N steps when output is enabled
+        \\
+    , .{});
+}
+
+pub fn runCli() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const args = try std.process.argsAlloc(allocator);
+    defer std.process.argsFree(allocator, args);
+
+    const config = parseArgs(args) catch return;
+    var mesh = try makeCavityMesh(allocator, config);
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
+    const omega = tm110AngularFrequency(config.width, config.height);
+
+    stderrPrint("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n", .{});
+    stderrPrint("  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n", .{
+        config.width, config.height, config.depth,
+    });
+    stderrPrint("  grid      {d}×{d}×{d} ({d} tetrahedra)\n", .{
+        config.nx, config.ny, config.nz, mesh.num_tets(),
+    });
+    stderrPrint("  spacing   h_min = {d:.6}\n", .{config.gridSpacingMin()});
+    stderrPrint("  timestep  dt = {d:.6}\n", .{config.dt});
+    stderrPrint("  mode      TM₁₁₀  (ω = {d:.6})\n", .{omega});
+    stderrPrint("  mesh      {d} vertices  {d} edges  {d} faces  {d} tets\n\n", .{
+        mesh.num_vertices(), mesh.num_edges(), mesh.num_faces(), mesh.num_tets(),
+    });
+
+    const result = try runSimulation(allocator, &state, config);
+
+    const divergence = try divergenceNorm(allocator, &state);
+    const steps_per_sec = @as(f64, @floatFromInt(config.steps)) / result.elapsed_s;
+    var duration_buf: [16]u8 = undefined;
+
+    stderrPrint("\n  ── Results ─────────────────────────────────\n\n", .{});
+    stderrPrint("  steps    {d}\n", .{state.timestep});
+    stderrPrint("  omega    {d:.6}\n", .{omega});
+    stderrPrint("  ||dB||₂  {e}\n", .{divergence});
+    stderrPrint("  elapsed  {s} ({d:.0} steps/s)\n", .{
+        formatDuration(&duration_buf, result.elapsed_s),
+        steps_per_sec,
+    });
+    if (result.snapshot_count > 0 and config.output_dir != null) {
+        stderrPrint("  output   {d} frames → {s}/\n", .{
+            result.snapshot_count,
+            config.output_dir.?,
+        });
+        stderrPrint("\n  ▸ uv run tools/visualize.py {s} --field B_flux --output {s}/animation.png\n\n", .{
+            config.output_dir.?,
+            config.output_dir.?,
+        });
+    } else {
+        stderrPrint("\n", .{});
+    }
+}
+
+fn makeCavityMesh(allocator: std.mem.Allocator, config: Config) !Mesh3D {
+    return Mesh3D.uniform_tetrahedral_grid(
+        allocator,
+        config.nx,
+        config.ny,
+        config.nz,
+        config.width,
+        config.height,
+        config.depth,
+    );
+}
+
+fn seedClosedMagneticField(allocator: std.mem.Allocator, state: *MaxwellState3D) !void {
+    var potential = try MaxwellState3D.OneForm.init(allocator, state.mesh);
+    defer potential.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x92_3D_B_00);
+    for (potential.values) |*value| {
+        value.* = rng.random().float(f64) * 0.2 - 0.1;
+    }
+
+    var exact_flux = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, potential);
+    defer exact_flux.deinit(allocator);
+
+    @memcpy(state.B.values, exact_flux.values);
+}
+
+fn divergenceNorm(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
+    var divergence = try state.operators.exteriorDerivative(cochain.Primal, 2).apply(allocator, state.B);
+    defer divergence.deinit(allocator);
+    return std.math.sqrt(divergence.norm_squared());
+}
+
+fn compute_tm110_eigenvalue(
+    allocator: std.mem.Allocator,
+    nx: u32,
+    ny: u32,
+    nz: u32,
+    width: f64,
+    height: f64,
+    depth: f64,
+) !f64 {
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, nx, ny, nz, width, height, depth);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try flux.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withExteriorDerivative(cochain.Primal, 1);
+    try operator_context.withHodgeStar(1);
+    try operator_context.withHodgeStar(2);
+
+    var E = try MaxwellState3D.OneForm.init(allocator, &mesh);
+    defer E.deinit(allocator);
+    const omega = tm110AngularFrequency(width, height);
+    project_tm110_e(&mesh, E.values, std.math.pi / (2.0 * omega), width, height);
+
+    var dE = try operator_context.exteriorDerivative(cochain.Primal, 1).apply(allocator, E);
+    defer dE.deinit(allocator);
+
+    var star_dE = try operator_context.hodgeStar(2).apply(allocator, dE);
+    defer star_dE.deinit(allocator);
+    var numerator: f64 = 0.0;
+    for (dE.values, star_dE.values) |lhs, rhs| {
+        numerator += lhs * rhs;
+    }
+
+    var star_E = try operator_context.hodgeStar(1).apply(allocator, E);
+    defer star_E.deinit(allocator);
+    var denominator: f64 = 0.0;
+    for (E.values, star_E.values) |lhs, rhs| {
+        denominator += lhs * rhs;
+    }
+
+    return numerator / denominator;
+}
+
+test "MaxwellState3D initializes field spaces for tetrahedral meshes" {
+    const allocator = testing.allocator;
+    var mesh = try makeCavityMesh(allocator, .{ .nx = 1, .ny = 1, .nz = 1 });
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try testing.expectEqual(@as(u64, 0), state.timestep);
+    try testing.expectEqual(mesh.num_edges(), @as(u32, @intCast(state.E.values.len)));
+    try testing.expectEqual(mesh.num_faces(), @as(u32, @intCast(state.B.values.len)));
+    try testing.expectEqual(mesh.num_edges(), @as(u32, @intCast(state.J.values.len)));
+
+    comptime {
+        try testing.expectEqual(1, MaxwellState3D.OneForm.degree);
+        try testing.expectEqual(2, MaxwellState3D.TwoForm.degree);
+    }
+}
+
+test "3D Maxwell preserves d₂B = 0 over 1000 source-free cavity steps" {
+    const allocator = testing.allocator;
+    var mesh = try makeCavityMesh(allocator, .{ .nx = 2, .ny = 2, .nz = 2, .dt = 0.0025 });
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try seedTm110Mode(allocator, &state, 0.0025, 1.0, 1.0);
+
+    for (0..1000) |_| {
+        try leapfrogStep(allocator, &state, 0.0025);
+
+        const norm = try divergenceNorm(allocator, &state);
+        try testing.expectApproxEqAbs(@as(f64, 0.0), norm, 1e-12);
+    }
+}
+
+test "3D Maxwell PEC zeroes boundary edge circulation after a step" {
+    const allocator = testing.allocator;
+    var mesh = try makeCavityMesh(allocator, .{ .nx = 2, .ny = 1, .nz = 1, .dt = 0.0025 });
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    for (state.E.values, 0..) |*value, idx| {
+        value.* = @as(f64, @floatFromInt(idx + 1));
+    }
+
+    try applyPecBoundary(allocator, &state);
+
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expectEqual(@as(f64, 0.0), state.E.values[edge_idx]);
+    }
+}
+
+test "3D Maxwell snapshot exports projected E and B data on tetrahedral cells" {
+    const allocator = testing.allocator;
+    var mesh = try makeCavityMesh(allocator, .{ .nx = 1, .ny = 1, .nz = 1 });
+    defer mesh.deinit(allocator);
+
+    var state = try MaxwellState3D.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    try seedTm110Mode(allocator, &state, 0.0025, 1.0, 1.0);
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+
+    try writeSnapshot(allocator, output.writer(allocator), &state);
+
+    const xml = output.items;
+    try testing.expect(std.mem.indexOf(u8, xml, "Name=\"E_intensity\"") != null);
+    try testing.expect(std.mem.indexOf(u8, xml, "Name=\"B_flux\"") != null);
+    try testing.expect(std.mem.indexOf(u8, xml, "NumberOfCells=\"6\"") != null);
+}
+
+test "project_tm110_e vanishes on non-z edges and x/y boundary z-edges" {
+    const allocator = testing.allocator;
+    var mesh = try makeCavityMesh(allocator, .{ .nx = 2, .ny = 2, .nz = 2 });
+    defer mesh.deinit(allocator);
+
+    const values = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(values);
+    const omega = tm110AngularFrequency(1.0, 1.0);
+    project_tm110_e(&mesh, values, std.math.pi / (2.0 * omega), 1.0, 1.0);
+
+    const edge_verts = mesh.simplices(1).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+    for (values, edge_verts) |value, verts| {
+        const p0 = coords[verts[0]];
+        const p1 = coords[verts[1]];
+        const dz = p1[2] - p0[2];
+        const mx = 0.5 * (p0[0] + p1[0]);
+        const my = 0.5 * (p0[1] + p1[1]);
+        if (@abs(dz) < 1e-15) {
+            try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-15);
+        }
+        if (@abs(mx) < 1e-12 or @abs(mx - 1.0) < 1e-12 or @abs(my) < 1e-12 or @abs(my - 1.0) < 1e-12) {
+            try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-14);
+        }
+    }
+}
+
+test "TM₁₁₀ cavity: eigenvalue error decreases under 3D refinement" {
+    const allocator = testing.allocator;
+    const analytical = 2.0 * std.math.pi * std.math.pi;
+
+    const coarse = try compute_tm110_eigenvalue(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    const fine = try compute_tm110_eigenvalue(allocator, 4, 4, 4, 1.0, 1.0, 1.0);
+
+    const error_coarse = @abs(coarse - analytical) / analytical;
+    const error_fine = @abs(fine - analytical) / analytical;
+
+    std.debug.print("\nTM110 ω²: 2^3={d:.6}, 4^3={d:.6}, analytical={d:.6}\n", .{
+        coarse, fine, analytical,
+    });
+    std.debug.print("TM110 error: 2^3={d:.6}, 4^3={d:.6}, ratio={d:.2}\n", .{
+        error_coarse, error_fine, error_coarse / error_fine,
+    });
+
+    try testing.expect(error_fine < error_coarse);
+    try testing.expect(error_coarse / error_fine >= 1.5);
+}
