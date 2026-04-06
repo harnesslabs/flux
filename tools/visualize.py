@@ -139,6 +139,86 @@ def tet_surface_collection(
     return collection
 
 
+def tet_barycenters(data: dict) -> np.ndarray:
+    """Return tetrahedron barycenters."""
+    return np.mean(
+        np.stack(
+            [
+                data["x"][data["cells"]],
+                data["y"][data["cells"]],
+                data["z"][data["cells"]],
+            ],
+            axis=-1,
+        ),
+        axis=1,
+    )
+
+
+def slice_poly_collection(
+    barycenters: np.ndarray,
+    values: np.ndarray,
+    axis: int,
+    position: float,
+    thickness: float,
+    vmin: float,
+    vmax: float,
+) -> Poly3DCollection | None:
+    """Render a triangulated slice plane through tet barycenters."""
+    coords = barycenters[:, axis]
+    mask = np.abs(coords - position) <= thickness
+    if np.count_nonzero(mask) < 3:
+        return None
+
+    slab_points = barycenters[mask]
+    slab_values = values[mask]
+
+    if axis == 0:
+        uv = np.column_stack((slab_points[:, 1], slab_points[:, 2]))
+    elif axis == 1:
+        uv = np.column_stack((slab_points[:, 0], slab_points[:, 2]))
+    else:
+        uv = np.column_stack((slab_points[:, 0], slab_points[:, 1]))
+
+    triangulation = tri.Triangulation(uv[:, 0], uv[:, 1])
+    triangles = triangulation.triangles
+    if len(triangles) == 0:
+        return None
+
+    if axis == 0:
+        vertices3d = np.column_stack((
+            np.full(len(slab_points), position),
+            uv[:, 0],
+            uv[:, 1],
+        ))
+    elif axis == 1:
+        vertices3d = np.column_stack((
+            uv[:, 0],
+            np.full(len(slab_points), position),
+            uv[:, 1],
+        ))
+    else:
+        vertices3d = np.column_stack((
+            uv[:, 0],
+            uv[:, 1],
+            np.full(len(slab_points), position),
+        ))
+
+    polys = vertices3d[triangles]
+    face_values = slab_values[triangles].mean(axis=1)
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    cmap = plt.get_cmap("RdBu_r")
+    colors = cmap(norm(face_values))
+    colors[:, 3] = 0.72
+
+    return Poly3DCollection(
+        polys,
+        facecolors=colors,
+        edgecolors=(0.05, 0.05, 0.07, 0.08),
+        linewidths=0.15,
+        zsort="average",
+    )
+
+
 def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
                  frame_idx: int, n_frames: int) -> Image.Image:
     """Render a single frame as a PIL Image."""
@@ -157,8 +237,29 @@ def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
         ax.set_ylabel("y")
     else:
         ax = fig.add_subplot(1, 1, 1, projection="3d")
-        collection = tet_surface_collection(data, values, vmin, vmax)
-        ax.add_collection3d(collection)
+        barycenters = tet_barycenters(data)
+        surface = tet_surface_collection(data, values, vmin, vmax)
+        surface.set_alpha(0.16)
+        ax.add_collection3d(surface)
+
+        mins = np.array([np.min(data["x"]), np.min(data["y"]), np.min(data["z"])], dtype=float)
+        maxs = np.array([np.max(data["x"]), np.max(data["y"]), np.max(data["z"])], dtype=float)
+        spans = np.maximum(maxs - mins, 1e-12)
+        positions = mins + 0.5 * spans
+        thicknesses = 0.06 * spans
+
+        for axis in range(3):
+            collection = slice_poly_collection(
+                barycenters,
+                values,
+                axis=axis,
+                position=float(positions[axis]),
+                thickness=float(thicknesses[axis]),
+                vmin=vmin,
+                vmax=vmax,
+            )
+            if collection is not None:
+                ax.add_collection3d(collection)
 
         ax.set_xlim(float(np.min(data["x"])), float(np.max(data["x"])))
         ax.set_ylim(float(np.min(data["y"])), float(np.max(data["y"])))
