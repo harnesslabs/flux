@@ -25,6 +25,7 @@ Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-s
 ```sh
 uv run tools/visualize.py output --field B_flux --output animation.png
 uv run tools/visualize.py output --field B_flux --output animation.gif
+uv run tools/visualize.py output/euler_2d --output animation.png
 ```
 
 APNG is now the default recommendation because it preserves full color. Use
@@ -106,7 +107,8 @@ uv run tools/visualize.py <input_dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--field` | `B_flux` | Which CellData array to plot |
+| `--field` | auto | Scalar field to plot; auto-selects `vorticity`, `B_flux`, `E_intensity`, or another available scalar |
+| `--vectors` | auto | Optional 2D vector overlay; auto-selects `velocity` when present, use `none` to disable |
 | `--output` | `<dir>/animation.png` | Output animation path; `.png`/`.apng` writes full-color APNG, `.gif` writes palette-limited GIF |
 | `--fps` | 12 | Frames per second |
 
@@ -116,6 +118,9 @@ Available fields:
 |-------|-----------|
 | `B_flux` | Magnetic flux per face (primal 2-form) |
 | `E_intensity` | Electric field averaged to faces (primal 1-form projected) |
+| `vorticity` | Face-centered 2D Euler vorticity |
+| `stream_function` | Vertex-centered stream function |
+| `velocity` | 2D Euler face velocity (vector overlay) |
 
 ### ParaView
 
