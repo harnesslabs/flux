@@ -1,11 +1,13 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
+const std_fs = std.fs;
 
 pub const Mesh2D = flux.Mesh(2, 2);
 pub const VertexVorticity = flux.Cochain(Mesh2D, 0, flux.Primal);
 pub const FaceVorticity = flux.Cochain(Mesh2D, 2, flux.Primal);
 const poisson = flux.operators.poisson;
+const flux_io = flux.io;
 
 const Vec2 = [2]f64;
 
@@ -14,6 +16,24 @@ pub const Config = struct {
     steps: u32 = 1000,
     domain: f64 = 1.0,
     cfl: f64 = 0.1,
+    output_dir: []const u8 = "output/euler_2d",
+    frames: u32 = 50,
+
+    pub fn dt(self: Config) f64 {
+        return stableDt(self);
+    }
+
+    pub fn outputInterval(self: Config) u32 {
+        if (self.frames == 0) return 0;
+        return @max(1, self.steps / self.frames);
+    }
+};
+
+pub const RunResult = struct {
+    elapsed_s: f64,
+    circulation_initial: f64,
+    circulation_final: f64,
+    snapshot_count: u32,
 };
 
 pub const State = struct {
@@ -91,13 +111,83 @@ pub fn step(
     state: *State,
     dt: f64,
 ) !void {
-    try recoverStreamFunction(allocator, state);
-    reconstructFaceVelocity(state);
+    try refreshDerivedFields(allocator, state);
     try advectVorticity(allocator, state, dt);
+    try refreshDerivedFields(allocator, state);
 }
 
 fn stableDt(config: Config) f64 {
     return config.cfl * (config.domain / @as(f64, @floatFromInt(config.grid)));
+}
+
+pub fn run(
+    allocator: std.mem.Allocator,
+    config: Config,
+    writer: anytype,
+) !RunResult {
+    var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    defer mesh.deinit(allocator);
+
+    var state = try State.init(allocator, &mesh);
+    defer state.deinit(allocator);
+    initializeGaussianVortex(&state);
+    try refreshDerivedFields(allocator, &state);
+
+    const circulation_initial = totalCirculation(&state);
+    const dt = config.dt();
+    const interval = config.outputInterval();
+    const has_output = interval > 0;
+    const snapshot_capacity: u32 = if (has_output) (config.steps / interval) +| 1 else 0;
+
+    var pvd_entries: []flux_io.PvdEntry = &.{};
+    var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
+    if (has_output) {
+        try ensureDir(config.output_dir);
+        pvd_entries = try allocator.alloc(flux_io.PvdEntry, snapshot_capacity);
+        filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, snapshot_capacity);
+    }
+    defer if (has_output) {
+        allocator.free(filename_bufs);
+        allocator.free(pvd_entries);
+    };
+
+    const start_ns = std.time.nanoTimestamp();
+    var snapshot_count: u32 = 0;
+    for (0..config.steps) |step_idx| {
+        try step(allocator, &state, dt);
+
+        if (has_output and (step_idx + 1) % interval == 0) {
+            const filename = flux_io.snapshot_filename(
+                &filename_bufs[snapshot_count],
+                "euler_2d",
+                snapshot_count,
+            );
+            try writeSnapshot(allocator, config.output_dir, filename, &state);
+            pvd_entries[snapshot_count] = .{
+                .timestep = @as(f64, @floatFromInt(step_idx + 1)) * dt,
+                .filename = filename,
+            };
+            snapshot_count += 1;
+        }
+    }
+    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+
+    if (has_output and snapshot_count > 0) {
+        try writePvd(allocator, config.output_dir, "euler_2d", pvd_entries[0..snapshot_count]);
+    }
+
+    const circulation_final = totalCirculation(&state);
+    try writer.print(
+        "euler_2d: grid={d} steps={d} dt={d:.6} circulation={d:.12} -> {d:.12}\n",
+        .{ config.grid, config.steps, dt, circulation_initial, circulation_final },
+    );
+
+    return .{
+        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .circulation_initial = circulation_initial,
+        .circulation_final = circulation_final,
+        .snapshot_count = snapshot_count,
+    };
 }
 
 fn buildEdgeAdjacency(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]State.EdgeAdjacency {
@@ -120,6 +210,11 @@ fn buildEdgeAdjacency(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]Stat
     }
 
     return adjacency;
+}
+
+fn refreshDerivedFields(allocator: std.mem.Allocator, state: *State) !void {
+    try recoverStreamFunction(allocator, state);
+    reconstructFaceVelocity(state);
 }
 
 fn recoverStreamFunction(allocator: std.mem.Allocator, state: *State) !void {
@@ -249,6 +344,69 @@ fn advectVorticity(
 
 fn dot(lhs: Vec2, rhs: Vec2) f64 {
     return lhs[0] * rhs[0] + lhs[1] * rhs[1];
+}
+
+fn writeSnapshot(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    filename: []const u8,
+    state: *const State,
+) !void {
+    var velocity_values = try allocator.alloc(f64, state.mesh.num_faces() * 3);
+    defer allocator.free(velocity_values);
+
+    for (state.face_velocity, 0..) |velocity, face_idx| {
+        const base = 3 * face_idx;
+        velocity_values[base + 0] = velocity[0];
+        velocity_values[base + 1] = velocity[1];
+        velocity_values[base + 2] = 0.0;
+    }
+
+    const point_data = [_]flux_io.DataArraySlice{
+        .{ .name = "stream_function", .values = state.stream_function.values },
+    };
+    const cell_data = [_]flux_io.DataArraySlice{
+        .{ .name = "vorticity", .values = state.vorticity.values },
+        .{ .name = "velocity", .values = velocity_values, .num_components = 3 },
+    };
+
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+    try flux_io.write(output.writer(allocator), 2, 2, state.mesh.*, &point_data, &cell_data);
+
+    var dir = try std_fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(filename, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn writePvd(
+    allocator: std.mem.Allocator,
+    output_dir: []const u8,
+    base_name: []const u8,
+    entries: []const flux_io.PvdEntry,
+) !void {
+    var output = std.ArrayListUnmanaged(u8){};
+    defer output.deinit(allocator);
+    try flux_io.write_pvd(output.writer(allocator), entries);
+
+    var pvd_buf: [flux_io.max_snapshot_filename_length]u8 = undefined;
+    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
+        return error.FilenameTooLong;
+
+    var dir = try std_fs.cwd().openDir(output_dir, .{});
+    defer dir.close();
+    const file = try dir.createFile(pvd_name, .{});
+    defer file.close();
+    try file.writeAll(output.items);
+}
+
+fn ensureDir(path: []const u8) !void {
+    std.fs.cwd().makeDir(path) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
 }
 
 test "Euler 2D state allocates stream function on vertices and vorticity on faces" {

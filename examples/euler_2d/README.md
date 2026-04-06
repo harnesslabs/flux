@@ -1,0 +1,42 @@
+# Euler 2D
+
+This example advances incompressible 2D Euler on a triangular mesh in a
+vorticity-stream formulation:
+
+- Vorticity `ω` is stored per triangle.
+- The stream function `ψ` is recovered from `Δψ = ω` with the library Poisson solve.
+- Face velocity is reconstructed as the rotated gradient `u = ★dψ`.
+- Vorticity is transported by a conservative face-flux update, so total
+  circulation `∫Ω ω dA` is preserved by pairwise internal flux cancellation.
+
+Run it with:
+
+```sh
+zig build -Doptimize=ReleaseFast example-euler2d -- --grid 32 --steps 1000
+```
+
+Useful flags:
+
+```sh
+zig build -Doptimize=ReleaseFast example-euler2d -- --help
+zig build -Doptimize=ReleaseFast example-euler2d -- --frames 0
+```
+
+Output is written as `.vtu` snapshots plus an `euler_2d.pvd` collection in
+`output/euler_2d/` by default. Open the `.pvd` file in ParaView or use the
+existing `tools/visualize.py` helper on the snapshot directory.
+
+Derivation sketch:
+
+1. In 2D incompressible flow, velocity is represented through a scalar stream
+   function `ψ`, with `u = ∇⊥ψ`.
+2. Vorticity is `ω = ∇×u = Δψ`, so recovering `ψ` each timestep reduces to a
+   Poisson solve with homogeneous Dirichlet boundary data.
+3. The transport equation `∂tω + u·∇ω = 0` is discretized here as a
+   conservative upwind flux between neighboring triangles. That discretization
+   is only first order in space, but it enforces the issue's key invariant:
+   the sum of face circulation masses changes only by boundary flux, which is
+   zero in this closed domain.
+
+Reference: Elcott et al., *Stable, Circulation-Preserving, Simplicial Fluids*
+(2007).
