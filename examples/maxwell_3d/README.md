@@ -33,3 +33,28 @@ uv run tools/visualize.py output/maxwell3d --field B_flux --output output/maxwel
 ```
 
 The second command writes `.vtu` snapshots plus a `.pvd` collection file for ParaView. The third command uses the shared visualizer, which now renders tetrahedral output as a 3D barycenter animation.
+
+## CLI reference
+
+```text
+usage:
+  zig build -Doptimize=ReleaseFast example-maxwell3d -- [options]
+
+mesh:
+  --nx N              tetrahedral cells in x (default: 2)
+  --ny N              tetrahedral cells in y (default: 2)
+  --nz N              tetrahedral cells in z (default: 2)
+  --width L           cavity width  (default: 1.0)
+  --height L          cavity height (default: 1.0)
+  --depth L           cavity depth  (default: 1.0)
+
+time stepping:
+  --steps N           leapfrog steps (default: 1000)
+  --dt DT             fixed timestep (default: 0.01)
+
+output:
+  --output DIR        write VTK snapshots into DIR
+  --output-interval N write every N steps when output is enabled
+```
+
+The terminal output matches the 2D example style: run header, live progress bar, and a final results block with `||dB||₂`, elapsed time, and visualization hint.

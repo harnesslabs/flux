@@ -32,19 +32,32 @@ pub const Config = struct {
     }
 };
 
-fn Progress(comptime Writer: type) type {
+fn writeAllToStderr(bytes: []const u8) void {
+    var written: usize = 0;
+    while (written < bytes.len) {
+        const count = std.posix.write(std.posix.STDERR_FILENO, bytes[written..]) catch return;
+        if (count == 0) return;
+        written += count;
+    }
+}
+
+fn stderrPrint(comptime fmt: []const u8, args: anytype) void {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, fmt, args) catch return;
+    writeAllToStderr(msg);
+}
+
+fn Progress() type {
     return struct {
         const Self = @This();
 
-        writer: Writer,
         total: u32,
         timer: std.time.Timer,
         last_draw_ns: u64 = 0,
         bar_width: u32 = 40,
 
-        fn init(writer: Writer, total: u32) Self {
+        fn init(total: u32) Self {
             return .{
-                .writer = writer,
                 .total = total,
                 .timer = std.time.Timer.start() catch
                     @panic("OS timer unavailable — cannot run simulation"),
@@ -71,7 +84,7 @@ fn Progress(comptime Writer: type) type {
 
             var elapsed_buf: [16]u8 = undefined;
             var eta_buf: [16]u8 = undefined;
-            self.writer.print("\r  {s}  {d:>5.1}%  {d}/{d}  {s}  ETA {s}  {d:.0} steps/s    ", .{
+            stderrPrint("\r  {s}  {d:>5.1}%  {d}/{d}  {s}  ETA {s}  {d:.0} steps/s    ", .{
                 bar[0..self.bar_width],
                 pct,
                 step,
@@ -79,13 +92,12 @@ fn Progress(comptime Writer: type) type {
                 formatDuration(&elapsed_buf, elapsed_s),
                 formatDuration(&eta_buf, eta_s),
                 steps_per_sec,
-            }) catch return;
+            });
         }
 
         fn finish(self: *Self) void {
-            self.writer.writeAll("\r") catch return;
-            for (0..120) |_| self.writer.writeByte(' ') catch return;
-            self.writer.writeAll("\r") catch return;
+            _ = self;
+            stderrPrint("\r{s}\r", .{"                                                                                                                        "});
         }
 
         fn elapsed(self: *Self) f64 {
@@ -214,7 +226,6 @@ pub fn runSimulation(
     allocator: std.mem.Allocator,
     state: *MaxwellState3D,
     config: Config,
-    writer: anytype,
 ) !SimResult {
     const snapshot_count_max = config.snapshotCount();
     var pvd_entries: []flux.io.PvdEntry = &.{};
@@ -235,7 +246,7 @@ pub fn runSimulation(
     if (config.output_dir) |output_dir| {
         try ensureDir(output_dir);
     }
-    var progress = Progress(@TypeOf(writer)).init(writer, config.steps);
+    var progress = Progress().init(config.steps);
 
     var step_index: u32 = 0;
     while (step_index < config.steps) : (step_index += 1) {
@@ -625,8 +636,6 @@ pub fn runCli() !void {
     defer std.process.argsFree(allocator, args);
 
     const config = parseArgs(args) catch return;
-    const stderr = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
-
     var mesh = try makeCavityMesh(allocator, config);
     defer mesh.deinit(allocator);
 
@@ -636,45 +645,45 @@ pub fn runCli() !void {
     try seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
     const omega = tm110AngularFrequency(config.width, config.height);
 
-    try stderr.writeAll("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n");
-    try stderr.print("  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n", .{
+    stderrPrint("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n", .{});
+    stderrPrint("  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n", .{
         config.width, config.height, config.depth,
     });
-    try stderr.print("  grid      {d}×{d}×{d} ({d} tetrahedra)\n", .{
+    stderrPrint("  grid      {d}×{d}×{d} ({d} tetrahedra)\n", .{
         config.nx, config.ny, config.nz, mesh.num_tets(),
     });
-    try stderr.print("  spacing   h_min = {d:.6}\n", .{config.gridSpacingMin()});
-    try stderr.print("  timestep  dt = {d:.6}\n", .{config.dt});
-    try stderr.print("  mode      TM₁₁₀  (ω = {d:.6})\n", .{omega});
-    try stderr.print("  mesh      {d} vertices  {d} edges  {d} faces  {d} tets\n\n", .{
+    stderrPrint("  spacing   h_min = {d:.6}\n", .{config.gridSpacingMin()});
+    stderrPrint("  timestep  dt = {d:.6}\n", .{config.dt});
+    stderrPrint("  mode      TM₁₁₀  (ω = {d:.6})\n", .{omega});
+    stderrPrint("  mesh      {d} vertices  {d} edges  {d} faces  {d} tets\n\n", .{
         mesh.num_vertices(), mesh.num_edges(), mesh.num_faces(), mesh.num_tets(),
     });
 
-    const result = try runSimulation(allocator, &state, config, stderr);
+    const result = try runSimulation(allocator, &state, config);
 
     const divergence = try divergenceNorm(allocator, &state);
     const steps_per_sec = @as(f64, @floatFromInt(config.steps)) / result.elapsed_s;
     var duration_buf: [16]u8 = undefined;
 
-    try stderr.writeAll("\n  ── Results ─────────────────────────────────\n\n");
-    try stderr.print("  steps    {d}\n", .{state.timestep});
-    try stderr.print("  omega    {d:.6}\n", .{omega});
-    try stderr.print("  ||dB||₂  {e}\n", .{divergence});
-    try stderr.print("  elapsed  {s} ({d:.0} steps/s)\n", .{
+    stderrPrint("\n  ── Results ─────────────────────────────────\n\n", .{});
+    stderrPrint("  steps    {d}\n", .{state.timestep});
+    stderrPrint("  omega    {d:.6}\n", .{omega});
+    stderrPrint("  ||dB||₂  {e}\n", .{divergence});
+    stderrPrint("  elapsed  {s} ({d:.0} steps/s)\n", .{
         formatDuration(&duration_buf, result.elapsed_s),
         steps_per_sec,
     });
     if (result.snapshot_count > 0 and config.output_dir != null) {
-        try stderr.print("  output   {d} frames → {s}/\n", .{
+        stderrPrint("  output   {d} frames → {s}/\n", .{
             result.snapshot_count,
             config.output_dir.?,
         });
-        try stderr.print("\n  ▸ uv run tools/visualize.py {s} --field B_flux --output {s}/animation.png\n\n", .{
+        stderrPrint("\n  ▸ uv run tools/visualize.py {s} --field B_flux --output {s}/animation.png\n\n", .{
             config.output_dir.?,
             config.output_dir.?,
         });
     } else {
-        try stderr.writeAll("\n");
+        stderrPrint("\n", .{});
     }
 }
 
