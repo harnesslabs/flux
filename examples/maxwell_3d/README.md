@@ -14,13 +14,22 @@ with the semi-discrete update
 - `∂B/∂t = -dE`
 - `∂E/∂t = ★⁻¹ d ★ B`
 
-inside a perfect electric conductor cavity. The magnetic constraint is structural: if `B` starts in `im(d)`, then `dB = ddA = 0` exactly, so the example asserts the milestone invariant through the update path rather than hoping truncation error stays small.
+inside a perfect electric conductor cavity. The example initializes the analytical rectangular-cavity `TM110` mode through a discrete vector potential `A_z`, then sets `B = dA` on the mesh so the magnetic constraint is exact in the discrete complex as well as in the continuum.
+
+The reference frequency is
+
+```text
+ω² = (π / width)² + (π / height)²
+```
+
+and the test suite checks that the discrete Rayleigh quotient converges toward this value under tetrahedral refinement.
 
 ## Run
 
 ```sh
 zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 1000 --dt 0.0025
 zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025 --output output/maxwell3d --output-interval 40
+uv run tools/visualize.py output/maxwell3d --field B_flux --output output/maxwell3d/animation.png
 ```
 
-The second command writes `.vtu` snapshots plus a `.pvd` collection file for ParaView.
+The second command writes `.vtu` snapshots plus a `.pvd` collection file for ParaView. The third command uses the shared visualizer, which now renders tetrahedral output as a 3D barycenter animation.

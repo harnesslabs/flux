@@ -22,6 +22,7 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import numpy as np
 from PIL import Image
+from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 
 def parse_vtu(path: str) -> dict:
@@ -44,8 +45,19 @@ def parse_vtu(path: str) -> dict:
     offsets_el = piece.find(".//Cells/DataArray[@Name='offsets']")
     offsets = np.fromstring(offsets_el.text, sep=" ", dtype=int)
 
-    # Build triangle array (assume all cells are triangles).
-    triangles = conn.reshape(n_cells, 3)
+    types_el = piece.find(".//Cells/DataArray[@Name='types']")
+    cell_types = np.fromstring(types_el.text, sep=" ", dtype=int)
+    if len(cell_types) == 0:
+        raise ValueError(f"No VTK cell types found in {path}")
+
+    vertices_per_cell = offsets[0]
+    if np.any(np.diff(offsets) != vertices_per_cell):
+        raise ValueError("Mixed cell sizes are not supported")
+
+    cells = conn.reshape(n_cells, vertices_per_cell)
+    cell_type = int(cell_types[0])
+    if np.any(cell_types != cell_type):
+        raise ValueError("Mixed cell types are not supported")
 
     # Cell data arrays.
     cell_data = {}
@@ -56,7 +68,9 @@ def parse_vtu(path: str) -> dict:
     return {
         "x": coords[:, 0],
         "y": coords[:, 1],
-        "triangles": triangles,
+        "z": coords[:, 2],
+        "dimension": 2 if cell_type == 5 else 3,
+        "cells": cells,
         "cell_data": cell_data,
     }
 
@@ -64,21 +78,55 @@ def parse_vtu(path: str) -> dict:
 def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
                  frame_idx: int, n_frames: int) -> Image.Image:
     """Render a single frame as a PIL Image."""
-    fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=100)
-
-    triang = tri.Triangulation(data["x"], data["y"], data["triangles"])
     values = data["cell_data"][field_name]
-
-    ax.tripcolor(triang, values, shading="flat", cmap="RdBu_r",
-                 vmin=vmin, vmax=vmax)
-    ax.set_aspect("equal")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title(f"{field_name}  (frame {frame_idx}/{n_frames})")
-
-    # Colorbar.
+    fig = plt.figure(figsize=(6, 5), dpi=100)
     sm = plt.cm.ScalarMappable(cmap="RdBu_r",
                                norm=plt.Normalize(vmin=vmin, vmax=vmax))
+
+    if data["dimension"] == 2:
+        ax = fig.add_subplot(1, 1, 1)
+        triang = tri.Triangulation(data["x"], data["y"], data["cells"])
+        ax.tripcolor(triang, values, shading="flat", cmap="RdBu_r",
+                     vmin=vmin, vmax=vmax)
+        ax.set_aspect("equal")
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+    else:
+        ax = fig.add_subplot(1, 1, 1, projection="3d")
+        barycenters = np.mean(
+            np.stack(
+                [
+                    data["x"][data["cells"]],
+                    data["y"][data["cells"]],
+                    data["z"][data["cells"]],
+                ],
+                axis=-1,
+            ),
+            axis=1,
+        )
+        scatter = ax.scatter(
+            barycenters[:, 0],
+            barycenters[:, 1],
+            barycenters[:, 2],
+            c=values,
+            cmap="RdBu_r",
+            vmin=vmin,
+            vmax=vmax,
+            s=max(8, int(2400 / max(len(values), 1))),
+            depthshade=False,
+        )
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.view_init(elev=24, azim=-58)
+        ax.set_box_aspect((
+            max(np.ptp(data["x"]), 1e-12),
+            max(np.ptp(data["y"]), 1e-12),
+            max(np.ptp(data["z"]), 1e-12),
+        ))
+        sm = scatter
+
+    ax.set_title(f"{field_name}  (frame {frame_idx}/{n_frames})")
     fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
 
     fig.tight_layout()
