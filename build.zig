@@ -220,6 +220,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_euler2d_tests = b.addRunArtifact(euler2d_tests);
 
+    // -- example-heat step --
+    // Builds and runs the implicit heat-equation example on a unit square.
+    const heat_exe = b.addExecutable(.{
+        .name = "heat",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/heat/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(heat_exe);
+    const heat_run = b.addRunArtifact(heat_exe);
+    heat_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        heat_run.addArgs(args);
+    }
+    const heat_step = b.step("example-heat", "Run the implicit heat-equation example");
+    heat_step.dependOn(&heat_run.step);
+
+    const heat_tests = b.addTest(.{
+        .root_module = heat_exe.root_module,
+    });
+    const run_heat_tests = b.addRunArtifact(heat_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -229,6 +256,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_maxwell2d_tests.step);
     test_step.dependOn(&run_maxwell3d_tests.step);
     test_step.dependOn(&run_euler2d_tests.step);
+    test_step.dependOn(&run_heat_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`

@@ -15,6 +15,7 @@ For realistic throughput numbers, run the example in `ReleaseFast`:
 zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
 zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
 zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025
+zig build -Doptimize=ReleaseFast example-heat -- --grid 32 --frames 8
 ```
 
 The default `zig build` mode is `Debug`, which is useful for development but
@@ -42,6 +43,7 @@ APNG is now the default recommendation because it preserves full color. Use
 | [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity` |
 | [**maxwell_3d**](maxwell_3d/README.md) | Source-free TM₁₁₀ rectangular cavity mode on tetrahedra with 3D convergence check | `zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025` |
 | [**euler_2d**](euler_2d/README.md) | Incompressible vorticity-stream evolution with conservative circulation transport | `zig build -Doptimize=ReleaseFast example-euler2d -- --grid 32 --steps 1000` |
+| [**heat**](heat/README.md) | Backward-Euler diffusion on a unit square with CG solve, homogeneous Dirichlet boundary data, and convergence verification | `zig build -Doptimize=ReleaseFast example-heat -- --grid 32 --frames 8` |
 
 ---
 
