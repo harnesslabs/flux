@@ -258,6 +258,25 @@ boundary degrees `k = 0` and `k = n` use diagonal geometric ratios, while
 every interior degree uses the Whitney/Galerkin mass matrix `M_k` for forward
 application and PCG for `★⁻¹`, initialized from the diagonal dual/primal ratio.
 
+**Alternatives considered:**
+1. Keep a special `whitney_mass_1` path and add a separate 3D-only `k = 2`
+   implementation beside it: rejected because it hard-codes today's dimensions
+   into the API and duplicates the same ownership/lifetime pattern under
+   different names.
+2. Keep the old diagonal 3D interior Hodge formulas as public execution paths:
+   rejected because on barycentric duals they are preconditioners, not the
+   correct Galerkin operator, so preserving them as peers would repeat the
+   same mistake issue #70 fixed for 2D `★₁`.
+
+**Rationale:** The geometry/topology layer already owns the data every Whitney
+Hodge star needs: primal measures, dual measures, simplex incidence, and
+barycenters. Storing interior operators by degree keeps the public surface at
+one obvious rule, removes dimension-specific API bloat, and leaves the correct
+mathematical specialization in the implementation rather than in caller-visible
+field names. Using the diagonal ratio as the PCG preconditioner and initial
+guess preserves the DEC intuition as a fast spectral approximation without
+pretending it is the operator itself.
+
 ## 2026-04-05: Observers live beside operators and evaluate explicitly, not inside `TimeStepper`
 
 **Decision:** Add the M3 diagnostic framework as standalone observer values in
@@ -280,25 +299,6 @@ example and future runner one obvious hook to call after each step, keep
 allocation explicit, and preserve the option to let a later runner own the
 policy for buffering, formatting, and persistence without first unwinding an
 over-eager `TimeStepper` interface.
-
-**Alternatives considered:**
-1. Keep a special `whitney_mass_1` path and add a separate 3D-only `k = 2`
-   implementation beside it: rejected because it hard-codes today's dimensions
-   into the API and duplicates the same ownership/lifetime pattern under
-   different names.
-2. Keep the old diagonal 3D interior Hodge formulas as public execution paths:
-   rejected because on barycentric duals they are preconditioners, not the
-   correct Galerkin operator, so preserving them as peers would repeat the
-   same mistake issue #70 fixed for 2D `★₁`.
-
-**Rationale:** The geometry/topology layer already owns the data every Whitney
-Hodge star needs: primal measures, dual measures, simplex incidence, and
-barycenters. Storing interior operators by degree keeps the public surface at
-one obvious rule, removes dimension-specific API bloat, and leaves the correct
-mathematical specialization in the implementation rather than in caller-visible
-field names. Using the diagonal ratio as the PCG preconditioner and initial
-guess preserves the DEC intuition as a fast spectral approximation without
-pretending it is the operator itself.
 
 ## 2026-04-05: Wedge product is defined by Whitney interpolation and de Rham projection
 
