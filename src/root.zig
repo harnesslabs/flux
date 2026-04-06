@@ -69,6 +69,7 @@ pub const operators = struct {
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
+    pub const observers = @import("operators/observers.zig");
     pub const poisson = @import("operators/poisson.zig");
     pub const whitney_mass = @import("operators/whitney_mass.zig");
     pub const wedge_product = @import("operators/wedge_product.zig");
@@ -142,6 +143,16 @@ pub const chain = operators.compose.chain;
 /// Primal-primal discrete wedge product induced by Whitney interpolation and
 /// de Rham projection.
 pub const wedge = operators.wedge_product.wedge;
+
+pub const Observation = operators.observers.Observation;
+pub const SignedCell = operators.observers.SignedCell;
+pub const EnergyObserver = operators.observers.EnergyObserver;
+pub const L2NormObserver = operators.observers.L2NormObserver;
+pub const MaxNormObserver = operators.observers.MaxNormObserver;
+pub const CirculationObserver = operators.observers.CirculationObserver;
+pub const DivergenceNormObserver = operators.observers.DivergenceNormObserver;
+pub const HelicityObserver = operators.observers.HelicityObserver;
+pub const evaluateAllObservers = operators.observers.evaluateAll;
 
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
