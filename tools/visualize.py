@@ -23,6 +23,7 @@ import matplotlib.tri as tri
 import numpy as np
 from PIL import Image
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 def parse_vtu(path: str) -> dict:
@@ -75,6 +76,69 @@ def parse_vtu(path: str) -> dict:
     }
 
 
+def tetra_boundary_faces(tets: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return boundary triangle faces and the source tet index for each face."""
+    face_to_owner: dict[tuple[int, int, int], tuple[int, tuple[int, int, int]]] = {}
+    shared_faces: set[tuple[int, int, int]] = set()
+
+    for tet_idx, tet in enumerate(tets):
+        tet_faces = (
+            (tet[0], tet[1], tet[2]),
+            (tet[0], tet[1], tet[3]),
+            (tet[0], tet[2], tet[3]),
+            (tet[1], tet[2], tet[3]),
+        )
+        for face in tet_faces:
+            key = tuple(sorted(face))
+            if key in face_to_owner:
+                shared_faces.add(key)
+            else:
+                face_to_owner[key] = (tet_idx, face)
+
+    boundary_faces = []
+    owners = []
+    for key, (tet_idx, oriented_face) in face_to_owner.items():
+        if key in shared_faces:
+            continue
+        boundary_faces.append(oriented_face)
+        owners.append(tet_idx)
+
+    return np.asarray(boundary_faces, dtype=int), np.asarray(owners, dtype=int)
+
+
+def tet_surface_collection(
+    data: dict,
+    values: np.ndarray,
+    vmin: float,
+    vmax: float,
+) -> Poly3DCollection:
+    """Build a colored outer-surface collection for tetrahedral cell data."""
+    boundary_faces, owners = tetra_boundary_faces(data["cells"])
+    face_vertices = np.stack(
+        [
+            np.stack([data["x"][boundary_faces], data["y"][boundary_faces], data["z"][boundary_faces]], axis=-1)
+        ]
+    )[0]
+
+    norm = plt.Normalize(vmin=vmin, vmax=vmax)
+    cmap = plt.get_cmap("RdBu_r")
+    face_values = values[owners]
+    colors = cmap(norm(face_values))
+
+    magnitude = np.abs(face_values)
+    magnitude_scale = magnitude / max(np.max(magnitude), 1e-12)
+    colors[:, 3] = 0.18 + 0.62 * magnitude_scale
+
+    collection = Poly3DCollection(
+        face_vertices,
+        facecolors=colors,
+        edgecolors=(0.10, 0.10, 0.12, 0.10),
+        linewidths=0.25,
+        zsort="average",
+    )
+    return collection
+
+
 def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
                  frame_idx: int, n_frames: int) -> Image.Image:
     """Render a single frame as a PIL Image."""
@@ -93,28 +157,12 @@ def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
         ax.set_ylabel("y")
     else:
         ax = fig.add_subplot(1, 1, 1, projection="3d")
-        barycenters = np.mean(
-            np.stack(
-                [
-                    data["x"][data["cells"]],
-                    data["y"][data["cells"]],
-                    data["z"][data["cells"]],
-                ],
-                axis=-1,
-            ),
-            axis=1,
-        )
-        scatter = ax.scatter(
-            barycenters[:, 0],
-            barycenters[:, 1],
-            barycenters[:, 2],
-            c=values,
-            cmap="RdBu_r",
-            vmin=vmin,
-            vmax=vmax,
-            s=max(8, int(2400 / max(len(values), 1))),
-            depthshade=False,
-        )
+        collection = tet_surface_collection(data, values, vmin, vmax)
+        ax.add_collection3d(collection)
+
+        ax.set_xlim(float(np.min(data["x"])), float(np.max(data["x"])))
+        ax.set_ylim(float(np.min(data["y"])), float(np.max(data["y"])))
+        ax.set_zlim(float(np.min(data["z"])), float(np.max(data["z"])))
         ax.set_xlabel("x")
         ax.set_ylabel("y")
         ax.set_zlabel("z")
@@ -124,7 +172,9 @@ def render_frame(data: dict, field_name: str, vmin: float, vmax: float,
             max(np.ptp(data["y"]), 1e-12),
             max(np.ptp(data["z"]), 1e-12),
         ))
-        sm = scatter
+        ax.grid(False)
+        sm = plt.cm.ScalarMappable(cmap="RdBu_r",
+                                   norm=plt.Normalize(vmin=vmin, vmax=vmax))
 
     ax.set_title(f"{field_name}  (frame {frame_idx}/{n_frames})")
     fig.colorbar(sm, ax=ax, fraction=0.046, pad=0.04)
