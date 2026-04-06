@@ -107,7 +107,7 @@ uv run tools/visualize.py <input_dir> [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--field` | auto | Scalar field to plot; auto-selects `vorticity`, `B_flux`, `E_intensity`, or another available scalar |
+| `--field` | auto | Scalar field to plot; auto-selects `tracer`, `vorticity`, `B_flux`, `E_intensity`, or another available scalar |
 | `--vectors` | auto | Optional 2D vector overlay; auto-selects `velocity` when present, use `none` to disable |
 | `--output` | `<dir>/animation.png` | Output animation path; `.png`/`.apng` writes full-color APNG, `.gif` writes palette-limited GIF |
 | `--fps` | 12 | Frames per second |
@@ -118,6 +118,7 @@ Available fields:
 |-------|-----------|
 | `B_flux` | Magnetic flux per face (primal 2-form) |
 | `E_intensity` | Electric field averaged to faces (primal 1-form projected) |
+| `tracer` | Passive tracer transported by the 2D Euler showcase demo |
 | `vorticity` | Face-centered 2D Euler vorticity |
 | `stream_function` | Vertex-centered stream function |
 | `velocity` | 2D Euler face velocity (vector overlay) |

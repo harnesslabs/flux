@@ -42,6 +42,7 @@ plt.rcParams.update(
 )
 
 SCALAR_PREFERENCES = [
+    "tracer",
     "vorticity",
     "B_flux",
     "E_intensity",
@@ -194,6 +195,8 @@ def choose_style(field: DataArray) -> tuple[str, bool, str]:
     """Return (cmap, symmetric_range, label)."""
     if field.name in {"vorticity", "B_flux", "stream_function"}:
         return ("RdBu_r", True, field.name.replace("_", " "))
+    if field.name in {"tracer"}:
+        return ("turbo", False, field.name.replace("_", " "))
     if field.name in {"E_intensity"}:
         return ("magma", False, field.name.replace("_", " "))
     return ("viridis", False, field.name.replace("_", " "))

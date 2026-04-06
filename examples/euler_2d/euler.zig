@@ -6,12 +6,19 @@ const std_fs = std.fs;
 pub const Mesh2D = flux.Mesh(2, 2);
 pub const VertexVorticity = flux.Cochain(Mesh2D, 0, flux.Primal);
 pub const FaceVorticity = flux.Cochain(Mesh2D, 2, flux.Primal);
+pub const FaceTracer = flux.Cochain(Mesh2D, 2, flux.Primal);
 const poisson = flux.operators.poisson;
 const flux_io = flux.io;
 
 const Vec2 = [2]f64;
 
+pub const Demo = enum {
+    gaussian,
+    dipole,
+};
+
 pub const Config = struct {
+    demo: Demo = .gaussian,
     grid: u32 = 16,
     steps: u32 = 1000,
     domain: f64 = 1.0,
@@ -45,6 +52,7 @@ pub const State = struct {
     operators: *flux.OperatorContext(Mesh2D),
     stream_function: VertexVorticity,
     vorticity: FaceVorticity,
+    tracer: FaceTracer,
     face_velocity: []Vec2,
     edge_adjacency: []EdgeAdjacency,
 
@@ -54,6 +62,9 @@ pub const State = struct {
 
         var vorticity = try FaceVorticity.init(allocator, mesh);
         errdefer vorticity.deinit(allocator);
+
+        var tracer = try FaceTracer.init(allocator, mesh);
+        errdefer tracer.deinit(allocator);
 
         const operators = try flux.OperatorContext(Mesh2D).init(allocator, mesh);
         errdefer operators.deinit();
@@ -71,6 +82,7 @@ pub const State = struct {
             .operators = operators,
             .stream_function = stream_function,
             .vorticity = vorticity,
+            .tracer = tracer,
             .face_velocity = face_velocity,
             .edge_adjacency = edge_adjacency,
         };
@@ -79,6 +91,7 @@ pub const State = struct {
     pub fn deinit(self: *State, allocator: std.mem.Allocator) void {
         allocator.free(self.edge_adjacency);
         allocator.free(self.face_velocity);
+        self.tracer.deinit(allocator);
         self.vorticity.deinit(allocator);
         self.stream_function.deinit(allocator);
         self.operators.deinit();
@@ -89,11 +102,21 @@ pub fn initializeGaussianVortex(state: *State) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);
     const sigma = 0.12;
 
-    for (state.vorticity.values, face_centers) |*omega, center| {
-        const dx = center[0] - 0.5;
-        const dy = center[1] - 0.5;
-        const radius_squared = dx * dx + dy * dy;
-        omega.* = std.math.exp(-radius_squared / (2.0 * sigma * sigma));
+    for (state.vorticity.values, state.tracer.values, face_centers) |*omega, *tracer, center| {
+        omega.* = gaussianBlob(center, .{ 0.5, 0.5 }, sigma);
+        tracer.* = tracerStripe(center);
+    }
+}
+
+pub fn initializeVortexDipole(state: *State) void {
+    const face_centers = state.mesh.simplices(2).items(.barycenter);
+    const sigma = 0.075;
+
+    for (state.vorticity.values, state.tracer.values, face_centers) |*omega, *tracer, center| {
+        const positive = gaussianBlob(center, .{ 0.38, 0.50 }, sigma);
+        const negative = gaussianBlob(center, .{ 0.62, 0.50 }, sigma);
+        omega.* = 1.4 * (positive - negative);
+        tracer.* = tracerStripe(center);
     }
 }
 
@@ -113,6 +136,7 @@ pub fn step(
 ) !void {
     try refreshDerivedFields(allocator, state);
     try advectVorticity(allocator, state, dt);
+    try advectScalar(allocator, state, state.tracer.values, dt);
     try refreshDerivedFields(allocator, state);
 }
 
@@ -130,7 +154,10 @@ pub fn run(
 
     var state = try State.init(allocator, &mesh);
     defer state.deinit(allocator);
-    initializeGaussianVortex(&state);
+    switch (config.demo) {
+        .gaussian => initializeGaussianVortex(&state),
+        .dipole => initializeVortexDipole(&state),
+    }
     try refreshDerivedFields(allocator, &state);
 
     const circulation_initial = totalCirculation(&state);
@@ -159,7 +186,7 @@ pub fn run(
         if (has_output and (step_idx + 1) % interval == 0) {
             const filename = flux_io.snapshot_filename(
                 &filename_bufs[snapshot_count],
-                "euler_2d",
+                baseName(config.demo),
                 snapshot_count,
             );
             try writeSnapshot(allocator, config.output_dir, filename, &state);
@@ -173,13 +200,13 @@ pub fn run(
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
 
     if (has_output and snapshot_count > 0) {
-        try writePvd(allocator, config.output_dir, "euler_2d", pvd_entries[0..snapshot_count]);
+        try writePvd(allocator, config.output_dir, baseName(config.demo), pvd_entries[0..snapshot_count]);
     }
 
     const circulation_final = totalCirculation(&state);
     try writer.print(
-        "euler_2d: grid={d} steps={d} dt={d:.6} circulation={d:.12} -> {d:.12}\n",
-        .{ config.grid, config.steps, dt, circulation_initial, circulation_final },
+        "euler_2d[{s}]: grid={d} steps={d} dt={d:.6} circulation={d:.12} -> {d:.12}\n",
+        .{ @tagName(config.demo), config.grid, config.steps, dt, circulation_initial, circulation_final },
     );
 
     return .{
@@ -187,6 +214,13 @@ pub fn run(
         .circulation_initial = circulation_initial,
         .circulation_final = circulation_final,
         .snapshot_count = snapshot_count,
+    };
+}
+
+fn baseName(demo: Demo) []const u8 {
+    return switch (demo) {
+        .gaussian => "euler_2d",
+        .dipole => "euler_dipole",
     };
 }
 
@@ -284,6 +318,15 @@ fn advectVorticity(
     state: *State,
     dt: f64,
 ) !void {
+    try advectScalar(allocator, state, state.vorticity.values, dt);
+}
+
+fn advectScalar(
+    allocator: std.mem.Allocator,
+    state: *const State,
+    values: []f64,
+    dt: f64,
+) !void {
     const face_count = state.mesh.num_faces();
     const face_areas = state.mesh.simplices(2).items(.volume);
     const face_centers = state.mesh.simplices(2).items(.barycenter);
@@ -296,8 +339,8 @@ fn advectVorticity(
     const mass_new = try allocator.alloc(f64, face_count);
     defer allocator.free(mass_new);
 
-    for (mass_old, mass_new, state.vorticity.values, face_areas) |*old, *new, omega, area| {
-        old.* = omega * area;
+    for (mass_old, mass_new, values, face_areas) |*old, *new, value, area| {
+        old.* = value * area;
         new.* = old.*;
     }
 
@@ -329,16 +372,16 @@ fn advectVorticity(
 
         const edge_flux = dt * edge_lengths[edge_idx] * dot(edge_velocity, normal);
         const transfer = if (edge_flux >= 0.0)
-            edge_flux * state.vorticity.values[face_left]
+            edge_flux * values[face_left]
         else
-            edge_flux * state.vorticity.values[face_right];
+            edge_flux * values[face_right];
 
         mass_new[face_left] -= transfer;
         mass_new[face_right] += transfer;
     }
 
-    for (state.vorticity.values, mass_new, face_areas) |*omega, mass, area| {
-        omega.* = mass / area;
+    for (values, mass_new, face_areas) |*value, mass, area| {
+        value.* = mass / area;
     }
 }
 
@@ -367,6 +410,7 @@ fn writeSnapshot(
     };
     const cell_data = [_]flux_io.DataArraySlice{
         .{ .name = "vorticity", .values = state.vorticity.values },
+        .{ .name = "tracer", .values = state.tracer.values },
         .{ .name = "velocity", .values = velocity_values, .num_components = 3 },
     };
 
@@ -409,6 +453,19 @@ fn ensureDir(path: []const u8) !void {
     };
 }
 
+fn gaussianBlob(point: Vec2, center: Vec2, sigma: f64) f64 {
+    const dx = point[0] - center[0];
+    const dy = point[1] - center[1];
+    return std.math.exp(-(dx * dx + dy * dy) / (2.0 * sigma * sigma));
+}
+
+fn tracerStripe(point: Vec2) f64 {
+    const y = point[1] - 0.5;
+    const stripe = std.math.exp(-(y * y) / (2.0 * 0.035 * 0.035));
+    const x_modulation = 0.5 * (1.0 + std.math.cos(10.0 * std.math.pi * point[0]));
+    return stripe * x_modulation;
+}
+
 test "Euler 2D state allocates stream function on vertices and vorticity on faces" {
     const allocator = testing.allocator;
 
@@ -420,6 +477,28 @@ test "Euler 2D state allocates stream function on vertices and vorticity on face
 
     try testing.expectEqual(@as(usize, mesh.num_vertices()), state.stream_function.values.len);
     try testing.expectEqual(@as(usize, mesh.num_faces()), state.vorticity.values.len);
+    try testing.expectEqual(@as(usize, mesh.num_faces()), state.tracer.values.len);
+}
+
+test "Euler 2D dipole initialization contains both circulation signs" {
+    const allocator = testing.allocator;
+
+    var mesh = try Mesh2D.uniform_grid(allocator, 10, 10, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var state = try State.init(allocator, &mesh);
+    defer state.deinit(allocator);
+    initializeVortexDipole(&state);
+
+    var min_value: f64 = std.math.inf(f64);
+    var max_value: f64 = -std.math.inf(f64);
+    for (state.vorticity.values) |omega| {
+        min_value = @min(min_value, omega);
+        max_value = @max(max_value, omega);
+    }
+
+    try testing.expect(min_value < 0.0);
+    try testing.expect(max_value > 0.0);
 }
 
 test "Euler 2D circulation is conserved over 1000 explicit steps" {

@@ -28,12 +28,23 @@ const ParseError = error{InvalidArgument};
 
 fn parseArgs(args: []const [:0]const u8) ParseError!euler.Config {
     var config = euler.Config{};
+    var output_explicit = false;
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
         const arg = args[i];
         if (eql(arg, "--help") or eql(arg, "-h")) {
             printUsage();
             std.process.exit(0);
+        } else if (eql(arg, "--demo")) {
+            const demo_name = nextArg(args, &i) orelse return flagError("--demo");
+            if (eql(demo_name, "gaussian")) {
+                config.demo = .gaussian;
+            } else if (eql(demo_name, "dipole")) {
+                config.demo = .dipole;
+            } else {
+                std.debug.print("error: unknown demo '{s}'. available: gaussian, dipole\n", .{demo_name});
+                return ParseError.InvalidArgument;
+            }
         } else if (eql(arg, "--grid")) {
             config.grid = parseU32(args, &i, "--grid") orelse return ParseError.InvalidArgument;
         } else if (eql(arg, "--steps")) {
@@ -44,6 +55,7 @@ fn parseArgs(args: []const [:0]const u8) ParseError!euler.Config {
             config.cfl = parseF64(args, &i, "--cfl") orelse return ParseError.InvalidArgument;
         } else if (eql(arg, "--output")) {
             config.output_dir = nextArg(args, &i) orelse return flagError("--output");
+            output_explicit = true;
         } else if (eql(arg, "--frames")) {
             config.frames = parseU32(args, &i, "--frames") orelse return ParseError.InvalidArgument;
         } else {
@@ -51,6 +63,10 @@ fn parseArgs(args: []const [:0]const u8) ParseError!euler.Config {
             printUsage();
             return ParseError.InvalidArgument;
         }
+    }
+
+    if (!output_explicit and config.demo == .dipole) {
+        config.output_dir = "output/euler_dipole";
     }
     return config;
 }
@@ -102,6 +118,7 @@ fn printUsage() void {
         \\  usage: zig build -Doptimize=ReleaseFast example-euler2d -- [options]
         \\
         \\  options:
+        \\    --demo NAME      gaussian (invariant reference) or dipole (dynamic showcase)
         \\    --grid N          grid cells per side (default: 16)
         \\    --steps N         number of timesteps (default: 1000)
         \\    --domain L        square domain side length (default: 1.0)

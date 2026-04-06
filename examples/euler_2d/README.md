@@ -9,10 +9,17 @@ vorticity-stream formulation:
 - Vorticity is transported by a conservative face-flux update, so total
   circulation `∫Ω ω dA` is preserved by pairwise internal flux cancellation.
 
-Run it with:
+Run the invariant reference with:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler2d -- --grid 32 --steps 1000
+zig build -Doptimize=ReleaseFast example-euler2d -- --demo gaussian --grid 32 --steps 1000
+```
+
+For an actually dynamic showcase animation, use the vortex dipole demo:
+
+```sh
+zig build -Doptimize=ReleaseFast example-euler2d -- --demo dipole --grid 48 --steps 1200
+uv run tools/visualize.py output/euler_dipole
 ```
 
 Useful flags:
@@ -23,8 +30,17 @@ zig build -Doptimize=ReleaseFast example-euler2d -- --frames 0
 ```
 
 Output is written as `.vtu` snapshots plus an `euler_2d.pvd` collection in
-`output/euler_2d/` by default. Open the `.pvd` file in ParaView or use the
-existing `tools/visualize.py` helper on the snapshot directory.
+`output/euler_2d/` by default for the Gaussian demo and `output/euler_dipole/`
+for the dipole demo. Open the `.pvd` file in ParaView or use the existing
+`tools/visualize.py` helper on the snapshot directory.
+
+Demo modes:
+
+- `gaussian` keeps the current near-steady single-vortex setup for the
+  circulation-invariant reference case.
+- `dipole` initializes a translating vortex pair and a passive tracer stripe.
+  The tracer is advected by the same face-flux transport step, which makes the
+  motion visually obvious in the rendered animation.
 
 Derivation sketch:
 
