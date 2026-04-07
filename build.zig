@@ -220,6 +220,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_euler2d_tests = b.addRunArtifact(euler2d_tests);
 
+    // -- example-euler3d step --
+    // Builds and runs the 3D incompressible Euler helicity example.
+    const euler3d_exe = b.addExecutable(.{
+        .name = "euler_3d",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/euler_3d/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(euler3d_exe);
+    const euler3d_run = b.addRunArtifact(euler3d_exe);
+    euler3d_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        euler3d_run.addArgs(args);
+    }
+    const euler3d_step = b.step("example-euler3d", "Run the 3D incompressible Euler example");
+    euler3d_step.dependOn(&euler3d_run.step);
+
+    const euler3d_tests = b.addTest(.{
+        .root_module = euler3d_exe.root_module,
+    });
+    const run_euler3d_tests = b.addRunArtifact(euler3d_tests);
+
     // -- example-heat step --
     // Builds and runs the implicit heat-equation example on a unit square.
     const heat_exe = b.addExecutable(.{
@@ -256,6 +283,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_maxwell2d_tests.step);
     test_step.dependOn(&run_maxwell3d_tests.step);
     test_step.dependOn(&run_euler2d_tests.step);
+    test_step.dependOn(&run_euler3d_tests.step);
     test_step.dependOn(&run_heat_tests.step);
 
     // -- docs step --
