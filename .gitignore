@@ -7,3 +7,7 @@ zig-out/
 
 # Simulation Output
 output/
+
+# Python tooling
+__pycache__/
+*.pyc
