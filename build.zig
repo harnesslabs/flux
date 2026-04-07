@@ -274,6 +274,33 @@ pub fn build(b: *std.Build) void {
     });
     const run_heat_tests = b.addRunArtifact(heat_tests);
 
+    // -- example-diffusion-surface step --
+    // Builds and runs the curved-surface diffusion example.
+    const diffusion_surface_exe = b.addExecutable(.{
+        .name = "diffusion_surface",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/diffusion_surface/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(diffusion_surface_exe);
+    const diffusion_surface_run = b.addRunArtifact(diffusion_surface_exe);
+    diffusion_surface_run.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        diffusion_surface_run.addArgs(args);
+    }
+    const diffusion_surface_step = b.step("example-diffusion-surface", "Run the curved-surface diffusion example");
+    diffusion_surface_step.dependOn(&diffusion_surface_run.step);
+
+    const diffusion_surface_tests = b.addTest(.{
+        .root_module = diffusion_surface_exe.root_module,
+    });
+    const run_diffusion_surface_tests = b.addRunArtifact(diffusion_surface_tests);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -285,6 +312,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_euler2d_tests.step);
     test_step.dependOn(&run_euler3d_tests.step);
     test_step.dependOn(&run_heat_tests.step);
+    test_step.dependOn(&run_diffusion_surface_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
@@ -371,6 +399,10 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&maxwell2d_tests.step);
     check_step.dependOn(&maxwell3d_exe.step);
     check_step.dependOn(&maxwell3d_tests.step);
+    check_step.dependOn(&heat_exe.step);
+    check_step.dependOn(&heat_tests.step);
+    check_step.dependOn(&diffusion_surface_exe.step);
+    check_step.dependOn(&diffusion_surface_tests.step);
 
     // -- ci step --
     // Runs build + test + fmt in one command: `zig build ci`
@@ -380,5 +412,9 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_exe_tests.step);
     ci_step.dependOn(&run_maxwell2d_tests.step);
     ci_step.dependOn(&run_maxwell3d_tests.step);
+    ci_step.dependOn(&run_euler2d_tests.step);
+    ci_step.dependOn(&run_euler3d_tests.step);
+    ci_step.dependOn(&run_heat_tests.step);
+    ci_step.dependOn(&run_diffusion_surface_tests.step);
     ci_step.dependOn(&fmt_cmd.step);
 }
