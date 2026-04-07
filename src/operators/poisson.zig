@@ -7,8 +7,10 @@
 
 const std = @import("std");
 const testing = std.testing;
+const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const obj = @import("../io/obj.zig");
+const sparse = @import("../math/sparse.zig");
 const operator_context_mod = @import("context.zig");
 const conjugate_gradient = @import("../math/cg.zig");
 
@@ -76,7 +78,7 @@ pub fn solve_zero_form_dirichlet(
         };
     }
 
-    var triplets = @import("../math/sparse.zig").TripletAssembler(f64).init(free_count, free_count);
+    var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
     defer triplets.deinit(allocator);
 
     const reduced_rhs = try allocator.alloc(f64, free_count);
@@ -153,6 +155,109 @@ pub fn solve_zero_form_dirichlet(
     };
 }
 
+pub fn solve_one_form_dirichlet(
+    comptime MeshType: type,
+    allocator: std.mem.Allocator,
+    operator_context: anytype,
+    forcing_values: []const f64,
+    boundary_values: []const f64,
+    config: SolveConfig,
+) !SolveResult {
+    const mesh = operator_context.mesh;
+    std.debug.assert(forcing_values.len == mesh.num_edges());
+    std.debug.assert(boundary_values.len == mesh.num_edges());
+
+    const boundary_mask = try boundary_edge_mask(allocator, mesh);
+    defer allocator.free(boundary_mask);
+
+    const reduced_index = try allocator.alloc(u32, mesh.num_edges());
+    defer allocator.free(reduced_index);
+    @memset(reduced_index, std.math.maxInt(u32));
+
+    var free_count: u32 = 0;
+    for (0..mesh.num_edges()) |edge_idx_usize| {
+        const edge_idx: u32 = @intCast(edge_idx_usize);
+        if (boundary_mask[edge_idx]) continue;
+        reduced_index[edge_idx] = free_count;
+        free_count += 1;
+    }
+
+    if (free_count == 0) {
+        const solution = try allocator.dupe(f64, boundary_values);
+        return .{
+            .solution = solution,
+            .cg_result = .{ .iterations = 0, .relative_residual = 0.0, .converged = true },
+        };
+    }
+
+    var full_matrix = try assemble_one_form_matrix(MeshType, allocator, operator_context);
+    defer full_matrix.deinit(allocator);
+
+    var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
+    defer triplets.deinit(allocator);
+
+    const reduced_rhs = try allocator.alloc(f64, free_count);
+    defer allocator.free(reduced_rhs);
+    @memset(reduced_rhs, 0.0);
+
+    for (0..mesh.num_edges()) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        if (boundary_mask[row_idx]) continue;
+
+        const reduced_row = reduced_index[row_idx];
+        var rhs_value = forcing_values[row_idx];
+        const row = full_matrix.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (boundary_mask[col_idx]) {
+                rhs_value -= value * boundary_values[col_idx];
+            } else {
+                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], value);
+            }
+        }
+        reduced_rhs[reduced_row] = rhs_value;
+    }
+
+    var reduced_matrix = try triplets.build(allocator);
+    defer reduced_matrix.deinit(allocator);
+
+    const diagonal = try diagonal_of(allocator, reduced_matrix);
+    defer allocator.free(diagonal);
+
+    var preconditioner = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
+    const reduced_solution = try allocator.alloc(f64, free_count);
+    defer allocator.free(reduced_solution);
+    @memset(reduced_solution, 0.0);
+
+    var scratch = try conjugate_gradient.Scratch.init(allocator, free_count);
+    defer scratch.deinit(allocator);
+
+    const cg_result = conjugate_gradient.solve(
+        reduced_matrix,
+        reduced_rhs,
+        reduced_solution,
+        config.tolerance_relative,
+        config.iteration_limit,
+        &preconditioner,
+        scratch,
+    );
+    if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
+
+    const solution = try allocator.alloc(f64, mesh.num_edges());
+    errdefer allocator.free(solution);
+    for (0..mesh.num_edges()) |edge_idx_usize| {
+        const edge_idx: u32 = @intCast(edge_idx_usize);
+        solution[edge_idx] = if (boundary_mask[edge_idx])
+            boundary_values[edge_idx]
+        else
+            reduced_solution[reduced_index[edge_idx]];
+    }
+
+    return .{
+        .solution = solution,
+        .cg_result = cg_result,
+    };
+}
+
 fn boundary_vertex_mask(
     comptime MeshType: type,
     allocator: std.mem.Allocator,
@@ -196,6 +301,74 @@ fn boundary_vertex_mask(
     }
 
     return mask;
+}
+
+fn boundary_edge_mask(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) ![]bool {
+    const mask = try allocator.alloc(bool, mesh.num_edges());
+    @memset(mask, false);
+    for (mesh.boundary_edges) |edge_idx| {
+        mask[edge_idx] = true;
+    }
+    return mask;
+}
+
+fn assemble_one_form_matrix(
+    comptime MeshType: type,
+    allocator: std.mem.Allocator,
+    operator_context: anytype,
+) !sparse.CsrMatrix(f64) {
+    const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
+    const edge_count = operator_context.mesh.num_edges();
+
+    try operator_context.withLaplacian(1);
+    const laplacian = operator_context.laplacian(1);
+
+    var basis = try OneForm.init(allocator, operator_context.mesh);
+    defer basis.deinit(allocator);
+
+    var triplets = sparse.TripletAssembler(f64).init(edge_count, edge_count);
+    defer triplets.deinit(allocator);
+
+    for (0..edge_count) |col_idx_usize| {
+        const col_idx: u32 = @intCast(col_idx_usize);
+        @memset(basis.values, 0.0);
+        basis.values[col_idx] = 1.0;
+
+        var image = try laplacian.apply(allocator, basis);
+        defer image.deinit(allocator);
+
+        for (image.values, 0..) |value, row_idx_usize| {
+            if (@abs(value) <= 1e-14) continue;
+            try triplets.addEntry(allocator, @intCast(row_idx_usize), col_idx, value);
+        }
+    }
+
+    return triplets.build(allocator);
+}
+
+fn diagonal_of(
+    allocator: std.mem.Allocator,
+    matrix: sparse.CsrMatrix(f64),
+) ![]f64 {
+    const diagonal = try allocator.alloc(f64, matrix.n_rows);
+    errdefer allocator.free(diagonal);
+    @memset(diagonal, 0.0);
+
+    for (0..matrix.n_rows) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const row = matrix.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (col_idx != row_idx) continue;
+            diagonal[row_idx] = value;
+            break;
+        }
+        std.debug.assert(diagonal[row_idx] > 0.0);
+    }
+
+    return diagonal;
 }
 
 fn exact_solution_2d(coords: [2]f64) f64 {
@@ -292,6 +465,31 @@ fn make_planar_quad_obj(allocator: std.mem.Allocator, nx: u32, ny: u32) ![]u8 {
     }
 
     return output.toOwnedSlice(allocator);
+}
+
+fn fill_edge_samples_3d(mesh: *const topology.Mesh(3, 3), values: []f64) void {
+    const edge_vertices = mesh.simplices(1).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+
+    for (values, edge_vertices) |*value, edge| {
+        const p0 = coords[edge[0]];
+        const p1 = coords[edge[1]];
+        const midpoint = [3]f64{
+            0.5 * (p0[0] + p1[0]),
+            0.5 * (p0[1] + p1[1]),
+            0.5 * (p0[2] + p1[2]),
+        };
+        const tangent = [3]f64{
+            p1[0] - p0[0],
+            p1[1] - p0[1],
+            p1[2] - p0[2],
+        };
+
+        const amplitude = std.math.sin(std.math.pi * midpoint[0]) *
+            std.math.sin(std.math.pi * midpoint[1]) *
+            std.math.sin(std.math.pi * midpoint[2]);
+        value.* = amplitude * tangent[2];
+    }
 }
 
 test "Poisson solve converges at second order on 2D uniform grids" {
@@ -393,4 +591,70 @@ test "Poisson solve converges on imported quad OBJ surface embedded in R3" {
     }
 
     try expect_second_order(&errors);
+}
+
+test "1-form Dirichlet solve recovers a discrete exact field on tetrahedral grids" {
+    const allocator = testing.allocator;
+    const Mesh3D = topology.Mesh(3, 3);
+    const OneForm = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var operator_context = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+    try operator_context.withLaplacian(1);
+
+    var exact = try OneForm.init(allocator, &mesh);
+    defer exact.deinit(allocator);
+    fill_edge_samples_3d(&mesh, exact.values);
+
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expectApproxEqAbs(@as(f64, 0.0), exact.values[edge_idx], 1e-15);
+    }
+
+    var forcing = try operator_context.laplacian(1).apply(allocator, exact);
+    defer forcing.deinit(allocator);
+
+    const boundary = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(boundary);
+    @memset(boundary, 0.0);
+
+    var solve = try solve_one_form_dirichlet(Mesh3D, allocator, operator_context, forcing.values, boundary, .{
+        .tolerance_relative = 1e-12,
+        .iteration_limit = 4000,
+    });
+    defer solve.deinit(allocator);
+
+    try testing.expect(solve.cg_result.converged);
+    for (solve.solution, exact.values) |actual, expected| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-8);
+    }
+}
+
+test "1-form Dirichlet solve returns zero for zero forcing and zero boundary data" {
+    const allocator = testing.allocator;
+    const Mesh3D = topology.Mesh(3, 3);
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 1, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var operator_context = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    const forcing = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(forcing);
+    @memset(forcing, 0.0);
+
+    const boundary = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(boundary);
+    @memset(boundary, 0.0);
+
+    var solve = try solve_one_form_dirichlet(Mesh3D, allocator, operator_context, forcing, boundary, .{});
+    defer solve.deinit(allocator);
+
+    try testing.expect(solve.cg_result.converged);
+    for (solve.solution) |value| {
+        try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-12);
+    }
 }
