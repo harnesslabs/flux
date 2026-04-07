@@ -41,6 +41,14 @@ pub const ConvergenceResult = struct {
     l2_error: f64,
 };
 
+// TODO(#154): This struct is a workaround. It exists because Mesh(D,K) with
+// D > K does not yet honor the metric induced by its own embedding — so we
+// must carry a parallel Mesh(2,2) reference mesh, an explicit per-face
+// metric tensor array, and the embedded Mesh(3,2) side by side. Once #154
+// lands, this collapses to a single `Mesh(3, 2)` and the stereographic
+// projection / metric tensor machinery in this file can be deleted. The
+// long-term endgame is the truly intrinsic IntrinsicMesh(K) tracked in
+// project/horizons.md.
 const SphereGeometry = struct {
     reference_mesh: ReferenceMesh,
     embedded_mesh: EmbeddedMesh,
