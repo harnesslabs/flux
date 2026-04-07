@@ -88,12 +88,13 @@ the flux library.
 
 **GitHub milestone:** https://github.com/harnesslabs/flux/milestone/6
 
-Issues (9):
+Issues (10):
 - [ ] #90 — Composable comptime boundary condition types (PEC, Dirichlet, no-slip, periodic)
 - [ ] #91 — Composable diagnostic observer framework pluggable into any integrator
 - [ ] #92 — `examples/maxwell_3d/` — 3D cavity resonance with ∇·B = 0 structural guarantee
 - [ ] #93 — `examples/heat/` — heat equation via backward Euler + CG solve with convergence verification
 - [ ] #94 — `examples/euler_2d/` — vorticity-stream formulation with circulation conservation
+- [ ] #141 — Primal 1-form Laplace solve for 3D Euler velocity recovery
 - [ ] #95 — `examples/euler_3d/` — 3D vorticity via wedge product with helicity conservation
 - [ ] #96 — `examples/diffusion_surface/` — heat equation on curved surface with Riemannian Hodge star
 - [ ] #97 — Example packaging infrastructure — shared CLI, VTK output, and build integration

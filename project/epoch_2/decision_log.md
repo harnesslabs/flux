@@ -249,6 +249,39 @@ tests. The tradeoff is a larger tetrahedron count than a 5-tet scheme, which
 is acceptable here because correctness and orientation regularity matter more
 than minimizing element count in the initial 3D test-bed constructor.
 
+## 2026-04-06: 3D Euler velocity recovery is split behind a dedicated 1-form solve issue
+
+**Decision:** The missing primal 1-form solve capability discovered while
+working issue #95 is tracked explicitly as #141 and implemented as a dedicated
+operator-layer capability before returning to the 3D Euler example. The first
+solve path assembles the primal 1-form Laplacian matrix by probing the existing
+assembled operator on basis 1-forms, then reuses the existing CSR-based CG
+solver with Dirichlet elimination on boundary edges.
+
+**Alternatives considered:**
+1. Implement a generic matrix-free Krylov layer now: rejected because it would
+   broaden the math API and solver abstractions well beyond what is needed to
+   unblock the current milestone issue.
+2. Derive and ship a closed-form assembled primal 1-form stiffness operator
+   immediately: rejected for now because it is a larger operator-assembly task
+   than the milestone currently needs, and it would obscure the fact that the
+   immediate problem discovered in live work is missing solve plumbing rather
+   than missing DEC algebra.
+3. Keep the dependency implicit inside #95: rejected because it hides a real
+   development issue in the example task, making the milestone plan dishonest.
+
+**Rationale:** The example needs one honest way to recover a 1-form velocity
+field from vorticity on tetrahedral meshes. Probe-based assembly is slower than
+future closed-form assembly, but it is explicit, bounded, reuses the existing
+solver path, and keeps the issue cut reviewable: #141 delivers the missing
+capability, then #95 can consume it without embedding solver internals in the
+physics example.
+
+**When to revisit:** Revisit when `examples/euler_3d/` or later fluid work
+needs larger meshes or repeated solves where probe-based assembly becomes the
+dominant cost. At that point the right follow-up is either closed-form 1-form
+assembly or a matrix-free Krylov interface, not another example-local shortcut.
+
 ## 2026-04-04: Interior-degree Hodge stars are stored as a degree-indexed Whitney family on the mesh
 
 **Decision:** Replace the mesh's single `whitney_mass_1`/`preconditioner_1`
