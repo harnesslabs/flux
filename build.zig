@@ -135,6 +135,23 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // -- examples_common module --
+    // Shared infrastructure consumed by every example: CLI parser, snapshot
+    // writer, progress display. Lives under examples/common/ and depends on
+    // the flux library.
+    const examples_common_mod = b.createModule(.{
+        .root_source_file = b.path("examples/common/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+        },
+    });
+    const examples_common_tests = b.addTest(.{
+        .root_module = examples_common_mod,
+    });
+    const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
+
     // -- example-maxwell2d step --
     // Builds and runs the 2D Maxwell electromagnetic example.
     // This example consumes flux as a library dependency, proving the
@@ -313,6 +330,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_euler3d_tests.step);
     test_step.dependOn(&run_heat_tests.step);
     test_step.dependOn(&run_diffusion_surface_tests.step);
+    test_step.dependOn(&run_examples_common_tests.step);
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
@@ -416,5 +434,6 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_euler3d_tests.step);
     ci_step.dependOn(&run_heat_tests.step);
     ci_step.dependOn(&run_diffusion_surface_tests.step);
+    ci_step.dependOn(&run_examples_common_tests.step);
     ci_step.dependOn(&fmt_cmd.step);
 }
