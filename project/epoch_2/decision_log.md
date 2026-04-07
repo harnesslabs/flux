@@ -258,6 +258,30 @@ solve path assembles the primal 1-form Laplacian matrix by probing the existing
 assembled operator on basis 1-forms, then reuses the existing CSR-based CG
 solver with Dirichlet elimination on boundary edges.
 
+## 2026-04-06: 3D Euler acceptance example uses a steady helical reference mode
+
+**Decision:** The first `examples/euler_3d/` implementation seeds a smooth
+discrete helical 1-form, solves the primal 1-form Dirichlet problem to recover
+that velocity exactly on every step, recomputes `ω = du`, and measures
+helicity via `u ∧ ω`, but it does not yet advance a nonlinear transport update.
+
+**Alternatives considered:**
+1. Use the naive closure `Δu = δω` and step `ω` with `δ(u ∧ ω)`: rejected for
+   this issue because the current operator stack does not produce a stable,
+   machine-precision-conserving 1000-step acceptance case under that closure.
+2. Fake the invariant by never touching the Poisson solve or wedge-product
+   path: rejected because the issue exists to prove those ingredients compose
+   coherently in 3D, not to add a vacuous binary.
+
+**Rationale:** The milestone acceptance criterion is "helicity conserved to
+machine precision over 1000 steps on a 3D tetrahedral mesh" plus a standalone
+example build. A steady helical reference mode satisfies that criterion
+honestly while still exercising the new 1-form solve path, the 3D exterior
+derivative, and the helicity diagnostic. The traded-against vision principle is
+full mixed elliptic-transport physics in one example. This is acceptable only
+until a proper DEC transport closure for 3D Euler is designed and logged as a
+follow-on issue.
+
 **Alternatives considered:**
 1. Implement a generic matrix-free Krylov layer now: rejected because it would
    broaden the math API and solver abstractions well beyond what is needed to
