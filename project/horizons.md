@@ -286,6 +286,61 @@ configuration; the Zig code is behavior. No string-based expression parsers.
 
 ---
 
+## Truly intrinsic Riemannian K-complex
+
+**Layer:** architecture
+**Constraint on current work:** `Mesh(D, K)` is the embedded form. The
+intrinsic form — `IntrinsicMesh(K)` parameterized only by connectivity and
+edge lengths — is the long-term performance ceiling for DEC on curved
+surfaces and abstract Riemannian complexes. Current work should not preclude
+a forgetful map `Mesh(D, K) → IntrinsicMesh(K)` that drops coordinates and
+keeps only edge lengths. The induced-metric work in #154 is the natural
+on-ramp: once `Mesh(D, K)` computes everything from edge lengths internally,
+the intrinsic form is mostly the same code with the coordinate array removed.
+
+```zig
+// Embedded form (existing): coordinates + connectivity, metric induced
+const sphere_embedded: Mesh(3, 2) = ...;
+
+// Intrinsic form (horizon): connectivity + edge lengths only, no coordinates
+pub fn IntrinsicMesh(comptime k: u8) type {
+    return struct {
+        connectivity: SimplicialComplex(k),
+        edge_lengths: []f64, // length per primal 1-simplex; everything else derived
+        // ...
+    };
+}
+
+// Forgetful map: drops the embedding, keeps the intrinsic geometry
+const sphere_intrinsic: IntrinsicMesh(2) = sphere_embedded.forget_embedding();
+```
+
+**Why this matters for performance.** A `Mesh(D, K)` of a curved surface
+stores `N_vertices · D` coordinates (24 N for D=3) plus all the derived
+incidence data. The intrinsic form stores `N_edges` floats (≈ 3 N for a
+triangulated 2-manifold by Euler) and computes everything else on demand
+from those. The intrinsic representation is also the natural form for
+Riemannian metrics that *cannot* be embedded faithfully in low dimensions
+(hyperbolic surfaces, abstract polyhedral surfaces with prescribed angle
+defects, simulations on tessellations of negatively curved spaces).
+
+**Why this matters for flexibility.** The intrinsic form is also the
+representation that lets users *prescribe* a metric directly — set edge
+lengths to whatever you want, and the cotan Laplacian and Hodge star are
+defined immediately, even if the resulting metric does not embed
+isometrically in any ℝᴰ. This opens up Yamabe flow, discrete uniformization,
+and similar metric-design problems as natural library use cases.
+
+**Enablers:** #154 (induced-metric Hodge star on `Mesh(D, K)` — eliminates
+the dual-mesh smell and makes everything internal go through edge lengths,
+which is exactly what the intrinsic form needs). A concrete consumer that
+*requires* the intrinsic form (currently none — every example so far has a
+natural ambient embedding).
+
+**Source:** PR #147 review, 2026-04-07
+
+---
+
 ## Native quad/polygon cell support
 
 **Layer:** architecture

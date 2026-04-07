@@ -47,6 +47,7 @@ SCALAR_PREFERENCES = [
     "B_flux",
     "E_intensity",
     "stream_function",
+    "temperature",
 ]
 VECTOR_PREFERENCES = [
     "velocity",
@@ -66,11 +67,15 @@ class VtuData:
     x: np.ndarray
     y: np.ndarray
     z: np.ndarray
-    dimension: int
+    topology: str  # "tri2d" (triangles, planar), "surface3d" (triangles in 3D), "volume3d"
     cells: np.ndarray
     point_data: dict[str, DataArray]
     cell_data: dict[str, DataArray]
     timesteps: dict[str, float] | None = None
+
+    @property
+    def dimension(self) -> int:
+        return 2 if self.topology == "tri2d" else 3
 
 
 def parse_vtu(path: str) -> VtuData:
@@ -113,11 +118,18 @@ def parse_vtu(path: str) -> VtuData:
     point_data = parse_data_arrays(piece.findall(".//PointData/DataArray"), n_points, "point")
     cell_data = parse_data_arrays(piece.findall(".//CellData/DataArray"), n_cells, "cell")
 
+    if cell_type == 5:
+        z_extent = float(np.ptp(coords[:, 2]))
+        xy_extent = float(max(np.ptp(coords[:, 0]), np.ptp(coords[:, 1]), 1e-12))
+        topology = "surface3d" if z_extent > 1e-9 * xy_extent else "tri2d"
+    else:
+        topology = "volume3d"
+
     return VtuData(
         x=coords[:, 0],
         y=coords[:, 1],
         z=coords[:, 2],
-        dimension=2 if cell_type == 5 else 3,
+        topology=topology,
         cells=cells,
         point_data=point_data,
         cell_data=cell_data,
@@ -193,7 +205,7 @@ def find_field(data: VtuData, name: str) -> DataArray:
 
 def choose_style(field: DataArray) -> tuple[str, bool, str]:
     """Return (cmap, symmetric_range, label)."""
-    if field.name in {"vorticity", "B_flux", "stream_function"}:
+    if field.name in {"vorticity", "B_flux", "stream_function", "temperature"}:
         return ("RdBu_r", True, field.name.replace("_", " "))
     if field.name in {"tracer"}:
         return ("turbo", False, field.name.replace("_", " "))
@@ -247,11 +259,12 @@ def render_frame(
     frame_idx: int,
     n_frames: int,
     series_name: str,
+    dpi: int = 120,
 ) -> Image.Image:
     cmap, _, colorbar_label = choose_style(scalar_field)
-    fig = plt.figure(figsize=(8.2, 6.6), dpi=120)
+    fig = plt.figure(figsize=(8.2, 6.6), dpi=dpi)
 
-    if data.dimension == 2:
+    if data.topology == "tri2d":
         ax = fig.add_subplot(1, 1, 1)
         triang = mtri.Triangulation(data.x, data.y, data.cells)
         artist = render_2d_scalar(ax, triang, data, scalar_field, cmap, vmin, vmax)
@@ -262,6 +275,20 @@ def render_frame(
         ax.set_ylim(float(np.min(data.y)), float(np.max(data.y)))
         ax.set_xlabel("x")
         ax.set_ylabel("y")
+    elif data.topology == "surface3d":
+        ax = fig.add_subplot(1, 1, 1, projection="3d")
+        artist = render_surface_scalar(ax, data, scalar_field, cmap, vmin, vmax)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.view_init(elev=24, azim=-58)
+        ax.set_box_aspect(
+            (
+                max(np.ptp(data.x), 1e-12),
+                max(np.ptp(data.y), 1e-12),
+                max(np.ptp(data.z), 1e-12),
+            )
+        )
     else:
         ax = fig.add_subplot(1, 1, 1, projection="3d")
         artist = render_3d_scalar(ax, data, scalar_field, cmap, vmin, vmax)
@@ -356,6 +383,46 @@ def overlay_2d_vectors(ax: plt.Axes, data: VtuData, field: DataArray | None) -> 
     )
 
 
+def render_surface_scalar(
+    ax,
+    data: VtuData,
+    field: DataArray,
+    cmap: str,
+    vmin: float,
+    vmax: float,
+):
+    from matplotlib.cm import ScalarMappable
+    from matplotlib.colors import Normalize
+    from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+    if field.association == "cell":
+        face_values = field.values
+    else:
+        face_values = field.values[data.cells].mean(axis=1)
+
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    mappable = ScalarMappable(norm=norm, cmap=cmap)
+    face_colors = mappable.to_rgba(face_values)
+
+    coords = np.column_stack([data.x, data.y, data.z])
+    triangles = coords[data.cells]
+    collection = Poly3DCollection(
+        triangles,
+        facecolors=face_colors,
+        edgecolors=(1.0, 1.0, 1.0, 0.18),
+        linewidths=0.15,
+    )
+    ax.add_collection3d(collection)
+
+    pad = 0.02 * max(np.ptp(data.x), np.ptp(data.y), np.ptp(data.z), 1e-12)
+    ax.set_xlim(float(np.min(data.x)) - pad, float(np.max(data.x)) + pad)
+    ax.set_ylim(float(np.min(data.y)) - pad, float(np.max(data.y)) + pad)
+    ax.set_zlim(float(np.min(data.z)) - pad, float(np.max(data.z)) + pad)
+
+    mappable.set_array(face_values)
+    return mappable
+
+
 def render_3d_scalar(
     ax: plt.Axes,
     data: VtuData,
@@ -437,6 +504,7 @@ def main() -> None:
         help="Output animation path (default: <input_dir>/animation.png; use .gif for palette-limited GIF)",
     )
     parser.add_argument("--fps", type=int, default=12, help="Frames per second")
+    parser.add_argument("--dpi", type=int, default=120, help="Render DPI (lower = smaller file)")
     args = parser.parse_args()
 
     vtu_files = sorted(glob.glob(str(Path(args.input_dir) / "*.vtu")))
@@ -480,6 +548,7 @@ def main() -> None:
             i + 1,
             len(parsed_frames),
             series_name,
+            dpi=args.dpi,
         )
         frames.append(image)
 

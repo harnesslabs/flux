@@ -6,7 +6,9 @@ The central abstraction is the **operator on a function space**: a map between t
 
 See [`project/vision.md`](project/vision.md) for the full design philosophy.
 
-![TE10 cavity animation](assets/cavity-512-grid-10000-steps.png)
+| TE₁₀ cavity resonance | Heat diffusion on a sphere |
+|---|---|
+| ![TE10 cavity animation](assets/cavity-512-grid-10000-steps.png) | ![Surface diffusion animation](assets/diffusion-sphere-r5-800-steps.png) |
 
 ## Status
 
