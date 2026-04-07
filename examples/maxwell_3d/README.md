@@ -27,8 +27,8 @@ and the test suite checks that the discrete Rayleigh quotient converges toward t
 ## Run
 
 ```sh
-zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 1000 --dt 0.0025
-zig build -Doptimize=ReleaseFast example-maxwell3d -- --steps 400 --dt 0.0025 --output output/maxwell3d --output-interval 40
+zig build -Doptimize=ReleaseFast run-maxwell-3d -- --steps 1000 --dt 0.0025
+zig build -Doptimize=ReleaseFast run-maxwell-3d -- --steps 400 --dt 0.0025 --output output/maxwell3d --output-interval 40
 uv run tools/visualize.py output/maxwell3d --field B_flux --output output/maxwell3d/animation.png
 ```
 
@@ -38,7 +38,7 @@ The second command writes `.vtu` snapshots plus a `.pvd` collection file for Par
 
 ```text
 usage:
-  zig build -Doptimize=ReleaseFast example-maxwell3d -- [options]
+  zig build -Doptimize=ReleaseFast run-maxwell-3d -- [options]
 
 mesh:
   --nx N              tetrahedral cells in x (default: 2)

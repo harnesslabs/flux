@@ -33,6 +33,17 @@ jobs:
       - name: Test
         run: zig build test --summary all
 
+  examples:
+    name: examples
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: "0.15.2"
+      - name: Build flux-examples umbrella binary
+        run: zig build examples --summary all
+
   fmt:
     name: fmt
     runs-on: ubuntu-latest

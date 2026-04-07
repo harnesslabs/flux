@@ -31,7 +31,20 @@ zig build docs                  # generate API docs to zig-out/docs/
 
 ## Examples
 
-Physics simulations live in `examples/` and consume flux as a library dependency. Each example is a standalone binary that proves the library API works end-to-end.
+Physics simulations live in `examples/` and are exposed through a single
+umbrella binary, `flux-examples`, with one subcommand per demo. Every
+subcommand accepts the shared `--steps`, `--dt`, `--output`, and `--frames`
+flags on top of its own physics-specific options.
+
+```sh
+zig build examples                       # build the umbrella binary
+./zig-out/bin/flux-examples list         # list all subcommands
+./zig-out/bin/flux-examples maxwell-2d --help
+
+# convenience run steps (forwards `--` arguments to the subcommand)
+zig build run-maxwell-2d -- --demo cavity --steps 2000
+zig build run-heat -- --grid 32 --frames 4
+```
 
 ### 2D Maxwell electromagnetics
 
@@ -41,9 +54,9 @@ Use `-Doptimize=ReleaseFast` for any meaningful performance measurement. The def
 `zig build` mode is a debug build and is much slower on large grids.
 
 ```sh
-zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity --steps 2000
-zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole --grid 64
-zig build -Doptimize=ReleaseFast example-maxwell2d -- --help
+zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo cavity --steps 2000
+zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo dipole --grid 64
+zig build -Doptimize=ReleaseFast run-maxwell-2d -- --help
 ```
 
 The example includes 40 integration tests covering Whitney ★₁ convergence (O(h²) verified), TE₁₀ eigenvalue accuracy, energy conservation over hundreds of timesteps, and PEC boundary correctness.

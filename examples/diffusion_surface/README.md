@@ -21,8 +21,8 @@ The exact mode used for verification is the degree-1 spherical harmonic
 ## Run
 
 ```sh
-zig build -Doptimize=ReleaseFast example-diffusion-surface -- --refinement 3 --frames 8
-zig build -Doptimize=ReleaseFast example-diffusion-surface -- --help
+zig build -Doptimize=ReleaseFast run-diffusion-surface -- --refinement 3 --frames 8
+zig build -Doptimize=ReleaseFast run-diffusion-surface -- --help
 ```
 
 ## Output

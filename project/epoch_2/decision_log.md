@@ -518,3 +518,42 @@ future BC composition. Periodic pairing is a simulation-setup choice rather
 than a topological invariant. An explicit representative map keeps the
 topology component honest and leaves room for later geometry-driven helpers
 without freezing that policy into `Mesh` now.
+
+## 2026-04-07: Examples ship under a single `flux-examples` umbrella binary with shared CLI
+
+**Decision:** Every example is exposed as a subcommand of one binary,
+`flux-examples`, instead of one executable per physics demo. The umbrella's
+root file (`examples/main.zig`) imports each `examples/<name>/cli.zig`
+relatively, dispatching by subcommand name. A shared `examples_common`
+module (`examples/common/{cli,snapshot,progress}.zig`) provides:
+- a `Common` parser recognizing `--steps`, `--dt`, `--output`, `--frames`,
+  `--grid`, `--domain`, `--refinement`, `--final-time`, `--help`;
+- a `Series` snapshot writer that owns PVD bookkeeping and accepts a
+  `renderer` struct (Zig has no closures);
+- a `Progress(Writer)` bar reusable across demos.
+
+`zig build examples` builds the umbrella binary (also covered by the new
+`examples` CI job). `zig build run-<name> -- <args>` is the convenience
+runner — the old per-demo `example-<name>` build steps are removed.
+
+**Alternatives considered:**
+1. *Keep one executable per example, add a shared common module on the side.*
+   Rejected because every example was reimplementing the same argv parser,
+   PVD writer, and progress bar. The shared module alone removes hundreds of
+   duplicated lines; a single binary additionally collapses six install
+   targets and six build steps into one.
+2. *Generate per-example wrapper binaries from a common template.* Rejected
+   as build-system gymnastics: subcommand dispatch in 50 lines of Zig is
+   cheaper to read and explain than a build.zig metaprogram.
+3. *Per-example `--dt` semantics.* Each example derives its physical timestep
+   differently (Courant scaling, parabolic h², backward-Euler `final_time/N`).
+   `--dt` is interpreted by each subcommand's `applyCommon` as the override
+   that pins the right derived quantity (`courant = dt/h`,
+   `final_time = dt*steps`, etc.) so the shared flag means "the timestep I
+   want" without leaking the physics-specific knob into the shared parser.
+
+**Rationale:** Reducing the example surface to one binary makes the CLI
+discoverable (`flux-examples list`, `flux-examples <name> --help`),
+satisfies the issue acceptance criterion that every example accept
+`--dt`/`--steps`/`--output`, and gives us one place to add cross-cutting
+features like profiling hooks or alternate snapshot backends in the future.

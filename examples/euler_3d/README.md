@@ -13,14 +13,14 @@ on tetrahedral meshes:
 Run the acceptance reference with:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler3d -- --steps 1000
+zig build -Doptimize=ReleaseFast run-euler-3d -- --steps 1000
 ```
 
 Useful flags:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler3d -- --help
-zig build -Doptimize=ReleaseFast example-euler3d -- --nx 3 --ny 3 --nz 2 --output output/euler_3d --output-interval 50
+zig build -Doptimize=ReleaseFast run-euler-3d -- --help
+zig build -Doptimize=ReleaseFast run-euler-3d -- --nx 3 --ny 3 --nz 2 --output output/euler_3d --output-interval 50
 ```
 
 Output is written as `.vtu` snapshots plus an `euler_3d.pvd` collection when

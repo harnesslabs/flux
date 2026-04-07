@@ -102,16 +102,25 @@ pub const Series = struct {
         return step_one_based % self.plan.interval == 0;
     }
 
-    /// Capture a frame at simulation time `time`. The `render` closure is
-    /// invoked with `(allocator, writer)` where `writer` is a buffered
-    /// `std.ArrayListUnmanaged(u8).Writer`; the closure must serialize the
-    /// frame contents (typically `flux.io.write` or a wrapper around it).
+    /// Capture a frame at simulation time `time`. The `renderer` is any
+    /// value with a `render(allocator, writer) !void` method. Zig has no
+    /// first-class closures, so callers package the data they need to
+    /// serialize into a small struct with a render method:
+    ///
+    ///     const Renderer = struct {
+    ///         state: *const State,
+    ///         pub fn render(self: @This(), a: Allocator, w: anytype) !void {
+    ///             try flux.io.write(w, ..., self.state.mesh.*, ...);
+    ///         }
+    ///     };
+    ///     try series.capture(time, Renderer{ .state = &state });
+    ///
     /// The serialized buffer is then written to disk and recorded in the
     /// PVD entry list.
     pub fn capture(
         self: *Series,
         time: f64,
-        render: anytype,
+        renderer: anytype,
     ) !void {
         std.debug.assert(self.enabled());
         std.debug.assert(self.count < self.plan.capacity);
@@ -124,7 +133,7 @@ pub const Series = struct {
 
         var output: std.ArrayListUnmanaged(u8) = .{};
         defer output.deinit(self.allocator);
-        try render(self.allocator, output.writer(self.allocator));
+        try renderer.render(self.allocator, output.writer(self.allocator));
 
         var dir = try std.fs.cwd().openDir(self.output_dir, .{});
         defer dir.close();

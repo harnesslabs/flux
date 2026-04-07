@@ -1,16 +1,10 @@
-//! maxwell_2d — 2D electromagnetic simulation on simplicial meshes.
-//!
-//! Runs electromagnetic simulations on a 2D triangulated PEC cavity and writes
-//! VTK snapshots for visualization. Every physical and numerical parameter is
-//! configurable from the command line.
-//!
-//! Usage:
-//!   zig build example-maxwell2d -- [options]                     # dipole (default)
-//!   zig build example-maxwell2d -- --demo cavity [options]       # standing wave
-//!   zig build example-maxwell2d -- --help                        # full flag reference
+//! `flux-examples maxwell-2d` subcommand: 2D electromagnetic simulation on
+//! simplicial meshes. Supports a dipole-driven cavity demo and an exact TE₁₀
+//! standing-wave demo.
 
 const std = @import("std");
 const flux = @import("flux");
+const common = @import("examples_common");
 const maxwell = @import("maxwell.zig");
 
 const Mesh2D = flux.Mesh(2, 2);
@@ -23,6 +17,8 @@ const std_fs = std.fs;
 // ═══════════════════════════════════════════════════════════════════════════
 // Configuration
 // ═══════════════════════════════════════════════════════════════════════════
+
+const Demo = enum { dipole, cavity };
 
 const Config = struct {
     demo: Demo = .dipole,
@@ -54,27 +50,79 @@ const Config = struct {
     }
 };
 
-const Demo = enum { dipole, cavity };
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Entry point
 // ═══════════════════════════════════════════════════════════════════════════
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    var config = Config{};
+    var co = common.Common{};
+    var parser = common.Parser.init(args);
+    _ = parser.next();
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+    while (parser.next()) |arg| {
+        if (eql(arg, "--demo")) {
+            const val = try parser.requireValue("--demo");
+            if (eql(val, "dipole")) {
+                config.demo = .dipole;
+            } else if (eql(val, "cavity")) {
+                config.demo = .cavity;
+            } else {
+                std.debug.print("error: unknown demo '{s}'. available: dipole, cavity\n", .{val});
+                std.process.exit(2);
+            }
+            continue;
+        }
+        if (eql(arg, "--courant")) {
+            config.courant = try parser.parseF64("--courant");
+            continue;
+        }
+        if (eql(arg, "--frequency")) {
+            config.frequency = try parser.parseF64("--frequency");
+            continue;
+        }
+        if (eql(arg, "--amplitude")) {
+            config.amplitude = try parser.parseF64("--amplitude");
+            continue;
+        }
+        if (try parser.tryCommon(arg, &co)) continue;
+        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
+        printUsage();
+        std.process.exit(2);
+    }
 
-    const config = parseArgs(args) catch return;
+    if (co.help) {
+        printUsage();
+        return;
+    }
+
+    applyCommon(&config, co);
+
     const stderr = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
 
     switch (config.demo) {
         .dipole => try runDipole(allocator, config, stderr),
         .cavity => try runCavity(allocator, config, stderr),
     }
+}
+
+fn applyCommon(cfg: *Config, co: common.Common) void {
+    if (co.steps) |v| cfg.steps = v;
+    if (co.grid) |v| cfg.grid = v;
+    if (co.domain) |v| cfg.domain = v;
+    if (co.frames) |v| cfg.frames = v;
+    if (co.output_dir) |v| cfg.output_dir = v;
+    if (co.dt) |dt_value| {
+        // 2D Maxwell derives dt from courant * h. Solve for the courant
+        // number that produces the requested dt so dt() stays the single
+        // source of truth.
+        const h = cfg.domain / @as(f64, @floatFromInt(cfg.grid));
+        cfg.courant = dt_value / h;
+    }
+}
+
+inline fn eql(a: []const u8, b: []const u8) bool {
+    return std.mem.eql(u8, a, b);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -411,105 +459,15 @@ fn runCavity(allocator: std.mem.Allocator, config: Config, writer: anytype) !voi
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Argument parsing
-// ═══════════════════════════════════════════════════════════════════════════
-
-const ParseError = error{InvalidArgument};
-
-fn parseArgs(args: []const [:0]const u8) ParseError!Config {
-    var config = Config{};
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (eql(arg, "--help") or eql(arg, "-h")) {
-            printUsage();
-            std.process.exit(0);
-        } else if (eql(arg, "--demo")) {
-            const val = nextArg(args, &i) orelse return flagError("--demo");
-            if (eql(val, "dipole")) {
-                config.demo = .dipole;
-            } else if (eql(val, "cavity")) {
-                config.demo = .cavity;
-            } else {
-                std.debug.print("error: unknown demo '{s}'. available: dipole, cavity\n", .{val});
-                return ParseError.InvalidArgument;
-            }
-        } else if (eql(arg, "--steps")) {
-            config.steps = parseU32(args, &i, "--steps") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--grid")) {
-            config.grid = parseU32(args, &i, "--grid") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--domain")) {
-            config.domain = parseF64(args, &i, "--domain") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--courant")) {
-            config.courant = parseF64(args, &i, "--courant") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--frequency")) {
-            config.frequency = parseF64(args, &i, "--frequency") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--amplitude")) {
-            config.amplitude = parseF64(args, &i, "--amplitude") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--output")) {
-            config.output_dir = nextArg(args, &i) orelse return flagError("--output");
-        } else if (eql(arg, "--frames")) {
-            config.frames = parseU32(args, &i, "--frames") orelse return ParseError.InvalidArgument;
-        } else {
-            std.debug.print("error: unknown argument '{s}'\n\n", .{arg});
-            printUsage();
-            return ParseError.InvalidArgument;
-        }
-    }
-    return config;
-}
-
-fn eql(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
-}
-
-fn nextArg(args: []const [:0]const u8, i: *usize) ?[]const u8 {
-    if (i.* + 1 < args.len) {
-        i.* += 1;
-        return args[i.*];
-    }
-    return null;
-}
-
-fn flagError(flag: []const u8) ParseError {
-    std.debug.print("error: {s} requires a value\n", .{flag});
-    return ParseError.InvalidArgument;
-}
-
-fn parseU32(args: []const [:0]const u8, i: *usize, flag: []const u8) ?u32 {
-    const val = nextArg(args, i) orelse {
-        std.debug.print("error: {s} requires a value\n", .{flag});
-        return null;
-    };
-    return std.fmt.parseInt(u32, val, 10) catch {
-        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, val });
-        return null;
-    };
-}
-
-fn parseF64(args: []const [:0]const u8, i: *usize, flag: []const u8) ?f64 {
-    const val = nextArg(args, i) orelse {
-        std.debug.print("error: {s} requires a value\n", .{flag});
-        return null;
-    };
-    return std.fmt.parseFloat(f64, val) catch {
-        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, val });
-        return null;
-    };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Usage
 // ═══════════════════════════════════════════════════════════════════════════
 
 fn printUsage() void {
     std.debug.print(
         \\
-        \\  flux — 2D electromagnetic simulation on simplicial meshes
+        \\  flux-examples maxwell-2d — 2D electromagnetic simulation on simplicial meshes
         \\
-        \\  usage: flux [--demo <name>] [options]
-        \\         build with `zig build -Doptimize=ReleaseFast example-maxwell2d -- ...`
-        \\         for realistic performance; the default build mode is Debug
+        \\  usage: flux-examples maxwell-2d [--demo <name>] [options]
         \\
         \\  demos:
         \\    dipole    (default) point dipole radiating in a PEC cavity
@@ -519,6 +477,7 @@ fn printUsage() void {
         \\    --grid N          cells per side (default: 32)
         \\    --domain L        domain side length (default: 1.0)
         \\    --courant C       Courant number, dt = C·h (default: 0.1)
+        \\    --dt DT           explicit timestep override (computes courant = dt/h)
         \\
         \\  dipole source (ignored for cavity):
         \\    --frequency F     source frequency in Hz (default: TE₁₀ resonance)
@@ -530,16 +489,6 @@ fn printUsage() void {
         \\  output:
         \\    --output DIR      VTK output directory (default: output)
         \\    --frames N        number of snapshots (default: 100)
-        \\
-        \\  examples:
-        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo dipole
-        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --demo cavity --steps 2000
-        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --grid 64 --steps 4000
-        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --frequency 1.5 --amplitude 2
-        \\    zig build -Doptimize=ReleaseFast example-maxwell2d -- --grid 16 --courant 0.2
-        \\
-        \\  visualization:
-        \\    uv run tools/visualize.py output --field B_flux --output animation.png
         \\
     , .{});
 }

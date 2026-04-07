@@ -21,10 +21,15 @@ pub const Config = struct {
     steps: u32 = 8,
     domain: f64 = 1.0,
     dt_scale: f64 = 0.1,
+    /// Optional explicit timestep override. When set, takes precedence over
+    /// the `dt_scale * h^2` parabolic default. Plumbed through from the
+    /// shared `--dt` CLI flag.
+    dt_override: ?f64 = null,
     output_dir: []const u8 = "output/heat",
     frames: u32 = 4,
 
     pub fn dt(self: Config) f64 {
+        if (self.dt_override) |value| return value;
         const h = self.domain / @as(f64, @floatFromInt(self.grid));
         return self.dt_scale * h * h;
     }
