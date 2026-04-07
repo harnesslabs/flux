@@ -258,6 +258,33 @@ solve path assembles the primal 1-form Laplacian matrix by probing the existing
 assembled operator on basis 1-forms, then reuses the existing CSR-based CG
 solver with Dirichlet elimination on boundary edges.
 
+## 2026-04-06: Surface diffusion example assembles the metric Laplacian locally
+
+**Decision:** Issue #96 keeps the metric-dependent scalar heat operator inside
+`examples/diffusion_surface/` instead of adding a new public
+metric-parameterized Laplacian API to `src/operators/`. The example assembles
+its stiffness matrix from the existing public ingredients `d₀` and
+`★₁^(g)`, then pairs that with a lumped surface mass for backward Euler.
+
+**Alternatives considered:**
+1. Add a public `laplacian_with_metric(...)` operator path now: rejected
+   because this issue has only one consumer, and the exact API surface for
+   metric-dependent assembled operators is still unclear.
+2. Reuse the existing flat scalar Laplacian API by threading the metric into
+   `OperatorContext`: rejected because it would widen the operator cache and
+   public surface before we know how metric variants, assembled ownership, and
+   solver reuse should compose.
+
+**Rationale:** The example's job is to validate the Riemannian ★ path against a
+known analytic mode, not to freeze a general metric-Laplacian interface
+prematurely. Keeping the assembly local preserves one obvious public API in the
+operator layer while still proving the underlying ingredients are sufficient.
+
+**When to revisit:** When a second consumer needs the same capability
+(e.g. curved-surface diffusion beyond the example, metric Poisson solves, or a
+shared implicit heat integrator) and the common ownership/lifetime model for
+metric-assembled operators becomes concrete.
+
 ## 2026-04-06: 3D Euler acceptance example uses a steady helical reference mode
 
 **Decision:** The first `examples/euler_3d/` implementation seeds a smooth
