@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
-const std_fs = std.fs;
+const common = @import("examples_common");
 
 pub const Mesh2D = flux.Mesh(2, 2);
 pub const VertexField = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -200,27 +200,23 @@ fn simulateCase(
     const exact = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(exact);
 
+    // Snapshot bookkeeping. The series carries an extra slot beyond the
+    // standard `(steps/interval)+1` because heat always emits a frame on
+    // the very last step even when it does not land on an interval boundary.
     const has_output = config.frames > 0;
-    const interval = if (has_output) outputInterval(config) else 1;
-    const snapshot_capacity: u32 = if (has_output) (config.steps / interval) + 2 else 0;
-    var pvd_entries: []flux_io.PvdEntry = &.{};
-    var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
-    if (has_output) {
-        try ensureDir(config.output_dir);
-        pvd_entries = try allocator.alloc(flux_io.PvdEntry, snapshot_capacity);
-        filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, snapshot_capacity);
-    }
-    defer if (has_output) {
-        allocator.free(filename_bufs);
-        allocator.free(pvd_entries);
-    };
+    const interval: u32 = if (has_output) outputInterval(config) else 0;
+    const capacity: u32 = if (has_output) (config.steps / interval) + 2 else 0;
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir,
+        "heat",
+        .{ .interval = interval, .capacity = capacity },
+    );
+    defer series.deinit();
 
-    var snapshot_count: u32 = 0;
-    if (has_output) {
+    if (series.enabled()) {
         initializeState(&mesh, exact, initial_condition, 0.0);
-        try writeSnapshot(allocator, config.output_dir, snapshotName(&filename_bufs, snapshot_count), &mesh, state.values, exact);
-        pvd_entries[snapshot_count] = .{ .timestep = 0.0, .filename = snapshotName(&filename_bufs, snapshot_count) };
-        snapshot_count += 1;
+        try series.capture(0.0, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
     }
 
     const reduced_rhs = try allocator.alloc(f64, heat_system.interior_vertices.len);
@@ -233,14 +229,10 @@ fn simulateCase(
     for (0..config.steps) |step_idx| {
         const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
         try stepBackwardEuler(allocator, &mesh, &heat_system, state.values, reduced_rhs, reduced_solution);
-        if (has_output and ((step_idx + 1) % interval == 0 or step_idx + 1 == config.steps)) {
+        const last_step = step_idx + 1 == config.steps;
+        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
             initializeState(&mesh, exact, initial_condition, next_time);
-            try writeSnapshot(allocator, config.output_dir, snapshotName(&filename_bufs, snapshot_count), &mesh, state.values, exact);
-            pvd_entries[snapshot_count] = .{
-                .timestep = next_time,
-                .filename = snapshotName(&filename_bufs, snapshot_count),
-            };
-            snapshot_count += 1;
+            try series.capture(next_time, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
         }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
@@ -248,17 +240,37 @@ fn simulateCase(
     initializeState(&mesh, exact, initial_condition, total_time);
     const l2_error = weightedL2Error(&mesh, state.values, exact);
 
-    if (has_output and snapshot_count > 0) {
-        try writePvd(allocator, config.output_dir, "heat", pvd_entries[0..snapshot_count]);
-    }
+    try series.finalize();
 
     return .{
         .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
         .steps = config.steps,
-        .snapshot_count = snapshot_count,
+        .snapshot_count = series.count,
         .l2_error = l2_error,
     };
 }
+
+/// Renders a single heat snapshot. The struct-with-method pattern is how
+/// callers smuggle context into `Series.capture` since Zig has no closures.
+const HeatRenderer = struct {
+    mesh: *const Mesh2D,
+    state: []const f64,
+    exact: []const f64,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        const error_values = try allocator.alloc(f64, self.state.len);
+        defer allocator.free(error_values);
+        for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
+            error_value.* = approx_value - exact_value;
+        }
+        const point_data = [_]flux_io.DataArraySlice{
+            .{ .name = "temperature", .values = self.state },
+            .{ .name = "temperature_exact", .values = self.exact },
+            .{ .name = "temperature_error", .values = error_values },
+        };
+        try flux_io.write(writer, 2, 2, self.mesh.*, &point_data, &.{});
+    }
+};
 
 fn convergenceConfig(grid: u32) Config {
     const probe = Config{ .grid = grid };
@@ -384,76 +396,6 @@ fn weightedL2Error(mesh: *const Mesh2D, approx: []const f64, exact: []const f64)
         measure += dual_volume;
     }
     return @sqrt(error_sq / measure);
-}
-
-fn snapshotName(
-    filename_bufs: *const [][flux_io.max_snapshot_filename_length]u8,
-    snapshot_idx: u32,
-) []const u8 {
-    return flux_io.snapshot_filename(
-        @constCast(&filename_bufs.*[snapshot_idx]),
-        "heat",
-        snapshot_idx,
-    );
-}
-
-fn writeSnapshot(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    filename: []const u8,
-    mesh: *const Mesh2D,
-    state: []const f64,
-    exact: []const f64,
-) !void {
-    const error_values = try allocator.alloc(f64, state.len);
-    defer allocator.free(error_values);
-    for (state, exact, error_values) |approx_value, exact_value, *error_value| {
-        error_value.* = approx_value - exact_value;
-    }
-
-    const point_data = [_]flux_io.DataArraySlice{
-        .{ .name = "temperature", .values = state },
-        .{ .name = "temperature_exact", .values = exact },
-        .{ .name = "temperature_error", .values = error_values },
-    };
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write(output.writer(allocator), 2, 2, mesh.*, &point_data, &.{});
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(filename, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn writePvd(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    base_name: []const u8,
-    entries: []const flux_io.PvdEntry,
-) !void {
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write_pvd(output.writer(allocator), entries);
-
-    var pvd_buf: [flux_io.max_snapshot_filename_length]u8 = undefined;
-    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
-        return error.FilenameTooLong;
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(pvd_name, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn ensureDir(path: []const u8) !void {
-    std.fs.cwd().makeDir(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 }
 
 test "heat zero initial data stays zero under backward Euler" {

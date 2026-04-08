@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
-const std_fs = std.fs;
+const common = @import("examples_common");
 
 const flux_io = flux.io;
 const sparse = flux.math.sparse;
@@ -181,36 +181,28 @@ fn simulateCase(
     defer allocator.free(exact);
 
     const has_output = config.frames > 0;
-    const interval = if (has_output) outputInterval(config) else 1;
-    const snapshot_capacity: u32 = if (has_output) (config.steps / interval) + 2 else 0;
-    var pvd_entries: []flux_io.PvdEntry = &.{};
-    var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
-    if (has_output) {
-        try ensureDir(config.output_dir);
-        pvd_entries = try allocator.alloc(flux_io.PvdEntry, snapshot_capacity);
-        filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, snapshot_capacity);
-    }
-    defer if (has_output) {
-        allocator.free(filename_bufs);
-        allocator.free(pvd_entries);
-    };
+    const plan: common.Plan = if (has_output) blk: {
+        const interval = outputInterval(config);
+        // +2 capacity: one for the t=0 frame and one to guarantee a final
+        // frame even when the last step is not on an interval boundary.
+        break :blk .{ .interval = interval, .capacity = (config.steps / interval) + 2 };
+    } else .{ .interval = 0, .capacity = 0 };
 
-    var snapshot_count: u32 = 0;
-    if (has_output) {
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir,
+        "diffusion_surface",
+        plan,
+    );
+    defer series.deinit();
+
+    if (series.enabled()) {
         initializeState(&geometry.embedded_mesh, exact, 0.0);
-        try writeSnapshot(
-            allocator,
-            config.output_dir,
-            snapshotName(&filename_bufs, snapshot_count),
-            &geometry.embedded_mesh,
-            state.values,
-            exact,
-        );
-        pvd_entries[snapshot_count] = .{
-            .timestep = 0.0,
-            .filename = snapshotName(&filename_bufs, snapshot_count),
-        };
-        snapshot_count += 1;
+        try series.capture(0.0, SurfaceRenderer{
+            .mesh = &geometry.embedded_mesh,
+            .state = state.values,
+            .exact = exact,
+        });
     }
 
     const rhs = try allocator.alloc(f64, state.values.len);
@@ -223,21 +215,14 @@ fn simulateCase(
     for (0..config.steps) |step_idx| {
         const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
         try stepBackwardEuler(&system, state.values, rhs, solution);
-        if (has_output and ((step_idx + 1) % interval == 0 or step_idx + 1 == config.steps)) {
+        const last_step = step_idx + 1 == config.steps;
+        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
             initializeState(&geometry.embedded_mesh, exact, next_time);
-            try writeSnapshot(
-                allocator,
-                config.output_dir,
-                snapshotName(&filename_bufs, snapshot_count),
-                &geometry.embedded_mesh,
-                state.values,
-                exact,
-            );
-            pvd_entries[snapshot_count] = .{
-                .timestep = next_time,
-                .filename = snapshotName(&filename_bufs, snapshot_count),
-            };
-            snapshot_count += 1;
+            try series.capture(next_time, SurfaceRenderer{
+                .mesh = &geometry.embedded_mesh,
+                .state = state.values,
+                .exact = exact,
+            });
         }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
@@ -245,17 +230,36 @@ fn simulateCase(
     initializeState(&geometry.embedded_mesh, exact, config.final_time);
     const l2_error = weightedL2Error(&geometry.embedded_mesh, state.values, exact);
 
-    if (has_output and snapshot_count > 0) {
-        try writePvd(allocator, config.output_dir, "diffusion_surface", pvd_entries[0..snapshot_count]);
-    }
+    try series.finalize();
 
     return .{
         .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
         .steps = config.steps,
-        .snapshot_count = snapshot_count,
+        .snapshot_count = series.count,
         .l2_error = l2_error,
     };
 }
+
+const SurfaceRenderer = struct {
+    mesh: *const EmbeddedMesh,
+    state: []const f64,
+    exact: []const f64,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        const error_values = try allocator.alloc(f64, self.state.len);
+        defer allocator.free(error_values);
+        for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
+            error_value.* = approx_value - exact_value;
+        }
+
+        const point_data = [_]flux_io.DataArraySlice{
+            .{ .name = "temperature", .values = self.state },
+            .{ .name = "temperature_exact", .values = self.exact },
+            .{ .name = "temperature_error", .values = error_values },
+        };
+        try flux_io.write(writer, 3, 2, self.mesh.*, &point_data, &.{});
+    }
+};
 
 fn convergenceConfig(refinement: u32) Config {
     const steps = 24 * std.math.pow(u32, 4, refinement);
@@ -604,76 +608,6 @@ fn weightedL2Error(mesh: *const EmbeddedMesh, approx: []const f64, exact: []cons
         measure += 3.0 * lumped;
     }
     return @sqrt(error_sq / measure);
-}
-
-fn snapshotName(
-    filename_bufs: *const [][flux_io.max_snapshot_filename_length]u8,
-    snapshot_idx: u32,
-) []const u8 {
-    return flux_io.snapshot_filename(
-        @constCast(&filename_bufs.*[snapshot_idx]),
-        "diffusion_surface",
-        snapshot_idx,
-    );
-}
-
-fn writeSnapshot(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    filename: []const u8,
-    mesh: *const EmbeddedMesh,
-    state: []const f64,
-    exact: []const f64,
-) !void {
-    const error_values = try allocator.alloc(f64, state.len);
-    defer allocator.free(error_values);
-    for (state, exact, error_values) |approx_value, exact_value, *error_value| {
-        error_value.* = approx_value - exact_value;
-    }
-
-    const point_data = [_]flux_io.DataArraySlice{
-        .{ .name = "temperature", .values = state },
-        .{ .name = "temperature_exact", .values = exact },
-        .{ .name = "temperature_error", .values = error_values },
-    };
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write(output.writer(allocator), 3, 2, mesh.*, &point_data, &.{});
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(filename, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn writePvd(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    base_name: []const u8,
-    entries: []const flux_io.PvdEntry,
-) !void {
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write_pvd(output.writer(allocator), entries);
-
-    var pvd_buf: [flux_io.max_snapshot_filename_length]u8 = undefined;
-    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
-        return error.FilenameTooLong;
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(pvd_name, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn ensureDir(path: []const u8) !void {
-    std.fs.cwd().makeDir(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 }
 
 fn canonicalEdge(a: u32, b: u32) [2]u32 {

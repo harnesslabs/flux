@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
+const common = @import("examples_common");
 
 const observers = flux.operators.observers;
 const poisson = flux.operators.poisson;
@@ -178,48 +179,32 @@ pub fn run(allocator: std.mem.Allocator, config: Config, writer: anytype) !RunRe
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try computeHelicity(allocator, &state);
-    const snapshot_count_max = config.snapshotCount();
-    var pvd_entries: []flux.io.PvdEntry = &.{};
-    var filename_bufs: [][flux.io.max_snapshot_filename_length]u8 = &.{};
 
-    if (snapshot_count_max > 0) {
-        if (config.output_dir) |output_dir| {
-            try ensureDir(output_dir);
-        }
-        pvd_entries = try allocator.alloc(flux.io.PvdEntry, snapshot_count_max);
-        filename_bufs = try allocator.alloc([flux.io.max_snapshot_filename_length]u8, snapshot_count_max);
-    }
-    defer {
-        if (snapshot_count_max > 0) {
-            allocator.free(filename_bufs);
-            allocator.free(pvd_entries);
-        }
-    }
+    const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0)
+        .{ .interval = config.output_interval, .capacity = config.snapshotCount() }
+    else
+        .{ .interval = 0, .capacity = 0 };
 
-    var snapshot_count: u32 = 0;
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir orelse "",
+        "euler_3d",
+        plan,
+    );
+    defer series.deinit();
+
     const start_ns = std.time.nanoTimestamp();
     for (0..config.steps) |step_index| {
         try step(allocator, &state, config.dt);
 
-        if (config.output_dir) |output_dir| {
-            if (config.output_interval > 0 and (step_index + 1) % config.output_interval == 0) {
-                const filename = flux.io.snapshot_filename(&filename_bufs[snapshot_count], "euler_3d", snapshot_count);
-                try writeSnapshotFile(allocator, output_dir, filename, &state);
-                pvd_entries[snapshot_count] = .{
-                    .timestep = @as(f64, @floatFromInt(step_index + 1)) * config.dt,
-                    .filename = filename,
-                };
-                snapshot_count += 1;
-            }
+        if (series.dueAt(@intCast(step_index + 1))) {
+            const t = @as(f64, @floatFromInt(step_index + 1)) * config.dt;
+            try series.capture(t, Euler3DRenderer{ .state = &state });
         }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
 
-    if (config.output_dir) |output_dir| {
-        if (snapshot_count > 0) {
-            try writePvdFile(allocator, output_dir, "euler_3d", pvd_entries[0..snapshot_count]);
-        }
-    }
+    try series.finalize();
 
     const helicity_final = try computeHelicity(allocator, &state);
     try writer.print(
@@ -239,9 +224,17 @@ pub fn run(allocator: std.mem.Allocator, config: Config, writer: anytype) !RunRe
         .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
         .helicity_initial = helicity_initial,
         .helicity_final = helicity_final,
-        .snapshot_count = snapshot_count,
+        .snapshot_count = series.count,
     };
 }
+
+const Euler3DRenderer = struct {
+    state: *const State,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        try writeSnapshot(allocator, writer, self.state);
+    }
+};
 
 fn computeHelicity(allocator: std.mem.Allocator, state: *const State) !f64 {
     const Helicity = observers.HelicityObserver(State, Velocity, selectVelocity);
@@ -322,51 +315,6 @@ fn writeSnapshot(allocator: std.mem.Allocator, writer: anytype, state: *const St
         &.{},
         &cell_data,
     );
-}
-
-fn writeSnapshotFile(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    filename: []const u8,
-    state: *const State,
-) !void {
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try writeSnapshot(allocator, output.writer(allocator), state);
-
-    var dir = try std.fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(filename, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn writePvdFile(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    base_name: []const u8,
-    entries: []const flux.io.PvdEntry,
-) !void {
-    _ = base_name;
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try flux.io.write_pvd(output.writer(allocator), entries);
-
-    var pvd_buf: [flux.io.max_snapshot_filename_length]u8 = undefined;
-    const pvd_name = std.fmt.bufPrint(&pvd_buf, "euler_3d.pvd", .{}) catch
-        return error.FilenameTooLong;
-
-    var dir = try std.fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(pvd_name, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn ensureDir(path: []const u8) !void {
-    try std.fs.cwd().makePath(path);
 }
 
 test "velocity recovery reproduces the seeded co-closed 1-form on a tetrahedral mesh" {
