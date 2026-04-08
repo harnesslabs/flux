@@ -1,6 +1,6 @@
 ---
 name: audit-cleanup
-description: Audit the codebase for simplification opportunities: deduplication, unnecessary indirection, API sprawl, shims, over-specialized code, and file-structure cleanup. Use when the repo feels harder to use or change than it should, especially before filing or starting refactor issues.
+description: "Audit the codebase for simplification opportunities: deduplication, unnecessary indirection, API sprawl, shims, over-specialized code, and file-structure cleanup. Use when the repo feels harder to use or change than it should, especially before filing or starting refactor issues."
 ---
 
 Audit the codebase for simplification pressure. This lens is stricter than style: it asks whether the code has too many concepts, too many public entry points, too many wrappers, or too many files for the capability it delivers.

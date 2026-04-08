@@ -9,11 +9,9 @@ const cg = flux.math.cg;
 const exterior_derivative = flux.operators.exterior_derivative;
 const hodge_star = flux.operators.hodge_star;
 
-pub const ReferenceMesh = flux.topology.Mesh(2, 2);
-pub const EmbeddedMesh = flux.topology.Mesh(3, 2);
-pub const VertexField = flux.forms.Cochain(ReferenceMesh, 0, flux.forms.Primal);
-pub const EdgeField = flux.forms.Cochain(ReferenceMesh, 1, flux.forms.Primal);
-pub const Metric2D = hodge_star.Metric(ReferenceMesh, .riemannian);
+pub const SurfaceMesh = flux.topology.Mesh(3, 2);
+pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
+pub const EdgeField = flux.forms.Cochain(SurfaceMesh, 1, flux.forms.Primal);
 
 pub const Config = struct {
     refinement: u32 = 0,
@@ -41,26 +39,6 @@ pub const ConvergenceResult = struct {
     l2_error: f64,
 };
 
-// TODO(#154): This struct is a workaround. It exists because Mesh(D,K) with
-// D > K does not yet honor the metric induced by its own embedding — so we
-// must carry a parallel Mesh(2,2) reference mesh, an explicit per-face
-// metric tensor array, and the embedded Mesh(3,2) side by side. Once #154
-// lands, this collapses to a single `Mesh(3, 2)` and the stereographic
-// projection / metric tensor machinery in this file can be deleted. The
-// long-term endgame is the truly intrinsic IntrinsicMesh(K) tracked in
-// project/horizons.md.
-const SphereGeometry = struct {
-    reference_mesh: ReferenceMesh,
-    embedded_mesh: EmbeddedMesh,
-    metric_tensors: [][2][2]f64,
-
-    pub fn deinit(self: *SphereGeometry, allocator: std.mem.Allocator) void {
-        allocator.free(self.metric_tensors);
-        self.embedded_mesh.deinit(allocator);
-        self.reference_mesh.deinit(allocator);
-    }
-};
-
 const SurfaceSystem = struct {
     system_matrix: sparse.CsrMatrix(f64),
     masses: []f64,
@@ -69,22 +47,18 @@ const SurfaceSystem = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
-        geometry: *const SphereGeometry,
+        mesh: *const SurfaceMesh,
         dt: f64,
     ) !SurfaceSystem {
-        const metric = Metric2D{
-            .top_simplex_tensors = geometry.metric_tensors,
-        };
-
-        var stiffness = try assembleMetricStiffness(allocator, &geometry.reference_mesh, metric);
+        var stiffness = try assembleSurfaceStiffness(allocator, mesh);
         defer stiffness.deinit(allocator);
 
-        const masses = try assembleLumpedSurfaceMasses(allocator, &geometry.embedded_mesh);
+        const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
         errdefer allocator.free(masses);
 
         var assembler = sparse.TripletAssembler(f64).init(
-            geometry.reference_mesh.num_vertices(),
-            geometry.reference_mesh.num_vertices(),
+            mesh.num_vertices(),
+            mesh.num_vertices(),
         );
         defer assembler.deinit(allocator);
 
@@ -107,7 +81,7 @@ const SurfaceSystem = struct {
             std.debug.assert(diagonal[row_idx] > 0.0);
         }
 
-        var scratch = try cg.Scratch.init(allocator, geometry.reference_mesh.num_vertices());
+        var scratch = try cg.Scratch.init(allocator, mesh.num_vertices());
         errdefer scratch.deinit(allocator);
 
         return .{
@@ -166,18 +140,18 @@ fn simulateCase(
     std.debug.assert(config.dt_scale > 0.0);
     std.debug.assert(config.final_time > 0.0);
 
-    var geometry = try buildSphereGeometry(allocator, config.refinement);
-    defer geometry.deinit(allocator);
+    var mesh = try buildSphereMesh(allocator, config.refinement);
+    defer mesh.deinit(allocator);
 
     const dt = config.timeStep();
-    var system = try SurfaceSystem.init(allocator, &geometry, dt);
+    var system = try SurfaceSystem.init(allocator, &mesh, dt);
     defer system.deinit(allocator);
 
-    var state = try VertexField.init(allocator, &geometry.reference_mesh);
+    var state = try VertexField.init(allocator, &mesh);
     defer state.deinit(allocator);
-    initializeState(&geometry.embedded_mesh, state.values, 0.0);
+    initializeState(&mesh, state.values, 0.0);
 
-    const exact = try allocator.alloc(f64, geometry.reference_mesh.num_vertices());
+    const exact = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(exact);
 
     const has_output = config.frames > 0;
@@ -197,9 +171,9 @@ fn simulateCase(
     defer series.deinit();
 
     if (series.enabled()) {
-        initializeState(&geometry.embedded_mesh, exact, 0.0);
+        initializeState(&mesh, exact, 0.0);
         try series.capture(0.0, SurfaceRenderer{
-            .mesh = &geometry.embedded_mesh,
+            .mesh = &mesh,
             .state = state.values,
             .exact = exact,
         });
@@ -217,9 +191,9 @@ fn simulateCase(
         try stepBackwardEuler(&system, state.values, rhs, solution);
         const last_step = step_idx + 1 == config.steps;
         if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
-            initializeState(&geometry.embedded_mesh, exact, next_time);
+            initializeState(&mesh, exact, next_time);
             try series.capture(next_time, SurfaceRenderer{
-                .mesh = &geometry.embedded_mesh,
+                .mesh = &mesh,
                 .state = state.values,
                 .exact = exact,
             });
@@ -227,8 +201,8 @@ fn simulateCase(
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
 
-    initializeState(&geometry.embedded_mesh, exact, config.final_time);
-    const l2_error = weightedL2Error(&geometry.embedded_mesh, state.values, exact);
+    initializeState(&mesh, exact, config.final_time);
+    const l2_error = weightedL2Error(&mesh, state.values, exact);
 
     try series.finalize();
 
@@ -241,7 +215,7 @@ fn simulateCase(
 }
 
 const SurfaceRenderer = struct {
-    mesh: *const EmbeddedMesh,
+    mesh: *const SurfaceMesh,
     state: []const f64,
     exact: []const f64,
 
@@ -278,41 +252,18 @@ fn outputInterval(config: Config) u32 {
     return @max(1, config.steps / config.frames);
 }
 
-fn buildSphereGeometry(
+fn buildSphereMesh(
     allocator: std.mem.Allocator,
     refinement: u32,
-) !SphereGeometry {
+) !SurfaceMesh {
     var polyhedron = try buildRefinedOctahedron(allocator, refinement);
     defer polyhedron.deinit(allocator);
 
-    const projection = projectionFrame(polyhedron.vertices);
-    const projected_vertices = try allocator.alloc([2]f64, polyhedron.vertices.len);
-    defer allocator.free(projected_vertices);
-    for (polyhedron.vertices, projected_vertices) |vertex, *projected| {
-        projected.* = stereographicProject(vertex, projection);
-    }
-
     const oriented_faces = try allocator.dupe([3]u32, polyhedron.faces);
     defer allocator.free(oriented_faces);
-    orientFaces(projected_vertices, oriented_faces);
+    orientFacesOutward(polyhedron.vertices, oriented_faces);
 
-    var reference_mesh = try ReferenceMesh.from_triangles(allocator, projected_vertices, oriented_faces);
-    errdefer reference_mesh.deinit(allocator);
-
-    var embedded_mesh = try EmbeddedMesh.from_triangles(allocator, polyhedron.vertices, oriented_faces);
-    errdefer embedded_mesh.deinit(allocator);
-
-    const metric_tensors = try allocator.alloc([2][2]f64, oriented_faces.len);
-    errdefer allocator.free(metric_tensors);
-    for (oriented_faces, 0..) |face, face_idx| {
-        metric_tensors[face_idx] = metricTensorForFace(projected_vertices, polyhedron.vertices, face);
-    }
-
-    return .{
-        .reference_mesh = reference_mesh,
-        .embedded_mesh = embedded_mesh,
-        .metric_tensors = metric_tensors,
-    };
+    return SurfaceMesh.from_triangles(allocator, polyhedron.vertices, oriented_faces);
 }
 
 const Polyhedron = struct {
@@ -393,58 +344,23 @@ fn midpointIndex(
     return new_index;
 }
 
-const ProjectionFrame = struct {
-    pole: [3]f64,
-    tangent_x: [3]f64,
-    tangent_y: [3]f64,
-};
-
-fn projectionFrame(vertices: []const [3]f64) ProjectionFrame {
-    var best_pole = normalize3(.{ 1.0, 2.0, 3.0 });
-    var best_margin: f64 = -std.math.inf(f64);
-
-    for (projection_candidates) |candidate| {
-        const pole = normalize3(candidate);
-        var margin = std.math.inf(f64);
-        for (vertices) |vertex| {
-            margin = @min(margin, 1.0 - dot3(vertex, pole));
-        }
-        if (margin > best_margin) {
-            best_margin = margin;
-            best_pole = pole;
-        }
-    }
-
-    const reference = if (@abs(best_pole[2]) < 0.9) [3]f64{ 0.0, 0.0, 1.0 } else [3]f64{ 1.0, 0.0, 0.0 };
-    const tangent_x = normalize3(cross3(reference, best_pole));
-    const tangent_y = cross3(best_pole, tangent_x);
-    return .{
-        .pole = best_pole,
-        .tangent_x = tangent_x,
-        .tangent_y = tangent_y,
-    };
-}
-
-fn stereographicProject(vertex: [3]f64, frame: ProjectionFrame) [2]f64 {
-    const denom = 1.0 - dot3(vertex, frame.pole);
-    std.debug.assert(denom > 1e-6);
-    return .{
-        dot3(vertex, frame.tangent_x) / denom,
-        dot3(vertex, frame.tangent_y) / denom,
-    };
-}
-
-fn orientFaces(
-    reference_vertices: []const [2]f64,
+fn orientFacesOutward(
+    embedded_vertices: []const [3]f64,
     faces: [][3]u32,
 ) void {
     for (faces) |*face| {
-        const area = signedTriangleArea(
-            reference_vertices[face.*[0]],
-            reference_vertices[face.*[1]],
-            reference_vertices[face.*[2]],
-        );
-        if (area < 0.0) {
+        const a = embedded_vertices[face.*[0]];
+        const b = embedded_vertices[face.*[1]];
+        const c = embedded_vertices[face.*[2]];
+        const ab = sub3(b, a);
+        const ac = sub3(c, a);
+        const normal = cross3(ab, ac);
+        const centroid = normalize3(.{
+            (a[0] + b[0] + c[0]) / 3.0,
+            (a[1] + b[1] + c[1]) / 3.0,
+            (a[2] + b[2] + c[2]) / 3.0,
+        });
+        if (dot3(normal, centroid) < 0.0) {
             const tmp = face.*[1];
             face.*[1] = face.*[2];
             face.*[2] = tmp;
@@ -452,44 +368,9 @@ fn orientFaces(
     }
 }
 
-fn metricTensorForFace(
-    reference_vertices: []const [2]f64,
-    embedded_vertices: []const [3]f64,
-    face: [3]u32,
-) [2][2]f64 {
-    const x0 = reference_vertices[face[0]];
-    const x1 = reference_vertices[face[1]];
-    const x2 = reference_vertices[face[2]];
-    const y0 = embedded_vertices[face[0]];
-    const y1 = embedded_vertices[face[1]];
-    const y2 = embedded_vertices[face[2]];
-
-    const b11 = x1[0] - x0[0];
-    const b12 = x2[0] - x0[0];
-    const b21 = x1[1] - x0[1];
-    const b22 = x2[1] - x0[1];
-    const det_b = b11 * b22 - b12 * b21;
-    std.debug.assert(@abs(det_b) > 1e-12);
-
-    const inv_b = [2][2]f64{
-        .{ b22 / det_b, -b12 / det_b },
-        .{ -b21 / det_b, b11 / det_b },
-    };
-
-    const v1 = sub3(y1, y0);
-    const v2 = sub3(y2, y0);
-    const gram = [2][2]f64{
-        .{ dot3(v1, v1), dot3(v1, v2) },
-        .{ dot3(v2, v1), dot3(v2, v2) },
-    };
-
-    return mulMat2(transpose2(inv_b), mulMat2(gram, inv_b));
-}
-
-fn assembleMetricStiffness(
+fn assembleSurfaceStiffness(
     allocator: std.mem.Allocator,
-    mesh: *const ReferenceMesh,
-    metric: Metric2D,
+    mesh: *const SurfaceMesh,
 ) !sparse.CsrMatrix(f64) {
     var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
     defer assembler.deinit(allocator);
@@ -508,7 +389,7 @@ fn assembleMetricStiffness(
         var gradient = try exterior_derivative.exterior_derivative(allocator, basis);
         defer gradient.deinit(allocator);
 
-        var starred = try hodge_star.hodge_star_with_metric(allocator, metric, gradient);
+        var starred = try hodge_star.hodge_star(allocator, gradient);
         defer starred.deinit(allocator);
 
         @memset(column, 0.0);
@@ -560,7 +441,7 @@ fn stepBackwardEuler(
 
 fn assembleLumpedSurfaceMasses(
     allocator: std.mem.Allocator,
-    mesh: *const EmbeddedMesh,
+    mesh: *const SurfaceMesh,
 ) ![]f64 {
     const masses = try allocator.alloc(f64, mesh.num_vertices());
     @memset(masses, 0.0);
@@ -577,7 +458,7 @@ fn assembleLumpedSurfaceMasses(
 }
 
 fn initializeState(
-    mesh: *const EmbeddedMesh,
+    mesh: *const SurfaceMesh,
     values: []f64,
     time: f64,
 ) void {
@@ -593,7 +474,7 @@ fn exactSolution(coords: [3]f64, time: f64) f64 {
     return std.math.exp(-eigenvalue * time) * coords[2];
 }
 
-fn weightedL2Error(mesh: *const EmbeddedMesh, approx: []const f64, exact: []const f64) f64 {
+fn weightedL2Error(mesh: *const SurfaceMesh, approx: []const f64, exact: []const f64) f64 {
     std.debug.assert(approx.len == exact.len);
     const face_vertices = mesh.simplices(2).items(.vertices);
     const face_areas = mesh.simplices(2).items(.volume);
@@ -612,10 +493,6 @@ fn weightedL2Error(mesh: *const EmbeddedMesh, approx: []const f64, exact: []cons
 
 fn canonicalEdge(a: u32, b: u32) [2]u32 {
     return if (a < b) .{ a, b } else .{ b, a };
-}
-
-fn signedTriangleArea(a: [2]f64, b: [2]f64, c: [2]f64) f64 {
-    return 0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]));
 }
 
 fn add3(a: [3]f64, b: [3]f64) [3]f64 {
@@ -647,26 +524,6 @@ fn cross3(a: [3]f64, b: [3]f64) [3]f64 {
     };
 }
 
-fn transpose2(matrix: [2][2]f64) [2][2]f64 {
-    return .{
-        .{ matrix[0][0], matrix[1][0] },
-        .{ matrix[0][1], matrix[1][1] },
-    };
-}
-
-fn mulMat2(left: [2][2]f64, right: [2][2]f64) [2][2]f64 {
-    return .{
-        .{
-            left[0][0] * right[0][0] + left[0][1] * right[1][0],
-            left[0][0] * right[0][1] + left[0][1] * right[1][1],
-        },
-        .{
-            left[1][0] * right[0][0] + left[1][1] * right[1][0],
-            left[1][0] * right[0][1] + left[1][1] * right[1][1],
-        },
-    };
-}
-
 const initial_octahedron_vertices = [_][3]f64{
     .{ 1.0, 0.0, 0.0 },
     .{ -1.0, 0.0, 0.0 },
@@ -685,28 +542,6 @@ const initial_octahedron_faces = [_][3]u32{
     .{ 1, 5, 2 },
     .{ 3, 5, 1 },
     .{ 0, 5, 3 },
-};
-
-const projection_candidates = [_][3]f64{
-    .{ 1.0, 2.0, 3.0 },
-    .{ 1.0, 3.0, 2.0 },
-    .{ 2.0, 1.0, 3.0 },
-    .{ 2.0, 3.0, 1.0 },
-    .{ 3.0, 1.0, 2.0 },
-    .{ 3.0, 2.0, 1.0 },
-    .{ -1.0, 2.0, 3.0 },
-    .{ 1.0, -2.0, 3.0 },
-    .{ 1.0, 2.0, -3.0 },
-    .{ -2.0, 1.0, 3.0 },
-    .{ 2.0, -1.0, 3.0 },
-    .{ 2.0, 1.0, -3.0 },
-    .{ -3.0, 1.0, 2.0 },
-    .{ 3.0, -1.0, 2.0 },
-    .{ 3.0, 1.0, -2.0 },
-    .{ 1.0, 1.0, 1.0 },
-    .{ 1.0, 1.0, -1.0 },
-    .{ 1.0, -1.0, 1.0 },
-    .{ -1.0, 1.0, 1.0 },
 };
 
 test "surface diffusion error decreases under sphere refinement" {
