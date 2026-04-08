@@ -946,9 +946,9 @@ test "★⁻¹ ∘ ★ = identity for all degrees on random inputs" {
 
 test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
     const allocator = testing.allocator;
-    // Issue #82 asks for 1000 random 3D trials total. Spread them across
-    // multiple tetrahedral grids so the property test exercises both
-    // coefficient recovery and mesh-dependent orientation/geometry paths.
+    // Run 1000 random 3D trials total. Spread them across multiple
+    // tetrahedral grids so the property test exercises both coefficient
+    // recovery and mesh-dependent orientation/geometry paths.
     const mesh_count: u32 = 10;
     const trials_per_mesh_per_degree: u32 = 25;
 

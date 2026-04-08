@@ -296,8 +296,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// Construct a uniform triangulated rectangular grid on `[0, width] × [0, height]`.
         ///
         /// Only available for 2D meshes (`topological_dimension = 2`). For
-        /// 3D meshes, use the
-        /// tetrahedral grid constructor (see #81).
+        /// 3D meshes, use `uniform_tetrahedral_grid`.
         ///
         /// The rectangle is divided into `nx × ny` rectangular cells, each split
         /// by a SW-to-NE diagonal into two CCW-oriented triangles (`2 * nx * ny` total).

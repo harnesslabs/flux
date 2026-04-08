@@ -99,8 +99,6 @@ pub fn TimeStepStrategy(comptime S: type) void {
 /// Step counting is the strategy's responsibility (via `state.timestep`
 /// or equivalent) — the wrapper does not duplicate it.
 pub fn TimeStepper(comptime Strategy: type) type {
-    // TODO: Would be great to prevent nesting without any extra data.
-
     // Gate: the strategy must satisfy the concept.
     comptime TimeStepStrategy(Strategy);
 

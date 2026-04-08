@@ -895,7 +895,7 @@ test "pvd entries reference correct timesteps" {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Field projection and write_fields tests (#42)
+// Field projection and write_fields tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 test "project_edges_to_faces averages absolute edge values per face" {

@@ -530,7 +530,7 @@ pub fn Runner(comptime MeshType: type) type {
 const Mesh2D = topology.Mesh(2, 2);
 const MaxwellState = State(Mesh2D);
 
-// ── #37: Simulation state — timestep tracking ─────────────────────────
+// ── Simulation state — timestep tracking ───────────────────────────────
 
 test "MaxwellState initializes with timestep zero" {
     const allocator = testing.allocator;
@@ -558,7 +558,7 @@ test "leapfrog_step advances timestep" {
     try testing.expectEqual(@as(u64, 2), state.timestep);
 }
 
-// ── #32: Field assignments ─────────────────────────────────────────────
+// ── Field assignments ───────────────────────────────────────────────────
 
 test "MaxwellState fields have correct degrees" {
     comptime {
@@ -599,7 +599,7 @@ test "MaxwellState holds mesh reference" {
     try testing.expect(state.B.mesh == &mesh);
 }
 
-// ── #33: Faraday update ────────────────────────────────────────────────
+// ── Faraday update ──────────────────────────────────────────────────────
 
 test "faraday_step on zero E leaves B unchanged" {
     const allocator = testing.allocator;
@@ -678,7 +678,7 @@ test "faraday_step is B -= dt * d(E)" {
     }
 }
 
-// ── #34: Ampere-Maxwell update ─────────────────────────────────────────
+// ── Ampere-Maxwell update ───────────────────────────────────────────────
 
 test "ampere_step on zero B and zero J leaves E unchanged" {
     const allocator = testing.allocator;
@@ -803,7 +803,7 @@ test "ampere_step with J source reduces E compared to without" {
     }
 }
 
-// ── #35: Leapfrog integrator ────────────────────────────────────────────
+// ── Leapfrog integrator ─────────────────────────────────────────────────
 
 test "leapfrog_step composes Faraday then Ampere" {
     // A single leapfrog step should equal a Faraday step followed by an
@@ -908,12 +908,12 @@ test "leapfrog energy bounded over 100 source-free steps" {
     try testing.expect(energy_ratio_max < 1.1);
 }
 
-// Note: the real dB = 0 structural invariant test is #39. On a 2D mesh,
-// d₂ maps into a zero-dimensional space (no 3-cells), so dB = 0 is
-// vacuously true and cannot be tested meaningfully here. The energy
-// boundedness test above already covers leapfrog stability.
+// Note: the load-bearing dB = 0 structural invariant test lives in the 3D
+// Maxwell path. On a 2D mesh, d₂ maps into a zero-dimensional space (no
+// 3-cells), so dB = 0 is vacuously true and cannot be tested meaningfully
+// here. The energy boundedness test above already covers leapfrog stability.
 
-// ── #36: PEC boundary conditions ─────────────────────────────────────────
+// ── PEC boundary conditions ─────────────────────────────────────────────
 
 test "apply_pec_boundary zeroes E on all boundary edges" {
     const allocator = testing.allocator;
@@ -977,7 +977,7 @@ test "boundary edge count matches expected for rectangular grid" {
     try testing.expectEqual(@as(usize, 2 * (5 + 4)), mesh.boundary_edges.len);
 }
 
-// ── #38: Point dipole source ─────────────────────────────────────────────
+// ── Point dipole source ─────────────────────────────────────────────────
 
 const Dipole = PointDipole(Mesh2D);
 
@@ -1047,7 +1047,7 @@ test "PointDipole.apply at half period is zero" {
     }
 }
 
-// ── #41: Simulation runner ───────────────────────────────────────────────
+// ── Simulation runner ───────────────────────────────────────────────────
 
 const MaxwellRunner = Runner(Mesh2D);
 
@@ -1173,7 +1173,7 @@ test "Runner with output_interval 0 writes no files" {
     try testing.expectEqual(@as(u64, 5), state.timestep);
 }
 
-// ── #40: Energy tracking ─────────────────────────────────────────────────
+// ── Energy tracking ─────────────────────────────────────────────────────
 
 test "electromagnetic_energy is zero for zero fields" {
     const allocator = testing.allocator;
@@ -1226,7 +1226,7 @@ test "electromagnetic_energy uses Hodge-weighted inner product" {
     try testing.expect(energy > 0.0);
 }
 
-// ── #46: End-to-end integration ──────────────────────────────────────────
+// ── End-to-end integration ──────────────────────────────────────────────
 
 test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
     // M3 acceptance test. Runs a dipole simulation for 100 steps and verifies:
@@ -1288,7 +1288,7 @@ test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
     try testing.expect(energy_max < 1.0);
 }
 
-// ── #44: Convergence test ────────────────────────────────────────────────
+// ── Convergence test ────────────────────────────────────────────────────
 
 // ── Analytical TE₁₀ cavity mode for convergence testing ──────────────
 //
@@ -1550,7 +1550,7 @@ test "TE₁₀ cavity: eigenvalue error reduces ≥3× when grid halves (O(h²) 
     // on any triangulation. The Rayleigh quotient ω² = ⟨dE, ★₂dE⟩ / ⟨E, ★₁E⟩
     // uses ★₁ via the Whitney mass matrix (SpMV) and ★₂ via the diagonal.
     //
-    // Acceptance criterion (issue #70): error_8×8 / error_16×16 ≥ 3.
+    // Acceptance criterion: error_8×8 / error_16×16 ≥ 3.
     const allocator = testing.allocator;
     const domain_length: f64 = 1.0;
     const analytical_omega_sq = std.math.pi * std.math.pi / (domain_length * domain_length);
@@ -1599,7 +1599,7 @@ test "convergence: energy drift bounded for TE₁₀ cavity" {
     try testing.expect(drift_fine < 0.02); // < 2%
 }
 
-// ── #62: MaxwellLeapfrog — TimeStepper concept conformance ──────────
+// ── MaxwellLeapfrog — TimeStepper concept conformance ──────────────────
 
 const time_stepper = flux.time_stepper;
 

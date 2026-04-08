@@ -393,7 +393,9 @@ pub fn runDriver(allocator: std.mem.Allocator, config: Config) !void {
     try seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
     const omega = tm110AngularFrequency(config.width, config.height);
 
-    const writer = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const writer = &stderr_writer.interface;
 
     try writer.writeAll("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n");
     try writer.print("  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n", .{
