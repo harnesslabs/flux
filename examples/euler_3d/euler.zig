@@ -236,7 +236,7 @@ const Euler3DRenderer = struct {
     }
 };
 
-fn computeHelicity(allocator: std.mem.Allocator, state: *const State) !f64 {
+pub fn computeHelicity(allocator: std.mem.Allocator, state: *const State) !f64 {
     const Helicity = observers.HelicityObserver(State, Velocity, selectVelocity);
     const observer = Helicity{ .name = "helicity" };
     return observer.evaluate(allocator, state, 0);

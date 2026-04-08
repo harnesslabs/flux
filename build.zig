@@ -212,20 +212,57 @@ pub fn build(b: *std.Build) void {
         .{ .name = "euler_3d", .source = "examples/euler_3d/euler.zig" },
         .{ .name = "heat", .source = "examples/heat/heat.zig" },
         .{ .name = "diffusion_surface", .source = "examples/diffusion_surface/surface.zig" },
+        // M3 capstone — short cross-cutting acceptance test that imports every
+        // physics module and asserts each milestone conservation invariant in
+        // one place. See `examples/acceptance.zig` for the rationale.
+        .{ .name = "m3_acceptance", .source = "examples/acceptance.zig" },
     };
+    // Each example physics module is built once as a named module so the
+    // capstone acceptance test can `@import` it without picking up the
+    // example's own tests transitively (named modules form separate
+    // compilation units; only the root module's tests are discovered).
+    const PhysicsModule = struct { name: []const u8, source: []const u8, ptr: *std.Build.Module };
+    var physics_modules: [example_test_modules.len - 1]PhysicsModule = undefined;
+    inline for (example_test_modules[0 .. example_test_modules.len - 1], 0..) |entry, idx| {
+        physics_modules[idx] = .{
+            .name = entry.name,
+            .source = entry.source,
+            .ptr = b.createModule(.{
+                .root_source_file = b.path(entry.source),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "flux", .module = mod },
+                    .{ .name = "examples_common", .module = examples_common_mod },
+                },
+            }),
+        };
+    }
+
     var example_run_test_steps: [example_test_modules.len]*std.Build.Step.Run = undefined;
-    inline for (example_test_modules, 0..) |entry, idx| {
-        const test_mod = b.createModule(.{
-            .root_source_file = b.path(entry.source),
+    inline for (example_test_modules[0 .. example_test_modules.len - 1], 0..) |_, idx| {
+        const test_exe = b.addTest(.{ .root_module = physics_modules[idx].ptr });
+        example_run_test_steps[idx] = b.addRunArtifact(test_exe);
+    }
+
+    // The capstone target imports each physics module by name so its test
+    // root only runs the five acceptance tests, not the per-example test
+    // suites already covered by the modules above.
+    {
+        var acceptance_imports: [physics_modules.len + 2]std.Build.Module.Import = undefined;
+        acceptance_imports[0] = .{ .name = "flux", .module = mod };
+        acceptance_imports[1] = .{ .name = "examples_common", .module = examples_common_mod };
+        inline for (physics_modules, 0..) |pm, idx| {
+            acceptance_imports[2 + idx] = .{ .name = pm.name, .module = pm.ptr };
+        }
+        const acceptance_mod = b.createModule(.{
+            .root_source_file = b.path(example_test_modules[example_test_modules.len - 1].source),
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "flux", .module = mod },
-                .{ .name = "examples_common", .module = examples_common_mod },
-            },
+            .imports = &acceptance_imports,
         });
-        const test_exe = b.addTest(.{ .root_module = test_mod });
-        example_run_test_steps[idx] = b.addRunArtifact(test_exe);
+        const acceptance_test_exe = b.addTest(.{ .root_module = acceptance_mod });
+        example_run_test_steps[example_test_modules.len - 1] = b.addRunArtifact(acceptance_test_exe);
     }
 
     // A top level step for running all tests. dependOn can be called multiple
