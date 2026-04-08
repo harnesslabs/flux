@@ -49,7 +49,9 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
         config.output_dir = "output/euler_dipole";
     }
 
-    const stderr = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
     const result = try euler.run(allocator, config, stderr);
     const drift = @abs(result.circulation_final - result.circulation_initial);
     try stderr.print(
