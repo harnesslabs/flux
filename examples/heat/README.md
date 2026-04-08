@@ -20,8 +20,8 @@ DEC `★₀` mass and `S` is the assembled 0-form stiffness matrix.
 ## Run
 
 ```sh
-zig build -Doptimize=ReleaseFast example-heat -- --grid 32 --frames 8
-zig build -Doptimize=ReleaseFast example-heat -- --help
+zig build -Doptimize=ReleaseFast run-heat -- --grid 32 --frames 8
+zig build -Doptimize=ReleaseFast run-heat -- --help
 ```
 
 ## Output

@@ -5,7 +5,7 @@
 //! a library dependency.
 //!
 //! Available examples:
-//!   zig build example-maxwell2d -- [options]   # 2D electromagnetic simulation
+//!   zig build run-maxwell-2d -- [options]   # 2D electromagnetic simulation
 
 const std = @import("std");
 
@@ -17,7 +17,7 @@ pub fn main() void {
         \\
         \\  This binary is a placeholder. Physics simulations live in examples/:
         \\
-        \\    zig build example-maxwell2d -- [options]   # 2D Maxwell simulation
+        \\    zig build run-maxwell-2d -- [options]   # 2D Maxwell simulation
         \\
         \\  Run `zig build --help` to see all available build steps.
         \\

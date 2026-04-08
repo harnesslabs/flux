@@ -1,7 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
-const std_fs = std.fs;
+const common = @import("examples_common");
 
 pub const Mesh2D = flux.Mesh(2, 2);
 pub const VertexVorticity = flux.Cochain(Mesh2D, 0, flux.Primal);
@@ -162,46 +162,25 @@ pub fn run(
 
     const circulation_initial = totalCirculation(&state);
     const dt = config.dt();
-    const interval = config.outputInterval();
-    const has_output = interval > 0;
-    const snapshot_capacity: u32 = if (has_output) (config.steps / interval) +| 1 else 0;
-
-    var pvd_entries: []flux_io.PvdEntry = &.{};
-    var filename_bufs: [][flux_io.max_snapshot_filename_length]u8 = &.{};
-    if (has_output) {
-        try ensureDir(config.output_dir);
-        pvd_entries = try allocator.alloc(flux_io.PvdEntry, snapshot_capacity);
-        filename_bufs = try allocator.alloc([flux_io.max_snapshot_filename_length]u8, snapshot_capacity);
-    }
-    defer if (has_output) {
-        allocator.free(filename_bufs);
-        allocator.free(pvd_entries);
-    };
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir,
+        baseName(config.demo),
+        common.Plan.fromTotal(config.steps, config.frames),
+    );
+    defer series.deinit();
 
     const start_ns = std.time.nanoTimestamp();
-    var snapshot_count: u32 = 0;
     for (0..config.steps) |step_idx| {
         try step(allocator, &state, dt);
 
-        if (has_output and (step_idx + 1) % interval == 0) {
-            const filename = flux_io.snapshot_filename(
-                &filename_bufs[snapshot_count],
-                baseName(config.demo),
-                snapshot_count,
-            );
-            try writeSnapshot(allocator, config.output_dir, filename, &state);
-            pvd_entries[snapshot_count] = .{
-                .timestep = @as(f64, @floatFromInt(step_idx + 1)) * dt,
-                .filename = filename,
-            };
-            snapshot_count += 1;
+        if (series.dueAt(@intCast(step_idx + 1))) {
+            const t = @as(f64, @floatFromInt(step_idx + 1)) * dt;
+            try series.capture(t, EulerRenderer{ .state = &state });
         }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
-
-    if (has_output and snapshot_count > 0) {
-        try writePvd(allocator, config.output_dir, baseName(config.demo), pvd_entries[0..snapshot_count]);
-    }
+    try series.finalize();
 
     const circulation_final = totalCirculation(&state);
     try writer.print(
@@ -213,9 +192,35 @@ pub fn run(
         .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
         .circulation_initial = circulation_initial,
         .circulation_final = circulation_final,
-        .snapshot_count = snapshot_count,
+        .snapshot_count = series.count,
     };
 }
+
+const EulerRenderer = struct {
+    state: *const State,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        const velocity_values = try allocator.alloc(f64, self.state.mesh.num_faces() * 3);
+        defer allocator.free(velocity_values);
+
+        for (self.state.face_velocity, 0..) |velocity, face_idx| {
+            const base = 3 * face_idx;
+            velocity_values[base + 0] = velocity[0];
+            velocity_values[base + 1] = velocity[1];
+            velocity_values[base + 2] = 0.0;
+        }
+
+        const point_data = [_]flux_io.DataArraySlice{
+            .{ .name = "stream_function", .values = self.state.stream_function.values },
+        };
+        const cell_data = [_]flux_io.DataArraySlice{
+            .{ .name = "vorticity", .values = self.state.vorticity.values },
+            .{ .name = "tracer", .values = self.state.tracer.values },
+            .{ .name = "velocity", .values = velocity_values, .num_components = 3 },
+        };
+        try flux_io.write(writer, 2, 2, self.state.mesh.*, &point_data, &cell_data);
+    }
+};
 
 fn baseName(demo: Demo) []const u8 {
     return switch (demo) {
@@ -387,70 +392,6 @@ fn advectScalar(
 
 fn dot(lhs: Vec2, rhs: Vec2) f64 {
     return lhs[0] * rhs[0] + lhs[1] * rhs[1];
-}
-
-fn writeSnapshot(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    filename: []const u8,
-    state: *const State,
-) !void {
-    var velocity_values = try allocator.alloc(f64, state.mesh.num_faces() * 3);
-    defer allocator.free(velocity_values);
-
-    for (state.face_velocity, 0..) |velocity, face_idx| {
-        const base = 3 * face_idx;
-        velocity_values[base + 0] = velocity[0];
-        velocity_values[base + 1] = velocity[1];
-        velocity_values[base + 2] = 0.0;
-    }
-
-    const point_data = [_]flux_io.DataArraySlice{
-        .{ .name = "stream_function", .values = state.stream_function.values },
-    };
-    const cell_data = [_]flux_io.DataArraySlice{
-        .{ .name = "vorticity", .values = state.vorticity.values },
-        .{ .name = "tracer", .values = state.tracer.values },
-        .{ .name = "velocity", .values = velocity_values, .num_components = 3 },
-    };
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write(output.writer(allocator), 2, 2, state.mesh.*, &point_data, &cell_data);
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(filename, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn writePvd(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    base_name: []const u8,
-    entries: []const flux_io.PvdEntry,
-) !void {
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-    try flux_io.write_pvd(output.writer(allocator), entries);
-
-    var pvd_buf: [flux_io.max_snapshot_filename_length]u8 = undefined;
-    const pvd_name = std.fmt.bufPrint(&pvd_buf, "{s}.pvd", .{base_name}) catch
-        return error.FilenameTooLong;
-
-    var dir = try std_fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(pvd_name, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn ensureDir(path: []const u8) !void {
-    std.fs.cwd().makeDir(path) catch |err| switch (err) {
-        error.PathAlreadyExists => {},
-        else => return err,
-    };
 }
 
 fn gaussianBlob(point: Vec2, center: Vec2, sigma: f64) f64 {

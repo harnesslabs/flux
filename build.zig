@@ -135,171 +135,98 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    // -- example-maxwell2d step --
-    // Builds and runs the 2D Maxwell electromagnetic example.
-    // This example consumes flux as a library dependency, proving the
-    // package API works end-to-end.
-    const maxwell2d_exe = b.addExecutable(.{
-        .name = "maxwell_2d",
+    // -- examples_common module --
+    // Shared infrastructure consumed by every example: CLI parser, snapshot
+    // writer, progress display. Lives under examples/common/ and depends on
+    // the flux library.
+    const examples_common_mod = b.createModule(.{
+        .root_source_file = b.path("examples/common/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+        },
+    });
+    const examples_common_tests = b.addTest(.{
+        .root_module = examples_common_mod,
+    });
+    const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
+
+    // -- flux-examples umbrella binary --
+    // A single executable exposes every example as a subcommand. The root
+    // source file (examples/main.zig) imports each per-example cli.zig via
+    // a relative path; those files are part of the same module and inherit
+    // the named imports declared here (`flux`, `examples_common`).
+    const examples_exe = b.addExecutable(.{
+        .name = "flux-examples",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/maxwell_2d/main.zig"),
+            .root_source_file = b.path("examples/main.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "flux", .module = mod },
+                .{ .name = "examples_common", .module = examples_common_mod },
             },
         }),
     });
-    b.installArtifact(maxwell2d_exe);
-    const maxwell2d_run = b.addRunArtifact(maxwell2d_exe);
-    maxwell2d_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        maxwell2d_run.addArgs(args);
+    b.installArtifact(examples_exe);
+
+    // `zig build examples` builds the umbrella binary without running it,
+    // satisfying the issue acceptance criterion that all examples compile.
+    const examples_step = b.step("examples", "Build the flux-examples umbrella binary");
+    examples_step.dependOn(&examples_exe.step);
+    examples_step.dependOn(b.getInstallStep());
+
+    // Convenience run steps. Each `run-<name>` is a thin wrapper that runs
+    // `flux-examples <name>` with the user's `--` arguments appended. The
+    // build step name uses hyphens for parity with the subcommand names.
+    const run_targets = [_]struct { step: []const u8, sub: []const u8, doc: []const u8 }{
+        .{ .step = "run-maxwell-2d", .sub = "maxwell-2d", .doc = "Run the 2D Maxwell example" },
+        .{ .step = "run-maxwell-3d", .sub = "maxwell-3d", .doc = "Run the 3D Maxwell cavity example" },
+        .{ .step = "run-euler-2d", .sub = "euler-2d", .doc = "Run the 2D incompressible Euler example" },
+        .{ .step = "run-euler-3d", .sub = "euler-3d", .doc = "Run the 3D incompressible Euler example" },
+        .{ .step = "run-heat", .sub = "heat", .doc = "Run the implicit heat-equation example" },
+        .{ .step = "run-diffusion-surface", .sub = "diffusion-surface", .doc = "Run the curved-surface diffusion example" },
+    };
+    for (run_targets) |target_info| {
+        const run_cmd_step = b.addRunArtifact(examples_exe);
+        run_cmd_step.step.dependOn(b.getInstallStep());
+        run_cmd_step.addArg(target_info.sub);
+        if (b.args) |args| {
+            run_cmd_step.addArgs(args);
+        }
+        const top = b.step(target_info.step, target_info.doc);
+        top.dependOn(&run_cmd_step.step);
     }
-    const maxwell2d_step = b.step("example-maxwell2d", "Run the 2D Maxwell electromagnetic example");
-    maxwell2d_step.dependOn(&maxwell2d_run.step);
 
-    // Example tests — these are integration tests that verify the physics
-    // module works correctly through the public flux API.
-    const maxwell2d_tests = b.addTest(.{
-        .root_module = maxwell2d_exe.root_module,
-    });
-    const run_maxwell2d_tests = b.addRunArtifact(maxwell2d_tests);
-
-    // -- example-maxwell3d step --
-    // Builds and runs the 3D Maxwell cavity example on tetrahedral meshes.
-    const maxwell3d_exe = b.addExecutable(.{
-        .name = "maxwell_3d",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/maxwell_3d/main.zig"),
+    // Per-physics test executables. The umbrella binary's test discovery does
+    // not pick up integration tests inside `examples/<name>/<physics>.zig`
+    // because the umbrella root file does not (and should not) `@import` the
+    // physics modules directly. We compile a small test exe per physics
+    // module so the existing integration tests keep running in CI.
+    const TestModule = struct { name: []const u8, source: []const u8 };
+    const example_test_modules = [_]TestModule{
+        .{ .name = "maxwell_2d", .source = "examples/maxwell_2d/cli.zig" },
+        .{ .name = "maxwell_3d", .source = "examples/maxwell_3d/maxwell.zig" },
+        .{ .name = "euler_2d", .source = "examples/euler_2d/euler.zig" },
+        .{ .name = "euler_3d", .source = "examples/euler_3d/euler.zig" },
+        .{ .name = "heat", .source = "examples/heat/heat.zig" },
+        .{ .name = "diffusion_surface", .source = "examples/diffusion_surface/surface.zig" },
+    };
+    var example_run_test_steps: [example_test_modules.len]*std.Build.Step.Run = undefined;
+    inline for (example_test_modules, 0..) |entry, idx| {
+        const test_mod = b.createModule(.{
+            .root_source_file = b.path(entry.source),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "flux", .module = mod },
+                .{ .name = "examples_common", .module = examples_common_mod },
             },
-        }),
-    });
-    b.installArtifact(maxwell3d_exe);
-    const maxwell3d_run = b.addRunArtifact(maxwell3d_exe);
-    maxwell3d_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        maxwell3d_run.addArgs(args);
+        });
+        const test_exe = b.addTest(.{ .root_module = test_mod });
+        example_run_test_steps[idx] = b.addRunArtifact(test_exe);
     }
-    const maxwell3d_step = b.step("example-maxwell3d", "Run the 3D Maxwell cavity example");
-    maxwell3d_step.dependOn(&maxwell3d_run.step);
-
-    const maxwell3d_tests = b.addTest(.{
-        .root_module = maxwell3d_exe.root_module,
-    });
-    const run_maxwell3d_tests = b.addRunArtifact(maxwell3d_tests);
-
-    // -- example-euler2d step --
-    // Builds and runs the 2D incompressible Euler vorticity-stream example.
-    const euler2d_exe = b.addExecutable(.{
-        .name = "euler_2d",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/euler_2d/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "flux", .module = mod },
-            },
-        }),
-    });
-    b.installArtifact(euler2d_exe);
-    const euler2d_run = b.addRunArtifact(euler2d_exe);
-    euler2d_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        euler2d_run.addArgs(args);
-    }
-    const euler2d_step = b.step("example-euler2d", "Run the 2D incompressible Euler example");
-    euler2d_step.dependOn(&euler2d_run.step);
-
-    const euler2d_tests = b.addTest(.{
-        .root_module = euler2d_exe.root_module,
-    });
-    const run_euler2d_tests = b.addRunArtifact(euler2d_tests);
-
-    // -- example-euler3d step --
-    // Builds and runs the 3D incompressible Euler helicity example.
-    const euler3d_exe = b.addExecutable(.{
-        .name = "euler_3d",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/euler_3d/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "flux", .module = mod },
-            },
-        }),
-    });
-    b.installArtifact(euler3d_exe);
-    const euler3d_run = b.addRunArtifact(euler3d_exe);
-    euler3d_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        euler3d_run.addArgs(args);
-    }
-    const euler3d_step = b.step("example-euler3d", "Run the 3D incompressible Euler example");
-    euler3d_step.dependOn(&euler3d_run.step);
-
-    const euler3d_tests = b.addTest(.{
-        .root_module = euler3d_exe.root_module,
-    });
-    const run_euler3d_tests = b.addRunArtifact(euler3d_tests);
-
-    // -- example-heat step --
-    // Builds and runs the implicit heat-equation example on a unit square.
-    const heat_exe = b.addExecutable(.{
-        .name = "heat",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/heat/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "flux", .module = mod },
-            },
-        }),
-    });
-    b.installArtifact(heat_exe);
-    const heat_run = b.addRunArtifact(heat_exe);
-    heat_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        heat_run.addArgs(args);
-    }
-    const heat_step = b.step("example-heat", "Run the implicit heat-equation example");
-    heat_step.dependOn(&heat_run.step);
-
-    const heat_tests = b.addTest(.{
-        .root_module = heat_exe.root_module,
-    });
-    const run_heat_tests = b.addRunArtifact(heat_tests);
-
-    // -- example-diffusion-surface step --
-    // Builds and runs the curved-surface diffusion example.
-    const diffusion_surface_exe = b.addExecutable(.{
-        .name = "diffusion_surface",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/diffusion_surface/main.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "flux", .module = mod },
-            },
-        }),
-    });
-    b.installArtifact(diffusion_surface_exe);
-    const diffusion_surface_run = b.addRunArtifact(diffusion_surface_exe);
-    diffusion_surface_run.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        diffusion_surface_run.addArgs(args);
-    }
-    const diffusion_surface_step = b.step("example-diffusion-surface", "Run the curved-surface diffusion example");
-    diffusion_surface_step.dependOn(&diffusion_surface_run.step);
-
-    const diffusion_surface_tests = b.addTest(.{
-        .root_module = diffusion_surface_exe.root_module,
-    });
-    const run_diffusion_surface_tests = b.addRunArtifact(diffusion_surface_tests);
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
@@ -307,12 +234,10 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
-    test_step.dependOn(&run_maxwell2d_tests.step);
-    test_step.dependOn(&run_maxwell3d_tests.step);
-    test_step.dependOn(&run_euler2d_tests.step);
-    test_step.dependOn(&run_euler3d_tests.step);
-    test_step.dependOn(&run_heat_tests.step);
-    test_step.dependOn(&run_diffusion_surface_tests.step);
+    test_step.dependOn(&run_examples_common_tests.step);
+    for (example_run_test_steps) |run_step_ptr| {
+        test_step.dependOn(&run_step_ptr.step);
+    }
 
     // -- docs step --
     // Generates HTML documentation from doc comments: `zig build docs`
@@ -395,14 +320,8 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&exe.step);
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&exe_tests.step);
-    check_step.dependOn(&maxwell2d_exe.step);
-    check_step.dependOn(&maxwell2d_tests.step);
-    check_step.dependOn(&maxwell3d_exe.step);
-    check_step.dependOn(&maxwell3d_tests.step);
-    check_step.dependOn(&heat_exe.step);
-    check_step.dependOn(&heat_tests.step);
-    check_step.dependOn(&diffusion_surface_exe.step);
-    check_step.dependOn(&diffusion_surface_tests.step);
+    check_step.dependOn(&examples_exe.step);
+    check_step.dependOn(&examples_common_tests.step);
 
     // -- ci step --
     // Runs build + test + fmt in one command: `zig build ci`
@@ -410,11 +329,10 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(b.getInstallStep());
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
-    ci_step.dependOn(&run_maxwell2d_tests.step);
-    ci_step.dependOn(&run_maxwell3d_tests.step);
-    ci_step.dependOn(&run_euler2d_tests.step);
-    ci_step.dependOn(&run_euler3d_tests.step);
-    ci_step.dependOn(&run_heat_tests.step);
-    ci_step.dependOn(&run_diffusion_surface_tests.step);
+    ci_step.dependOn(&run_examples_common_tests.step);
+    ci_step.dependOn(&examples_exe.step);
+    for (example_run_test_steps) |run_step_ptr| {
+        ci_step.dependOn(&run_step_ptr.step);
+    }
     ci_step.dependOn(&fmt_cmd.step);
 }

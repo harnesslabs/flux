@@ -12,21 +12,21 @@ vorticity-stream formulation:
 Run the invariant reference with:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler2d -- --demo gaussian --grid 32 --steps 1000
+zig build -Doptimize=ReleaseFast run-euler-2d -- --demo gaussian --grid 32 --steps 1000
 ```
 
 For an actually dynamic showcase animation, use the vortex dipole demo:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler2d -- --demo dipole --grid 48 --steps 1200
+zig build -Doptimize=ReleaseFast run-euler-2d -- --demo dipole --grid 48 --steps 1200
 uv run tools/visualize.py output/euler_dipole
 ```
 
 Useful flags:
 
 ```sh
-zig build -Doptimize=ReleaseFast example-euler2d -- --help
-zig build -Doptimize=ReleaseFast example-euler2d -- --frames 0
+zig build -Doptimize=ReleaseFast run-euler-2d -- --help
+zig build -Doptimize=ReleaseFast run-euler-2d -- --frames 0
 ```
 
 Output is written as `.vtu` snapshots plus an `euler_2d.pvd` collection in

@@ -49,7 +49,7 @@ zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run stub (directs to examples)
-zig build example-maxwell2d     # run 2D Maxwell electromagnetic example
+zig build run-maxwell-2d     # run 2D Maxwell electromagnetic example
 zig build bench                 # run operator benchmarks (informational)
 zig build bench -- --check      # compare against baselines, fail on >20% regression
 zig build bench -- --update     # run benchmarks and save baselines.json

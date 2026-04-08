@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
+const common = @import("examples_common");
 
 const observers = flux.operators.observers;
 const poisson = flux.operators.poisson;
@@ -178,48 +179,32 @@ pub fn run(allocator: std.mem.Allocator, config: Config, writer: anytype) !RunRe
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try computeHelicity(allocator, &state);
-    const snapshot_count_max = config.snapshotCount();
-    var pvd_entries: []flux.io.PvdEntry = &.{};
-    var filename_bufs: [][flux.io.max_snapshot_filename_length]u8 = &.{};
 
-    if (snapshot_count_max > 0) {
-        if (config.output_dir) |output_dir| {
-            try ensureDir(output_dir);
-        }
-        pvd_entries = try allocator.alloc(flux.io.PvdEntry, snapshot_count_max);
-        filename_bufs = try allocator.alloc([flux.io.max_snapshot_filename_length]u8, snapshot_count_max);
-    }
-    defer {
-        if (snapshot_count_max > 0) {
-            allocator.free(filename_bufs);
-            allocator.free(pvd_entries);
-        }
-    }
+    const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0)
+        .{ .interval = config.output_interval, .capacity = config.snapshotCount() }
+    else
+        .{ .interval = 0, .capacity = 0 };
 
-    var snapshot_count: u32 = 0;
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir orelse "",
+        "euler_3d",
+        plan,
+    );
+    defer series.deinit();
+
     const start_ns = std.time.nanoTimestamp();
     for (0..config.steps) |step_index| {
         try step(allocator, &state, config.dt);
 
-        if (config.output_dir) |output_dir| {
-            if (config.output_interval > 0 and (step_index + 1) % config.output_interval == 0) {
-                const filename = flux.io.snapshot_filename(&filename_bufs[snapshot_count], "euler_3d", snapshot_count);
-                try writeSnapshotFile(allocator, output_dir, filename, &state);
-                pvd_entries[snapshot_count] = .{
-                    .timestep = @as(f64, @floatFromInt(step_index + 1)) * config.dt,
-                    .filename = filename,
-                };
-                snapshot_count += 1;
-            }
+        if (series.dueAt(@intCast(step_index + 1))) {
+            const t = @as(f64, @floatFromInt(step_index + 1)) * config.dt;
+            try series.capture(t, Euler3DRenderer{ .state = &state });
         }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
 
-    if (config.output_dir) |output_dir| {
-        if (snapshot_count > 0) {
-            try writePvdFile(allocator, output_dir, "euler_3d", pvd_entries[0..snapshot_count]);
-        }
-    }
+    try series.finalize();
 
     const helicity_final = try computeHelicity(allocator, &state);
     try writer.print(
@@ -239,130 +224,17 @@ pub fn run(allocator: std.mem.Allocator, config: Config, writer: anytype) !RunRe
         .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
         .helicity_initial = helicity_initial,
         .helicity_final = helicity_final,
-        .snapshot_count = snapshot_count,
+        .snapshot_count = series.count,
     };
 }
 
-pub fn runCli() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+const Euler3DRenderer = struct {
+    state: *const State,
 
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-
-    const config = parseArgs(args) catch return;
-    const stderr = (std.fs.File{ .handle = std.posix.STDERR_FILENO }).deprecatedWriter();
-    const result = try run(allocator, config, stderr);
-    try stderr.print(
-        "elapsed={d:.3}s snapshots={d} drift={e}\n",
-        .{
-            result.elapsed_s,
-            result.snapshot_count,
-            @abs(result.helicity_final - result.helicity_initial),
-        },
-    );
-}
-
-const ParseError = error{InvalidArgument};
-
-fn parseArgs(args: []const [:0]const u8) ParseError!Config {
-    var config = Config{};
-    var i: usize = 1;
-    while (i < args.len) : (i += 1) {
-        const arg = args[i];
-        if (eql(arg, "--help") or eql(arg, "-h")) {
-            printUsage();
-            std.process.exit(0);
-        } else if (eql(arg, "--steps")) {
-            config.steps = parseU32(args, &i, "--steps") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--nx")) {
-            config.nx = parseU32(args, &i, "--nx") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--ny")) {
-            config.ny = parseU32(args, &i, "--ny") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--nz")) {
-            config.nz = parseU32(args, &i, "--nz") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--width")) {
-            config.width = parseF64(args, &i, "--width") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--height")) {
-            config.height = parseF64(args, &i, "--height") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--depth")) {
-            config.depth = parseF64(args, &i, "--depth") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--dt")) {
-            config.dt = parseF64(args, &i, "--dt") orelse return ParseError.InvalidArgument;
-        } else if (eql(arg, "--output")) {
-            config.output_dir = nextArg(args, &i) orelse return flagError("--output");
-        } else if (eql(arg, "--output-interval")) {
-            config.output_interval = parseU32(args, &i, "--output-interval") orelse return ParseError.InvalidArgument;
-        } else {
-            std.debug.print("error: unknown argument '{s}'\n\n", .{arg});
-            printUsage();
-            return ParseError.InvalidArgument;
-        }
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        try writeSnapshot(allocator, writer, self.state);
     }
-    return config;
-}
-
-fn eql(a: []const u8, b: []const u8) bool {
-    return std.mem.eql(u8, a, b);
-}
-
-fn nextArg(args: []const [:0]const u8, i: *usize) ?[]const u8 {
-    if (i.* + 1 < args.len) {
-        i.* += 1;
-        return args[i.*];
-    }
-    return null;
-}
-
-fn flagError(flag: []const u8) ParseError {
-    std.debug.print("error: {s} requires a value\n", .{flag});
-    return ParseError.InvalidArgument;
-}
-
-fn parseU32(args: []const [:0]const u8, i: *usize, flag: []const u8) ?u32 {
-    const value = nextArg(args, i) orelse {
-        std.debug.print("error: {s} requires a value\n", .{flag});
-        return null;
-    };
-    return std.fmt.parseInt(u32, value, 10) catch {
-        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
-        return null;
-    };
-}
-
-fn parseF64(args: []const [:0]const u8, i: *usize, flag: []const u8) ?f64 {
-    const value = nextArg(args, i) orelse {
-        std.debug.print("error: {s} requires a value\n", .{flag});
-        return null;
-    };
-    return std.fmt.parseFloat(f64, value) catch {
-        std.debug.print("error: invalid {s} value: {s}\n", .{ flag, value });
-        return null;
-    };
-}
-
-fn printUsage() void {
-    std.debug.print(
-        \\
-        \\  flux — 3D incompressible Euler helicity example
-        \\
-        \\  usage: zig build -Doptimize=ReleaseFast example-euler3d -- [options]
-        \\
-        \\  options:
-        \\    --steps N             number of timesteps (default: 1000)
-        \\    --nx N                x-axis cube count (default: 2)
-        \\    --ny N                y-axis cube count (default: 2)
-        \\    --nz N                z-axis cube count (default: 2)
-        \\    --width L             domain width (default: 1.0)
-        \\    --height L            domain height (default: 1.0)
-        \\    --depth L             domain depth (default: 1.0)
-        \\    --dt DT               timestep size (default: 0.01)
-        \\    --output DIR          optional output directory for VTK snapshots
-        \\    --output-interval N   snapshot cadence in steps (default: 0)
-        \\
-    , .{});
-}
+};
 
 fn computeHelicity(allocator: std.mem.Allocator, state: *const State) !f64 {
     const Helicity = observers.HelicityObserver(State, Velocity, selectVelocity);
@@ -443,51 +315,6 @@ fn writeSnapshot(allocator: std.mem.Allocator, writer: anytype, state: *const St
         &.{},
         &cell_data,
     );
-}
-
-fn writeSnapshotFile(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    filename: []const u8,
-    state: *const State,
-) !void {
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try writeSnapshot(allocator, output.writer(allocator), state);
-
-    var dir = try std.fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(filename, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn writePvdFile(
-    allocator: std.mem.Allocator,
-    output_dir: []const u8,
-    base_name: []const u8,
-    entries: []const flux.io.PvdEntry,
-) !void {
-    _ = base_name;
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try flux.io.write_pvd(output.writer(allocator), entries);
-
-    var pvd_buf: [flux.io.max_snapshot_filename_length]u8 = undefined;
-    const pvd_name = std.fmt.bufPrint(&pvd_buf, "euler_3d.pvd", .{}) catch
-        return error.FilenameTooLong;
-
-    var dir = try std.fs.cwd().openDir(output_dir, .{});
-    defer dir.close();
-    const file = try dir.createFile(pvd_name, .{});
-    defer file.close();
-    try file.writeAll(output.items);
-}
-
-fn ensureDir(path: []const u8) !void {
-    try std.fs.cwd().makePath(path);
 }
 
 test "velocity recovery reproduces the seeded co-closed 1-form on a tetrahedral mesh" {
