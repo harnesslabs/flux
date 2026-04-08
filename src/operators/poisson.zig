@@ -44,8 +44,7 @@ pub fn solve_zero_form_dirichlet(
     std.debug.assert(forcing_values.len == mesh.num_vertices());
     std.debug.assert(boundary_values.len == mesh.num_vertices());
 
-    try operator_context.withLaplacian(0);
-    const laplacian = operator_context.laplacian(0);
+    const laplacian = try operator_context.laplacian(0);
     const stiffness = laplacian.stiffness;
     const dual_volumes = mesh.vertices.slice().items(.dual_volume);
 
@@ -323,8 +322,7 @@ fn assemble_one_form_matrix(
     const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
     const edge_count = operator_context.mesh.num_edges();
 
-    try operator_context.withLaplacian(1);
-    const laplacian = operator_context.laplacian(1);
+    const laplacian = try operator_context.laplacian(1);
 
     var basis = try OneForm.init(allocator, operator_context.mesh);
     defer basis.deinit(allocator);
@@ -603,7 +601,7 @@ test "1-form Dirichlet solve recovers a discrete exact field on tetrahedral grid
 
     var operator_context = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, &mesh);
     defer operator_context.deinit();
-    try operator_context.withLaplacian(1);
+    _ = try operator_context.laplacian(1);
 
     var exact = try OneForm.init(allocator, &mesh);
     defer exact.deinit(allocator);
@@ -613,7 +611,7 @@ test "1-form Dirichlet solve recovers a discrete exact field on tetrahedral grid
         try testing.expectApproxEqAbs(@as(f64, 0.0), exact.values[edge_idx], 1e-15);
     }
 
-    var forcing = try operator_context.laplacian(1).apply(allocator, exact);
+    var forcing = try (try operator_context.laplacian(1)).apply(allocator, exact);
     defer forcing.deinit(allocator);
 
     const boundary = try allocator.alloc(f64, mesh.num_edges());

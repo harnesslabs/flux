@@ -61,11 +61,11 @@ pub fn State(comptime MeshType: type) type {
             const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
             errdefer operators.deinit();
 
-            try operators.withExteriorDerivative(cochain.Primal, 1);
-            try operators.withExteriorDerivative(cochain.Primal, 2);
-            try operators.withExteriorDerivative(cochain.Dual, 1);
-            try operators.withHodgeStar(2);
-            try operators.withHodgeStarInverse(1);
+            _ = try operators.exteriorDerivative(cochain.Primal, 1);
+            _ = try operators.exteriorDerivative(cochain.Primal, 2);
+            _ = try operators.exteriorDerivative(cochain.Dual, 1);
+            _ = try operators.hodgeStar(2);
+            _ = try operators.hodgeStarInverse(1);
 
             return .{
                 .E = electric,
@@ -101,7 +101,7 @@ fn tm110AngularFrequency(width: f64, height: f64) f64 {
 }
 
 pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-    var derivative = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, state.E);
+    var derivative = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
     defer derivative.deinit(allocator);
 
     derivative.scale(dt);
@@ -109,13 +109,13 @@ pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void 
 }
 
 pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-    var star_b = try state.operators.hodgeStar(2).apply(allocator, state.B);
+    var star_b = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
     defer star_b.deinit(allocator);
 
-    var derivative = try state.operators.exteriorDerivative(cochain.Dual, 1).apply(allocator, star_b);
+    var derivative = try (try state.operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
     defer derivative.deinit(allocator);
 
-    var curl_b = try state.operators.hodgeStarInverse(1).apply(allocator, derivative);
+    var curl_b = try (try state.operators.hodgeStarInverse(1)).apply(allocator, derivative);
     defer curl_b.deinit(allocator);
 
     for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
@@ -332,7 +332,7 @@ pub fn seedTm110Mode(
     defer potential.deinit(allocator);
     project_tm110_potential(state.mesh, potential.values, -dt / 2.0, width, height);
 
-    var exact_flux = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, potential);
+    var exact_flux = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, potential);
     defer exact_flux.deinit(allocator);
     @memcpy(state.B.values, exact_flux.values);
 }
@@ -376,8 +376,6 @@ pub fn writeSnapshot(
 
     try flux.io.write(
         writer,
-        Mesh3D.embedding_dimension,
-        Mesh3D.topological_dimension,
         state.mesh.*,
         &.{},
         &cell_data,
@@ -461,14 +459,14 @@ fn seedClosedMagneticField(allocator: std.mem.Allocator, state: *MaxwellState3D)
         value.* = rng.random().float(f64) * 0.2 - 0.1;
     }
 
-    var exact_flux = try state.operators.exteriorDerivative(cochain.Primal, 1).apply(allocator, potential);
+    var exact_flux = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, potential);
     defer exact_flux.deinit(allocator);
 
     @memcpy(state.B.values, exact_flux.values);
 }
 
 pub fn divergenceNorm(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
-    var divergence = try state.operators.exteriorDerivative(cochain.Primal, 2).apply(allocator, state.B);
+    var divergence = try (try state.operators.exteriorDerivative(cochain.Primal, 2)).apply(allocator, state.B);
     defer divergence.deinit(allocator);
     return std.math.sqrt(divergence.norm_squared());
 }
@@ -487,26 +485,26 @@ fn compute_tm110_eigenvalue(
 
     const operator_context = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, &mesh);
     defer operator_context.deinit();
-    try operator_context.withExteriorDerivative(cochain.Primal, 1);
-    try operator_context.withHodgeStar(1);
-    try operator_context.withHodgeStar(2);
+    _ = try operator_context.exteriorDerivative(cochain.Primal, 1);
+    _ = try operator_context.hodgeStar(1);
+    _ = try operator_context.hodgeStar(2);
 
     var E = try MaxwellState3D.OneForm.init(allocator, &mesh);
     defer E.deinit(allocator);
     const omega = tm110AngularFrequency(width, height);
     project_tm110_e(&mesh, E.values, std.math.pi / (2.0 * omega), width, height);
 
-    var dE = try operator_context.exteriorDerivative(cochain.Primal, 1).apply(allocator, E);
+    var dE = try (try operator_context.exteriorDerivative(cochain.Primal, 1)).apply(allocator, E);
     defer dE.deinit(allocator);
 
-    var star_dE = try operator_context.hodgeStar(2).apply(allocator, dE);
+    var star_dE = try (try operator_context.hodgeStar(2)).apply(allocator, dE);
     defer star_dE.deinit(allocator);
     var numerator: f64 = 0.0;
     for (dE.values, star_dE.values) |lhs, rhs| {
         numerator += lhs * rhs;
     }
 
-    var star_E = try operator_context.hodgeStar(1).apply(allocator, E);
+    var star_E = try (try operator_context.hodgeStar(1)).apply(allocator, E);
     defer star_E.deinit(allocator);
     var denominator: f64 = 0.0;
     for (E.values, star_E.values) |lhs, rhs| {

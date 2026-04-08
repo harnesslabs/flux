@@ -38,12 +38,19 @@ pub const DataArraySlice = struct {
 /// (Kitware, The VTK User's Guide, 11th Edition).
 pub fn write(
     writer: anytype,
-    comptime embedding_dimension: usize,
-    comptime topological_dimension: usize,
-    mesh: topology.Mesh(embedding_dimension, topological_dimension),
+    mesh: anytype,
     point_data: []const DataArraySlice,
     cell_data: []const DataArraySlice,
 ) !void {
+    const MeshType = @TypeOf(mesh);
+    comptime {
+        if (!@hasDecl(MeshType, "embedding_dimension") or !@hasDecl(MeshType, "topological_dimension")) {
+            @compileError("vtk.write requires a mesh type with embedding_dimension and topological_dimension");
+        }
+    }
+
+    const embedding_dimension = MeshType.embedding_dimension;
+    const topological_dimension = MeshType.topological_dimension;
     const num_vertices = mesh.num_vertices();
     const num_cells = cellCount(mesh, topological_dimension);
 
@@ -204,134 +211,6 @@ fn writeDataArray(writer: anytype, name: []const u8, values: []const f64, num_co
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Field projection: 1-forms (edges) → per-face averages
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Project a 1-form (one value per edge) to a per-face scalar by averaging
-/// the absolute values of the three edge coefficients on each face.
-///
-/// VTK CellData requires one value per cell (face). A 1-form lives on edges,
-/// so direct export is not possible. This projection averages |E| over each
-/// triangle's three boundary edges, giving a per-face proxy for field intensity.
-///
-/// Uses the ∂₂ boundary matrix (face → edge incidence) to find each face's edges.
-pub fn project_edges_to_faces(
-    allocator: std.mem.Allocator,
-    comptime embedding_dimension: usize,
-    comptime topological_dimension: usize,
-    mesh: topology.Mesh(embedding_dimension, topological_dimension),
-    edge_values: []const f64,
-) ![]f64 {
-    const num_faces = mesh.num_faces();
-    const num_edges = mesh.num_edges();
-    std.debug.assert(edge_values.len == num_edges);
-
-    const face_values = try allocator.alloc(f64, num_faces);
-
-    const boundary_2 = mesh.boundary(2);
-    for (0..num_faces) |f| {
-        const face_boundary = boundary_2.row(@intCast(f));
-        const edge_indices = face_boundary.cols;
-
-        var sum: f64 = 0;
-        for (edge_indices) |edge_idx| {
-            sum += @abs(edge_values[edge_idx]);
-        }
-        face_values[f] = sum / @as(f64, @floatFromInt(edge_indices.len));
-    }
-
-    return face_values;
-}
-
-/// Write a VTK snapshot of electromagnetic fields (E and B) from a Maxwell state.
-///
-/// E is a primal 1-form (per-edge) and B is a primal 2-form (per-face).
-/// Since VTK CellData requires per-face values, E is projected onto faces
-/// by averaging |E| over each triangle's boundary edges.
-///
-/// The output .vtu file contains two CellData arrays:
-///   - "E_intensity": per-face average of |E| on boundary edges
-///   - "B_flux": per-face magnetic flux (direct from B cochain)
-pub fn write_fields(
-    allocator: std.mem.Allocator,
-    writer: anytype,
-    comptime embedding_dimension: usize,
-    comptime topological_dimension: usize,
-    mesh: topology.Mesh(embedding_dimension, topological_dimension),
-    e_values: []const f64,
-    b_values: []const f64,
-) !void {
-    const e_projected = try project_edges_to_faces(allocator, embedding_dimension, topological_dimension, mesh, e_values);
-    defer allocator.free(e_projected);
-
-    const cell_data = [_]DataArraySlice{
-        .{ .name = "E_intensity", .values = e_projected },
-        .{ .name = "B_flux", .values = b_values },
-    };
-    try write(writer, embedding_dimension, topological_dimension, mesh, &.{}, &cell_data);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Time-series snapshots
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// A single entry in a PVD time-series collection.
-pub const PvdEntry = struct {
-    /// Simulation time for this snapshot (used by ParaView's animation timeline).
-    timestep: f64,
-    /// Relative path to the .vtu file (e.g., "output_0000.vtu").
-    filename: []const u8,
-};
-
-/// Maximum length of a snapshot filename produced by `snapshot_filename`.
-/// Sized for base names up to 200 chars + "_" + 10-digit u32 + ".vtu" = 215.
-/// Rounded up to 224 for alignment headroom.
-pub const max_snapshot_filename_length = 224;
-
-/// Format a snapshot filename: "{base}_{step:0>4}.vtu".
-///
-/// Returns a slice into `buf` containing the formatted name. The step index
-/// is zero-padded to 4 digits (0000–9999). Steps beyond 9999 use more digits.
-///
-/// Example: `snapshot_filename(&buf, "output", 42)` → `"output_0042.vtu"`
-pub fn snapshot_filename(
-    buf: *[max_snapshot_filename_length]u8,
-    base_name: []const u8,
-    step: u32,
-) []const u8 {
-    std.debug.assert(base_name.len > 0);
-    std.debug.assert(base_name.len <= 200);
-    return std.fmt.bufPrint(buf, "{s}_{d:0>4}.vtu", .{ base_name, step }) catch unreachable;
-}
-
-/// Write a PVD (ParaView Data) collection file referencing a set of .vtu snapshots.
-///
-/// The PVD format is a lightweight XML wrapper that tells ParaView which .vtu
-/// files belong to a time series and what simulation time each represents.
-/// ParaView loads the collection as an animation, stepping through snapshots
-/// in timestep order.
-///
-/// Reference: VTK File Formats specification, §19.3 "XML File Formats"
-/// (Kitware, The VTK User's Guide, 11th Edition).
-pub fn write_pvd(writer: anytype, entries: []const PvdEntry) !void {
-    std.debug.assert(entries.len > 0);
-
-    try writer.writeAll("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    try writer.writeAll("<VTKFile type=\"Collection\" version=\"0.1\" byte_order=\"LittleEndian\">\n");
-    try writer.writeAll("  <Collection>\n");
-
-    for (entries) |entry| {
-        try writer.print("    <DataSet timestep=\"{e}\" file=\"{s}\"/>\n", .{
-            entry.timestep,
-            entry.filename,
-        });
-    }
-
-    try writer.writeAll("  </Collection>\n");
-    try writer.writeAll("</VTKFile>\n");
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -343,7 +222,7 @@ test "vtu output contains valid XML structure for minimal mesh" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -372,7 +251,7 @@ test "vtu vertex coordinates round-trip to machine precision" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     // Parse back all vertex coordinates from the Points DataArray.
     // The coordinates appear between <DataArray ...Float64...NumberOfComponents="3"...>
@@ -426,7 +305,7 @@ test "vtu 0-form PointData round-trips to machine precision" {
     defer output.deinit(allocator);
 
     const pd = [_]DataArraySlice{.{ .name = "temperature", .values = values }};
-    try write(output.writer(allocator), 2, 2, mesh, &pd, &.{});
+    try write(output.writer(allocator), mesh, &pd, &.{});
 
     const xml = output.items;
 
@@ -460,7 +339,7 @@ test "vtu 2-form CellData round-trips to machine precision" {
     defer output.deinit(allocator);
 
     const cd = [_]DataArraySlice{.{ .name = "vorticity", .values = values }};
-    try write(output.writer(allocator), 2, 2, mesh, &.{}, &cd);
+    try write(output.writer(allocator), mesh, &.{}, &cd);
 
     const xml = output.items;
 
@@ -500,7 +379,7 @@ test "vtu with both PointData and CellData" {
 
     const pd = [_]DataArraySlice{.{ .name = "pressure", .values = point_values }};
     const cd = [_]DataArraySlice{.{ .name = "flux", .values = cell_values }};
-    try write(output.writer(allocator), 2, 2, mesh, &pd, &cd);
+    try write(output.writer(allocator), mesh, &pd, &cd);
 
     const xml = output.items;
     try testing.expect(std.mem.indexOf(u8, xml, "<PointData>") != null);
@@ -517,7 +396,7 @@ test "vtu triangle connectivity matches mesh face vertices" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -555,7 +434,7 @@ test "vtu all cell types are triangle (type 5)" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 2, 2, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const xml = output.items;
 
@@ -583,7 +462,7 @@ test "vtu 3D piece counts use tetrahedra as cells" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const expected_piece = try std.fmt.allocPrint(allocator, "NumberOfPoints=\"{d}\" NumberOfCells=\"{d}\"", .{
         mesh.num_vertices(),
@@ -602,7 +481,7 @@ test "vtu tetrahedral connectivity matches mesh tet vertices" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const xml = output.items;
     const conn_start_tag = "Name=\"connectivity\" format=\"ascii\">";
@@ -651,7 +530,7 @@ test "vtu 3D cell types are tetrahedron (type 10)" {
     var output = std.ArrayListUnmanaged(u8){};
     defer output.deinit(allocator);
 
-    try write(output.writer(allocator), 3, 3, mesh, &.{}, &.{});
+    try write(output.writer(allocator), mesh, &.{}, &.{});
 
     const xml = output.items;
     const types_start_tag = "Name=\"types\" format=\"ascii\">";
@@ -692,7 +571,7 @@ test "vtu 3D PointData and CellData round-trip with tetrahedral mesh" {
 
     const pd = [_]DataArraySlice{.{ .name = "temperature_3d", .values = point_values }};
     const cd = [_]DataArraySlice{.{ .name = "pressure_3d", .values = cell_values }};
-    try write(output.writer(allocator), 3, 3, mesh, &pd, &cd);
+    try write(output.writer(allocator), mesh, &pd, &cd);
 
     const parsed_point = try parseDataArray(allocator, output.items, "temperature_3d");
     defer allocator.free(parsed_point);
@@ -731,7 +610,7 @@ test "vtu 3D vector PointData and CellData preserve component count and layout" 
 
     const pd = [_]DataArraySlice{.{ .name = "velocity_3d", .values = point_values, .num_components = 3 }};
     const cd = [_]DataArraySlice{.{ .name = "flux_3d", .values = cell_values, .num_components = 3 }};
-    try write(output.writer(allocator), 3, 3, mesh, &pd, &cd);
+    try write(output.writer(allocator), mesh, &pd, &cd);
 
     try testing.expect(std.mem.indexOf(u8, output.items, "Name=\"velocity_3d\" NumberOfComponents=\"3\"") != null);
     try testing.expect(std.mem.indexOf(u8, output.items, "Name=\"flux_3d\" NumberOfComponents=\"3\"") != null);
@@ -819,175 +698,6 @@ pub fn parseDataArray(allocator: std.mem.Allocator, xml: []const u8, name: []con
     return error.DataArrayNotFound;
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Time-series tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-test "snapshot_filename formats zero-padded index" {
-    var buf: [max_snapshot_filename_length]u8 = undefined;
-
-    const name0 = snapshot_filename(&buf, "output", 0);
-    try testing.expectEqualStrings("output_0000.vtu", name0);
-
-    const name42 = snapshot_filename(&buf, "output", 42);
-    try testing.expectEqualStrings("output_0042.vtu", name42);
-
-    const name9999 = snapshot_filename(&buf, "output", 9999);
-    try testing.expectEqualStrings("output_9999.vtu", name9999);
-}
-
-test "snapshot_filename handles step beyond 4 digits" {
-    var buf: [max_snapshot_filename_length]u8 = undefined;
-    const name = snapshot_filename(&buf, "sim", 12345);
-    try testing.expectEqualStrings("sim_12345.vtu", name);
-}
-
-test "pvd output contains valid XML structure" {
-    const allocator = testing.allocator;
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    const entries = [_]PvdEntry{
-        .{ .timestep = 0.0, .filename = "field_0000.vtu" },
-        .{ .timestep = 0.5, .filename = "field_0001.vtu" },
-        .{ .timestep = 1.0, .filename = "field_0002.vtu" },
-    };
-
-    try write_pvd(output.writer(allocator), &entries);
-
-    const xml = output.items;
-
-    // XML declaration
-    try testing.expect(std.mem.startsWith(u8, xml, "<?xml version=\"1.0\""));
-    // PVD root element (Collection type, not UnstructuredGrid)
-    try testing.expect(std.mem.indexOf(u8, xml, "<VTKFile type=\"Collection\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "<Collection>") != null);
-    // All three DataSet entries present with correct filenames
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0000.vtu\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0001.vtu\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0002.vtu\"") != null);
-    // Closing elements
-    try testing.expect(std.mem.indexOf(u8, xml, "</Collection>") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "</VTKFile>") != null);
-}
-
-test "pvd entries reference correct timesteps" {
-    const allocator = testing.allocator;
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    const dt = 0.025;
-    const entries = [_]PvdEntry{
-        .{ .timestep = 0.0 * dt, .filename = "wave_0000.vtu" },
-        .{ .timestep = 1.0 * dt, .filename = "wave_0001.vtu" },
-        .{ .timestep = 2.0 * dt, .filename = "wave_0002.vtu" },
-    };
-
-    try write_pvd(output.writer(allocator), &entries);
-
-    const xml = output.items;
-
-    // Each DataSet element is self-closing and references both timestep and file.
-    // Verify the timestep values appear in the output (formatted as scientific notation).
-    try testing.expect(std.mem.indexOf(u8, xml, "timestep=\"0e0\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"wave_0000.vtu\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"wave_0002.vtu\"") != null);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Field projection and write_fields tests
-// ═══════════════════════════════════════════════════════════════════════════
-
-test "project_edges_to_faces averages absolute edge values per face" {
-    const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
-    defer mesh.deinit(allocator);
-
-    // Set each edge value to its index for distinct, verifiable values.
-    const edge_values = try allocator.alloc(f64, mesh.num_edges());
-    defer allocator.free(edge_values);
-    for (edge_values, 0..) |*v, i| {
-        v.* = @as(f64, @floatFromInt(i)) + 1.0;
-    }
-
-    const face_values = try project_edges_to_faces(allocator, 2, 2, mesh, edge_values);
-    defer allocator.free(face_values);
-
-    // Each face should have exactly 3 edges (triangles).
-    // Verify: for each face, the projected value equals the mean of its 3 edge |values|.
-    const boundary_2 = mesh.boundary(2);
-    for (0..mesh.num_faces()) |f| {
-        const face_boundary = boundary_2.row(@intCast(f));
-        const edge_indices = face_boundary.cols;
-        try testing.expectEqual(@as(usize, 3), edge_indices.len);
-
-        var expected: f64 = 0;
-        for (edge_indices) |e| {
-            expected += @abs(edge_values[e]);
-        }
-        expected /= 3.0;
-        try testing.expectApproxEqAbs(expected, face_values[f], 1e-15);
-    }
-}
-
-test "project_edges_to_faces takes absolute values" {
-    const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
-    defer mesh.deinit(allocator);
-
-    // All negative edge values — projection should use absolute values.
-    const edge_values = try allocator.alloc(f64, mesh.num_edges());
-    defer allocator.free(edge_values);
-    for (edge_values) |*v| v.* = -3.0;
-
-    const face_values = try project_edges_to_faces(allocator, 2, 2, mesh, edge_values);
-    defer allocator.free(face_values);
-
-    for (face_values) |v| {
-        try testing.expectApproxEqAbs(@as(f64, 3.0), v, 1e-15);
-    }
-}
-
-test "write_fields produces vtu with E_intensity and B_flux CellData" {
-    const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
-    defer mesh.deinit(allocator);
-
-    // Create E (1-form, per-edge) and B (2-form, per-face).
-    const e_values = try allocator.alloc(f64, mesh.num_edges());
-    defer allocator.free(e_values);
-    for (e_values, 0..) |*v, i| v.* = @as(f64, @floatFromInt(i)) * 0.1;
-
-    const b_values = try allocator.alloc(f64, mesh.num_faces());
-    defer allocator.free(b_values);
-    for (b_values, 0..) |*v, i| v.* = @as(f64, @floatFromInt(i)) * 0.5;
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try write_fields(allocator, output.writer(allocator), 2, 2, mesh, e_values, b_values);
-
-    const xml = output.items;
-
-    // Must contain both field arrays in CellData.
-    try testing.expect(std.mem.indexOf(u8, xml, "<CellData>") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "Name=\"E_intensity\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "Name=\"B_flux\"") != null);
-
-    // B_flux values should round-trip exactly.
-    const parsed_b = try parseDataArray(allocator, xml, "B_flux");
-    defer allocator.free(parsed_b);
-    try testing.expectEqual(b_values.len, parsed_b.len);
-    for (b_values, parsed_b) |expected, actual| {
-        try testing.expectApproxEqAbs(expected, actual, 1e-15);
-    }
-
-    // E_intensity should have one value per face (projected from edges).
-    const parsed_e = try parseDataArray(allocator, xml, "E_intensity");
-    defer allocator.free(parsed_e);
-    try testing.expectEqual(mesh.num_faces(), @as(u32, @intCast(parsed_e.len)));
-}
-
 test "vtu 0-form PointData round-trips with random data across grid sizes" {
     // Property test: for multiple grid sizes, random 0-form values
     // survive write→parse round-trip to machine precision.
@@ -1010,7 +720,7 @@ test "vtu 0-form PointData round-trips with random data across grid sizes" {
         defer output.deinit(allocator);
 
         const pd = [_]DataArraySlice{.{ .name = "random_field", .values = values }};
-        try write(output.writer(allocator), 2, 2, mesh, &pd, &.{});
+        try write(output.writer(allocator), mesh, &pd, &.{});
 
         const parsed = try parseDataArray(allocator, output.items, "random_field");
         defer allocator.free(parsed);
@@ -1044,7 +754,7 @@ test "vtu 2-form CellData round-trips with random data across grid sizes" {
         defer output.deinit(allocator);
 
         const cd = [_]DataArraySlice{.{ .name = "random_flux", .values = values }};
-        try write(output.writer(allocator), 2, 2, mesh, &.{}, &cd);
+        try write(output.writer(allocator), mesh, &.{}, &cd);
 
         const parsed = try parseDataArray(allocator, output.items, "random_flux");
         defer allocator.free(parsed);
@@ -1054,37 +764,4 @@ test "vtu 2-form CellData round-trips with random data across grid sizes" {
             try testing.expectApproxEqAbs(expected, actual, 1e-15);
         }
     }
-}
-
-test "snapshot_filename and write_pvd compose for time-series workflow" {
-    // Simulate a 3-step time series: generate filenames, then write PVD.
-    const allocator = testing.allocator;
-    const num_steps = 3;
-    const dt = 0.1;
-
-    var filenames: [num_steps][max_snapshot_filename_length]u8 = undefined;
-    var entries: [num_steps]PvdEntry = undefined;
-
-    for (0..num_steps) |i| {
-        const name = snapshot_filename(&filenames[i], "field", @intCast(i));
-        entries[i] = .{
-            .timestep = @as(f64, @floatFromInt(i)) * dt,
-            .filename = name,
-        };
-    }
-
-    var output = std.ArrayListUnmanaged(u8){};
-    defer output.deinit(allocator);
-
-    try write_pvd(output.writer(allocator), &entries);
-
-    const xml = output.items;
-
-    // Verify the generated filenames appear in the PVD output.
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0000.vtu\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0001.vtu\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "file=\"field_0002.vtu\"") != null);
-    // Verify it is well-formed XML
-    try testing.expect(std.mem.indexOf(u8, xml, "<VTKFile type=\"Collection\"") != null);
-    try testing.expect(std.mem.indexOf(u8, xml, "</VTKFile>") != null);
 }

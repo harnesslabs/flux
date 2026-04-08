@@ -15,13 +15,12 @@
 //! var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
 //! const operators = try flux.operators.context.OperatorContext(Mesh2D).init(allocator, &mesh);
 //! defer operators.deinit();
-//! try operators.withExteriorDerivative(flux.forms.Primal, 0);
 //!
 //! // Create a 0-cochain (scalar field on vertices)
 //! var omega = try flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal).init(allocator, &mesh);
 //!
 //! // Apply operators with compile-time type safety
-//! var d_omega = try operators.exteriorDerivative(flux.forms.Primal, 0).apply(allocator, omega);
+//! var d_omega = try (try operators.exteriorDerivative(flux.forms.Primal, 0)).apply(allocator, omega);
 //! ```
 //!
 //! ## Modules
@@ -56,7 +55,7 @@ pub const Error = error{
 // ── Submodule re-exports (for namespaced access) ────────────────────────
 
 pub const forms = @import("forms/cochain.zig");
-pub const io = @import("io/vtk.zig");
+pub const io = @import("io/root.zig");
 pub const obj = @import("io/obj.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");

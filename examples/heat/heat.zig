@@ -62,8 +62,7 @@ const HeatSystem = struct {
         operator_context: *operator_context_mod.OperatorContext(Mesh2D),
         dt: f64,
     ) !HeatSystem {
-        try operator_context.withLaplacian(0);
-        const laplacian = operator_context.laplacian(0);
+        const laplacian = try operator_context.laplacian(0);
         const stiffness = laplacian.stiffness;
         const masses = mesh.vertices.slice().items(.dual_volume);
 
@@ -269,7 +268,7 @@ const HeatRenderer = struct {
             .{ .name = "temperature_exact", .values = self.exact },
             .{ .name = "temperature_error", .values = error_values },
         };
-        try flux_io.write(writer, 2, 2, self.mesh.*, &point_data, &.{});
+        try flux_io.write(writer, self.mesh.*, &point_data, &.{});
     }
 };
 

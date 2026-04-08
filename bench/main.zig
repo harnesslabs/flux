@@ -201,13 +201,13 @@ const BenchmarkContext = struct {
         maxwell.project_te10_b(cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
-        try operator_context.withExteriorDerivative(flux.forms.Primal, 0);
-        try operator_context.withExteriorDerivative(flux.forms.Primal, 1);
-        try operator_context.withHodgeStar(0);
-        try operator_context.withHodgeStar(1);
-        try operator_context.withHodgeStar(2);
-        try operator_context.withHodgeStarInverse(1);
-        try operator_context.withLaplacian(0);
+        _ = try operator_context.exteriorDerivative(flux.forms.Primal, 0);
+        _ = try operator_context.exteriorDerivative(flux.forms.Primal, 1);
+        _ = try operator_context.hodgeStar(0);
+        _ = try operator_context.hodgeStar(1);
+        _ = try operator_context.hodgeStar(2);
+        _ = try operator_context.hodgeStarInverse(1);
+        _ = try operator_context.laplacian(0);
 
         // Fill with deterministic pseudo-random values.
         var rng = std.Random.DefaultPrng.init(0xBEEF_CAFE);
@@ -558,31 +558,31 @@ fn stdoutWriter() @TypeOf((std.fs.File{ .handle = std.posix.STDOUT_FILENO }).dep
 
 /// d₀: exterior derivative on 0-forms (sparse matrix–vector multiply).
 fn benchExteriorDerivativeD0(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.exteriorDerivative(flux.forms.Primal, 0).apply(ctx.allocator, ctx.c0) catch unreachable;
+    var result = (ctx.operator_context.exteriorDerivative(flux.forms.Primal, 0) catch unreachable).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// d₁: exterior derivative on 1-forms.
 fn benchExteriorDerivativeD1(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.exteriorDerivative(flux.forms.Primal, 1).apply(ctx.allocator, ctx.c1) catch unreachable;
+    var result = (ctx.operator_context.exteriorDerivative(flux.forms.Primal, 1) catch unreachable).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₀: diagonal Hodge star on 0-forms.
 fn benchHodgeStar0(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.hodgeStar(0).apply(ctx.allocator, ctx.c0) catch unreachable;
+    var result = (ctx.operator_context.hodgeStar(0) catch unreachable).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₁: Whitney mass matrix SpMV on 1-forms.
 fn benchHodgeStar1(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.hodgeStar(1).apply(ctx.allocator, ctx.c1) catch unreachable;
+    var result = (ctx.operator_context.hodgeStar(1) catch unreachable).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// ★₂: diagonal Hodge star on 2-forms.
 fn benchHodgeStar2(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.hodgeStar(2).apply(ctx.allocator, ctx.c2) catch unreachable;
+    var result = (ctx.operator_context.hodgeStar(2) catch unreachable).apply(ctx.allocator, ctx.c2) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
@@ -594,13 +594,13 @@ fn benchHodgeStarInverse1(ctx: *BenchmarkContext) void {
     var rng = std.Random.DefaultPrng.init(0xDEAD);
     fillRandom(&rng, dual.values);
 
-    var result = ctx.operator_context.hodgeStarInverse(1).apply(ctx.allocator, dual) catch unreachable;
+    var result = (ctx.operator_context.hodgeStarInverse(1) catch unreachable).apply(ctx.allocator, dual) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// Δ₀: repeated application via a reused assembled operator.
 fn benchLaplacian0(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.laplacian(0).apply(ctx.allocator, ctx.c0) catch unreachable;
+    var result = (ctx.operator_context.laplacian(0) catch unreachable).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 

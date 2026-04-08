@@ -92,6 +92,10 @@ fn CodifferentialSlotsType(comptime MeshType: type) type {
 /// The public API is a heap-allocated handle so downstream structs can store a
 /// pointer rather than duplicating ownership by value.
 pub fn OperatorContext(comptime MeshType: type) type {
+    comptime {
+        @setEvalBranchQuota(20_000);
+    }
+
     const LaplacianSlots = LaplacianSlotsType(MeshType);
     const ExteriorDerivativePrimalSlots = ExteriorDerivativeSlotsType(MeshType, cochain.Primal);
     const ExteriorDerivativeDualSlots = ExteriorDerivativeSlotsType(MeshType, cochain.Dual);
@@ -146,7 +150,7 @@ pub fn OperatorContext(comptime MeshType: type) type {
             self.allocator.destroy(self);
         }
 
-        pub fn withExteriorDerivative(self: *Self, comptime Duality: type, comptime k: comptime_int) !void {
+        fn ensureExteriorDerivative(self: *Self, comptime Duality: type, comptime k: comptime_int) !void {
             if (k < 0 or k >= MeshType.topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no exterior derivative degree {d} on a {d}-dimensional mesh",
@@ -187,30 +191,23 @@ pub fn OperatorContext(comptime MeshType: type) type {
             self: *Self,
             comptime Duality: type,
             comptime k: comptime_int,
-        ) *const exterior_derivative_mod.AssembledExteriorDerivative(
+        ) !*const exterior_derivative_mod.AssembledExteriorDerivative(
             cochain.Cochain(MeshType, k, Duality),
         ) {
-            if (k < 0 or k >= MeshType.topological_dimension) {
-                @compileError(std.fmt.comptimePrint(
-                    "no exterior derivative degree {d} on a {d}-dimensional mesh",
-                    .{ k, MeshType.topological_dimension },
-                ));
-            }
+            try self.ensureExteriorDerivative(Duality, k);
 
             if (Duality == cochain.Primal) {
-                std.debug.assert(self.exterior_derivative_primal[k] != null);
                 return &self.exterior_derivative_primal[k].?;
             }
 
             if (Duality == cochain.Dual) {
-                std.debug.assert(self.exterior_derivative_dual[k] != null);
                 return &self.exterior_derivative_dual[k].?;
             }
 
             @compileError("ExteriorDerivative duality must be cochain.Primal or cochain.Dual");
         }
 
-        pub fn withHodgeStar(self: *Self, comptime k: comptime_int) !void {
+        fn ensureHodgeStar(self: *Self, comptime k: comptime_int) !void {
             if (k < 0 or k > MeshType.topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no Hodge star degree {d} on a {d}-dimensional mesh",
@@ -223,20 +220,14 @@ pub fn OperatorContext(comptime MeshType: type) type {
             }
         }
 
-        pub fn hodgeStar(self: *Self, comptime k: comptime_int) *const hodge_star_mod.AssembledHodgeStar(
+        pub fn hodgeStar(self: *Self, comptime k: comptime_int) !*const hodge_star_mod.AssembledHodgeStar(
             cochain.Cochain(MeshType, k, cochain.Primal),
         ) {
-            if (k < 0 or k > MeshType.topological_dimension) {
-                @compileError(std.fmt.comptimePrint(
-                    "no Hodge star degree {d} on a {d}-dimensional mesh",
-                    .{ k, MeshType.topological_dimension },
-                ));
-            }
-            std.debug.assert(self.hodge_stars[k] != null);
+            try self.ensureHodgeStar(k);
             return &self.hodge_stars[k].?;
         }
 
-        pub fn withHodgeStarInverse(self: *Self, comptime k: comptime_int) !void {
+        fn ensureHodgeStarInverse(self: *Self, comptime k: comptime_int) !void {
             if (k < 0 or k > MeshType.topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no inverse Hodge star degree {d} on a {d}-dimensional mesh",
@@ -249,20 +240,14 @@ pub fn OperatorContext(comptime MeshType: type) type {
             }
         }
 
-        pub fn hodgeStarInverse(self: *Self, comptime k: comptime_int) *const hodge_star_mod.AssembledHodgeStarInverse(
+        pub fn hodgeStarInverse(self: *Self, comptime k: comptime_int) !*const hodge_star_mod.AssembledHodgeStarInverse(
             cochain.Cochain(MeshType, MeshType.topological_dimension - k, cochain.Dual),
         ) {
-            if (k < 0 or k > MeshType.topological_dimension) {
-                @compileError(std.fmt.comptimePrint(
-                    "no inverse Hodge star degree {d} on a {d}-dimensional mesh",
-                    .{ k, MeshType.topological_dimension },
-                ));
-            }
-            std.debug.assert(self.hodge_star_inverses[k] != null);
+            try self.ensureHodgeStarInverse(k);
             return &self.hodge_star_inverses[k].?;
         }
 
-        pub fn withCodifferential(self: *Self, comptime k: comptime_int) !void {
+        fn ensureCodifferential(self: *Self, comptime k: comptime_int) !void {
             if (k <= 0 or k > MeshType.topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no codifferential degree {d} on a {d}-dimensional mesh",
@@ -276,21 +261,14 @@ pub fn OperatorContext(comptime MeshType: type) type {
             }
         }
 
-        pub fn codifferential(self: *Self, comptime k: comptime_int) *const codifferential_mod.AssembledCodifferential(
+        pub fn codifferential(self: *Self, comptime k: comptime_int) !*const codifferential_mod.AssembledCodifferential(
             cochain.Cochain(MeshType, k, cochain.Primal),
         ) {
-            if (k <= 0 or k > MeshType.topological_dimension) {
-                @compileError(std.fmt.comptimePrint(
-                    "no codifferential degree {d} on a {d}-dimensional mesh",
-                    .{ k, MeshType.topological_dimension },
-                ));
-            }
-            std.debug.assert(self.codifferentials[k - 1] != null);
+            try self.ensureCodifferential(k);
             return &self.codifferentials[k - 1].?;
         }
 
-        /// Ensure Δₖ is assembled and available for repeated application.
-        pub fn withLaplacian(self: *Self, comptime k: comptime_int) !void {
+        fn ensureLaplacian(self: *Self, comptime k: comptime_int) !void {
             if (k < 0 or k > MeshType.topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
                     "no Laplacian degree {d} on a {d}-dimensional mesh",
@@ -303,18 +281,11 @@ pub fn OperatorContext(comptime MeshType: type) type {
             }
         }
 
-        /// Access an assembled Δₖ. The operator must already have been requested
-        /// via `withLaplacian(k)`.
-        pub fn laplacian(self: *Self, comptime k: comptime_int) *const laplacian_mod.AssembledLaplacian(
+        /// Access an assembled Δₖ, assembling it on first use.
+        pub fn laplacian(self: *Self, comptime k: comptime_int) !*const laplacian_mod.AssembledLaplacian(
             cochain.Cochain(MeshType, k, cochain.Primal),
         ) {
-            if (k < 0 or k > MeshType.topological_dimension) {
-                @compileError(std.fmt.comptimePrint(
-                    "no Laplacian degree {d} on a {d}-dimensional mesh",
-                    .{ k, MeshType.topological_dimension },
-                ));
-            }
-            std.debug.assert(self.laplacians[k] != null);
+            try self.ensureLaplacian(k);
             return &self.laplacians[k].?;
         }
     };
@@ -333,17 +304,17 @@ test "OperatorContext deinit releases assembled operator storage" {
         const operator_context = try OperatorContext(Mesh2D).init(allocator, &mesh);
         defer operator_context.deinit();
 
-        try operator_context.withExteriorDerivative(cochain.Primal, 0);
-        try operator_context.withExteriorDerivative(cochain.Primal, 1);
-        try operator_context.withExteriorDerivative(cochain.Dual, 0);
-        try operator_context.withHodgeStar(0);
-        try operator_context.withHodgeStar(1);
-        try operator_context.withHodgeStar(2);
-        try operator_context.withHodgeStarInverse(1);
-        try operator_context.withCodifferential(1);
-        try operator_context.withLaplacian(0);
-        try operator_context.withLaplacian(1);
-        try operator_context.withLaplacian(2);
+        _ = try operator_context.exteriorDerivative(cochain.Primal, 0);
+        _ = try operator_context.exteriorDerivative(cochain.Primal, 1);
+        _ = try operator_context.exteriorDerivative(cochain.Dual, 0);
+        _ = try operator_context.hodgeStar(0);
+        _ = try operator_context.hodgeStar(1);
+        _ = try operator_context.hodgeStar(2);
+        _ = try operator_context.hodgeStarInverse(1);
+        _ = try operator_context.codifferential(1);
+        _ = try operator_context.laplacian(0);
+        _ = try operator_context.laplacian(1);
+        _ = try operator_context.laplacian(2);
     }
 
     try testing.expect(gpa.deinit() == .ok);

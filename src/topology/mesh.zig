@@ -1669,7 +1669,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
 
         const operator_context = try context_mod.OperatorContext(Mesh(2, 2)).init(allocator, &mesh);
         defer operator_context.deinit();
-        try operator_context.withLaplacian(0);
+        _ = try operator_context.laplacian(0);
 
         const PrimalC0 = cochain_mod.Cochain(Mesh(2, 2), 0, cochain_mod.Primal);
 
@@ -1679,7 +1679,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = 42.0;
 
-            var result = try operator_context.laplacian(0).apply(allocator, omega);
+            var result = try (try operator_context.laplacian(0)).apply(allocator, omega);
             defer result.deinit(allocator);
 
             for (result.values) |v| {
@@ -1693,7 +1693,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
             defer omega.deinit(allocator);
             for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
-            var lap_omega = try operator_context.laplacian(0).apply(allocator, omega);
+            var lap_omega = try (try operator_context.laplacian(0)).apply(allocator, omega);
             defer lap_omega.deinit(allocator);
 
             const dual_areas = mesh.vertices.slice().items(.dual_volume);
