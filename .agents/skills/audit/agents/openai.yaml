@@ -1,4 +1,4 @@
 interface:
   display_name: "Audit"
   short_description: "Run all audit lenses and consolidate the findings"
-  default_prompt: "Run the full audit workflow for this repo, coordinating safety, style, performance, and test analysis into one concise report."
+  default_prompt: "Run the full $audit workflow for this repo, coordinating safety, style, cleanup, performance, and test analysis into one concise report."

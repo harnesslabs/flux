@@ -9,10 +9,10 @@ const cg = flux.math.cg;
 const exterior_derivative = flux.operators.exterior_derivative;
 const hodge_star = flux.operators.hodge_star;
 
-pub const ReferenceMesh = flux.Mesh(2, 2);
-pub const EmbeddedMesh = flux.Mesh(3, 2);
-pub const VertexField = flux.Cochain(ReferenceMesh, 0, flux.Primal);
-pub const EdgeField = flux.Cochain(ReferenceMesh, 1, flux.Primal);
+pub const ReferenceMesh = flux.topology.Mesh(2, 2);
+pub const EmbeddedMesh = flux.topology.Mesh(3, 2);
+pub const VertexField = flux.forms.Cochain(ReferenceMesh, 0, flux.forms.Primal);
+pub const EdgeField = flux.forms.Cochain(ReferenceMesh, 1, flux.forms.Primal);
 pub const Metric2D = hodge_star.Metric(ReferenceMesh, .riemannian);
 
 pub const Config = struct {

@@ -126,8 +126,8 @@ Development is organized into **epochs** (~1 month), **milestones** (~1–2 week
 /status         Live snapshot of current milestone progress — open/closed issues,
                 acceptance criterion status, and recommended next action
 
-/audit          Run all four code quality lenses in parallel (or individually):
-                /audit-safety, /audit-style, /audit-perf, /audit-tests
+/audit          Run all five code quality lenses in parallel (or individually):
+                /audit-safety, /audit-style, /audit-cleanup, /audit-perf, /audit-tests
 ```
 
 These skills are available in [Claude Code](https://claude.ai/claude-code). Run any of them from the project root.

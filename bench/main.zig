@@ -23,11 +23,11 @@ const micro_benchmark_method_version: u32 = 3;
 /// Version for arithmetic scalar-vs-default comparisons after switching to calibrated samples.
 const arithmetic_benchmark_method_version: u32 = 2;
 
-const Mesh2D = flux.Mesh(2, 2);
-const PrimalC0 = flux.Cochain(Mesh2D, 0, flux.Primal);
-const PrimalC1 = flux.Cochain(Mesh2D, 1, flux.Primal);
-const PrimalC2 = flux.Cochain(Mesh2D, 2, flux.Primal);
-const OperatorContext2D = flux.OperatorContext(Mesh2D);
+const Mesh2D = flux.topology.Mesh(2, 2);
+const PrimalC0 = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
+const PrimalC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Primal);
+const PrimalC2 = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
+const OperatorContext2D = flux.operators.context.OperatorContext(Mesh2D);
 const MaxwellState2D = maxwell.State(Mesh2D);
 const ArithmeticMesh = struct {
     pub const embedding_dimension = 2;
@@ -58,7 +58,7 @@ const ArithmeticMesh = struct {
         };
     }
 };
-const ArithmeticC1 = flux.Cochain(ArithmeticMesh, 1, flux.Primal);
+const ArithmeticC1 = flux.forms.Cochain(ArithmeticMesh, 1, flux.forms.Primal);
 
 // ── Configuration ───────────────────────────────────────────────────────
 
@@ -201,8 +201,8 @@ const BenchmarkContext = struct {
         maxwell.project_te10_b(cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
-        try operator_context.withExteriorDerivative(flux.Primal, 0);
-        try operator_context.withExteriorDerivative(flux.Primal, 1);
+        try operator_context.withExteriorDerivative(flux.forms.Primal, 0);
+        try operator_context.withExteriorDerivative(flux.forms.Primal, 1);
         try operator_context.withHodgeStar(0);
         try operator_context.withHodgeStar(1);
         try operator_context.withHodgeStar(2);
@@ -558,13 +558,13 @@ fn stdoutWriter() @TypeOf((std.fs.File{ .handle = std.posix.STDOUT_FILENO }).dep
 
 /// d₀: exterior derivative on 0-forms (sparse matrix–vector multiply).
 fn benchExteriorDerivativeD0(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 0).apply(ctx.allocator, ctx.c0) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.forms.Primal, 0).apply(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
 /// d₁: exterior derivative on 1-forms.
 fn benchExteriorDerivativeD1(ctx: *BenchmarkContext) void {
-    var result = ctx.operator_context.exteriorDerivative(flux.Primal, 1).apply(ctx.allocator, ctx.c1) catch unreachable;
+    var result = ctx.operator_context.exteriorDerivative(flux.forms.Primal, 1).apply(ctx.allocator, ctx.c1) catch unreachable;
     result.deinit(ctx.allocator);
 }
 
@@ -588,7 +588,7 @@ fn benchHodgeStar2(ctx: *BenchmarkContext) void {
 
 /// ★⁻¹₁: inverse Whitney Hodge star via preconditioned CG solve.
 fn benchHodgeStarInverse1(ctx: *BenchmarkContext) void {
-    const DualC1 = flux.Cochain(Mesh2D, 1, flux.Dual);
+    const DualC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Dual);
     var dual = DualC1.init(ctx.allocator, ctx.mesh) catch unreachable;
     defer dual.deinit(ctx.allocator);
     var rng = std.Random.DefaultPrng.init(0xDEAD);

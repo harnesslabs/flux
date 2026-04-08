@@ -5,6 +5,7 @@ const common = @import("examples_common");
 
 const cochain = flux.forms;
 const topology = flux.topology;
+const operator_context_mod = flux.operators.context;
 
 pub const Mesh3D = topology.Mesh(3, 3);
 
@@ -44,7 +45,7 @@ pub fn State(comptime MeshType: type) type {
         B: TwoForm,
         J: OneForm,
         mesh: *const MeshType,
-        operators: *flux.OperatorContext(MeshType),
+        operators: *operator_context_mod.OperatorContext(MeshType),
         timestep: u64,
 
         pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
@@ -57,7 +58,7 @@ pub fn State(comptime MeshType: type) type {
             var current = try OneForm.init(allocator, mesh);
             errdefer current.deinit(allocator);
 
-            const operators = try flux.OperatorContext(MeshType).init(allocator, mesh);
+            const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
             errdefer operators.deinit();
 
             try operators.withExteriorDerivative(cochain.Primal, 1);
@@ -484,7 +485,7 @@ fn compute_tm110_eigenvalue(
     var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, nx, ny, nz, width, height, depth);
     defer mesh.deinit(allocator);
 
-    const operator_context = try flux.OperatorContext(Mesh3D).init(allocator, &mesh);
+    const operator_context = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, &mesh);
     defer operator_context.deinit();
     try operator_context.withExteriorDerivative(cochain.Primal, 1);
     try operator_context.withHodgeStar(1);

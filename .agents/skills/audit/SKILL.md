@@ -1,9 +1,10 @@
 ---
 name: audit
 description: Run all four audit lenses in parallel and consolidate the findings for this repository or a selected component.
+description: Run all five audit lenses in parallel and consolidate the findings for this repository or a selected component.
 ---
 
-Run all four audit lenses in parallel and consolidate the results.
+Run all five audit lenses in parallel and consolidate the results.
 
 Usage: /audit [component]
 
@@ -11,12 +12,13 @@ If a component is specified (e.g., `operators`), pass it to each sub-audit. Othe
 
 ## Execution
 
-Spawn four agents in parallel, one for each audit lens:
+Spawn five agents in parallel, one for each audit lens:
 
 1. **Safety** — run `/audit-safety` (assertions, bounds, memory, numerical safety)
 2. **Style** — run `/audit-style` (naming, dead code, stale references, duplication)
-3. **Performance** — run `/audit-perf` (layout, allocations, algorithmic efficiency)
-4. **Tests** — run `/audit-tests` (coverage, property test quality, redundancy)
+3. **Cleanup** — run `/audit-cleanup` (API sprawl, indirection, shims, deduplication, structure)
+4. **Performance** — run `/audit-perf` (layout, allocations, algorithmic efficiency)
+5. **Tests** — run `/audit-tests` (coverage, property test quality, redundancy)
 
 Each agent should:
 - Read `project/components.md` to understand scope
@@ -41,6 +43,10 @@ Date: YYYY-MM-DD
 <summary>
 <top findings>
 
+### Cleanup
+<summary>
+<top findings>
+
 ### Performance
 <summary>
 <top findings>
@@ -59,7 +65,7 @@ Date: YYYY-MM-DD
 ```
 
 Present the consolidated report to the user. Ask which findings they want filed as GitHub issues. For approved findings, create issues with:
-- `type/bug` for safety criticals, `type/refactor` for style, `type/perf` for performance, `type/test` for test gaps
+- `type/bug` for safety criticals, `type/refactor` for style or cleanup, `type/perf` for performance, `type/test` for test gaps
 - Appropriate `domain/` label from the component
 - `priority/high` for criticals, `priority/medium` for warnings
 

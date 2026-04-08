@@ -3,12 +3,13 @@ const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
 
-pub const Mesh2D = flux.Mesh(2, 2);
-pub const VertexVorticity = flux.Cochain(Mesh2D, 0, flux.Primal);
-pub const FaceVorticity = flux.Cochain(Mesh2D, 2, flux.Primal);
-pub const FaceTracer = flux.Cochain(Mesh2D, 2, flux.Primal);
+pub const Mesh2D = flux.topology.Mesh(2, 2);
+pub const VertexVorticity = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
+pub const FaceVorticity = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
+pub const FaceTracer = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 const poisson = flux.operators.poisson;
 const flux_io = flux.io;
+const operator_context_mod = flux.operators.context;
 
 const Vec2 = [2]f64;
 
@@ -49,7 +50,7 @@ pub const State = struct {
     };
 
     mesh: *const Mesh2D,
-    operators: *flux.OperatorContext(Mesh2D),
+    operators: *operator_context_mod.OperatorContext(Mesh2D),
     stream_function: VertexVorticity,
     vorticity: FaceVorticity,
     tracer: FaceTracer,
@@ -66,7 +67,7 @@ pub const State = struct {
         var tracer = try FaceTracer.init(allocator, mesh);
         errdefer tracer.deinit(allocator);
 
-        const operators = try flux.OperatorContext(Mesh2D).init(allocator, mesh);
+        const operators = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, mesh);
         errdefer operators.deinit();
         try operators.withLaplacian(0);
 
