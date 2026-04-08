@@ -318,7 +318,7 @@ pub fn project_tm110_b(
     }
 }
 
-fn seedTm110Mode(
+pub fn seedTm110Mode(
     allocator: std.mem.Allocator,
     state: *MaxwellState3D,
     dt: f64,
@@ -437,7 +437,7 @@ pub fn runDriver(allocator: std.mem.Allocator, config: Config) !void {
     }
 }
 
-fn makeCavityMesh(allocator: std.mem.Allocator, config: Config) !Mesh3D {
+pub fn makeCavityMesh(allocator: std.mem.Allocator, config: Config) !Mesh3D {
     return Mesh3D.uniform_tetrahedral_grid(
         allocator,
         config.nx,
@@ -464,7 +464,7 @@ fn seedClosedMagneticField(allocator: std.mem.Allocator, state: *MaxwellState3D)
     @memcpy(state.B.values, exact_flux.values);
 }
 
-fn divergenceNorm(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
+pub fn divergenceNorm(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
     var divergence = try state.operators.exteriorDerivative(cochain.Primal, 2).apply(allocator, state.B);
     defer divergence.deinit(allocator);
     return std.math.sqrt(divergence.norm_squared());
