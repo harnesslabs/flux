@@ -110,7 +110,7 @@ pub const Series = struct {
     ///     const Renderer = struct {
     ///         state: *const State,
     ///         pub fn render(self: @This(), a: Allocator, w: anytype) !void {
-    ///             try flux.io.write(w, ..., self.state.mesh.*, ...);
+    ///             try flux.io.write(w, self.state.mesh.*, ..., ...);
     ///         }
     ///     };
     ///     try series.capture(time, Renderer{ .state = &state });

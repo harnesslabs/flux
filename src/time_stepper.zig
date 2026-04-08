@@ -99,10 +99,15 @@ pub fn TimeStepStrategy(comptime S: type) void {
 /// Step counting is the strategy's responsibility (via `state.timestep`
 /// or equivalent) — the wrapper does not duplicate it.
 pub fn TimeStepper(comptime Strategy: type) type {
+    if (@hasDecl(Strategy, "is_time_stepper")) {
+        @compileError("TimeStepper cannot wrap another TimeStepper; pass the underlying strategy directly");
+    }
+
     // Gate: the strategy must satisfy the concept.
     comptime TimeStepStrategy(Strategy);
 
     return struct {
+        pub const is_time_stepper = true;
         /// The simulation state type, forwarded from the strategy.
         pub const State = Strategy.State;
 

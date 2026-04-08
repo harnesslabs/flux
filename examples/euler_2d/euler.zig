@@ -69,7 +69,7 @@ pub const State = struct {
 
         const operators = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, mesh);
         errdefer operators.deinit();
-        try operators.withLaplacian(0);
+        _ = try operators.laplacian(0);
 
         const face_velocity = try allocator.alloc(Vec2, mesh.num_faces());
         errdefer allocator.free(face_velocity);
@@ -219,7 +219,7 @@ const EulerRenderer = struct {
             .{ .name = "tracer", .values = self.state.tracer.values },
             .{ .name = "velocity", .values = velocity_values, .num_components = 3 },
         };
-        try flux_io.write(writer, 2, 2, self.state.mesh.*, &point_data, &cell_data);
+        try flux_io.write(writer, self.state.mesh.*, &point_data, &cell_data);
     }
 };
 

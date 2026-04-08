@@ -177,7 +177,7 @@ test "δd via chain matches laplacian on 0-forms" {
 
     const operator_context = try context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
-    try operator_context.withLaplacian(0);
+    _ = try operator_context.laplacian(0);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_C049);
 
@@ -187,7 +187,7 @@ test "δd via chain matches laplacian on 0-forms" {
         for (omega.values) |*v| v.* = rng.random().float(f64) * 200.0 - 100.0;
 
         // Via assembled operator context
-        var lap = try operator_context.laplacian(0).apply(allocator, omega);
+        var lap = try (try operator_context.laplacian(0)).apply(allocator, omega);
         defer lap.deinit(allocator);
 
         // Via chain: d → ★ → d̃ → ★⁻¹ (which is ★⁻¹ ∘ d̃ ∘ ★ ∘ d = δd)

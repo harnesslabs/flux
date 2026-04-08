@@ -198,8 +198,6 @@ const Maxwell2DRenderer = struct {
         try flux_io.write_fields(
             allocator,
             writer,
-            Mesh2D.embedding_dimension,
-            Mesh2D.topological_dimension,
             self.state.mesh.*,
             self.state.E.values,
             self.state.B.values,

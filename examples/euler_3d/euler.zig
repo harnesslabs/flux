@@ -55,10 +55,10 @@ pub const State = struct {
 
         const operators = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, mesh);
         errdefer operators.deinit();
-        try operators.withCodifferential(2);
-        try operators.withCodifferential(3);
-        try operators.withExteriorDerivative(flux.forms.Primal, 1);
-        try operators.withLaplacian(1);
+        _ = try operators.codifferential(2);
+        _ = try operators.codifferential(3);
+        _ = try operators.exteriorDerivative(flux.forms.Primal, 1);
+        _ = try operators.laplacian(1);
 
         const boundary_velocity = try allocator.alloc(f64, mesh.num_edges());
         errdefer allocator.free(boundary_velocity);
@@ -118,12 +118,12 @@ pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *State) !void {
         value.* = field[0] * tangent[0] + field[1] * tangent[1] + field[2] * tangent[2];
     }
 
-    var vorticity = try state.operators.exteriorDerivative(flux.forms.Primal, 1).apply(allocator, state.velocity);
+    var vorticity = try (try state.operators.exteriorDerivative(flux.forms.Primal, 1)).apply(allocator, state.velocity);
     defer vorticity.deinit(allocator);
     @memcpy(state.vorticity.values, vorticity.values);
     @memcpy(state.boundary_velocity, state.velocity.values);
 
-    var forcing = try state.operators.laplacian(1).apply(allocator, state.velocity);
+    var forcing = try (try state.operators.laplacian(1)).apply(allocator, state.velocity);
     defer forcing.deinit(allocator);
     @memcpy(state.velocity_forcing, forcing.values);
 }
@@ -149,7 +149,7 @@ pub fn step(allocator: std.mem.Allocator, state: *State, dt: f64) !void {
     _ = dt;
     try recoverVelocityFromVorticity(allocator, state);
 
-    var vorticity = try state.operators.exteriorDerivative(flux.forms.Primal, 1).apply(allocator, state.velocity);
+    var vorticity = try (try state.operators.exteriorDerivative(flux.forms.Primal, 1)).apply(allocator, state.velocity);
     defer vorticity.deinit(allocator);
     @memcpy(state.vorticity.values, vorticity.values);
 
@@ -159,7 +159,7 @@ pub fn step(allocator: std.mem.Allocator, state: *State, dt: f64) !void {
     // The seeded reference mode is intentionally steady: we exercise the
     // helical top-form and transport residual assembly without claiming a full
     // nonlinear 3D closure that the current operator stack does not yet support.
-    var transport = try state.operators.codifferential(3).apply(allocator, advection_density);
+    var transport = try (try state.operators.codifferential(3)).apply(allocator, advection_density);
     defer transport.deinit(allocator);
 }
 
@@ -310,8 +310,6 @@ fn writeSnapshot(allocator: std.mem.Allocator, writer: anytype, state: *const St
 
     try flux.io.write(
         writer,
-        Mesh3D.embedding_dimension,
-        Mesh3D.topological_dimension,
         state.mesh.*,
         &.{},
         &cell_data,
