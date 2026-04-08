@@ -3,11 +3,12 @@ const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
 
-pub const Mesh2D = flux.Mesh(2, 2);
-pub const VertexField = flux.Cochain(Mesh2D, 0, flux.Primal);
+pub const Mesh2D = flux.topology.Mesh(2, 2);
+pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
 const flux_io = flux.io;
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
+const operator_context_mod = flux.operators.context;
 
 const convergence_time = 0.02;
 
@@ -58,7 +59,7 @@ const HeatSystem = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         mesh: *const Mesh2D,
-        operator_context: *flux.OperatorContext(Mesh2D),
+        operator_context: *operator_context_mod.OperatorContext(Mesh2D),
         dt: f64,
     ) !HeatSystem {
         try operator_context.withLaplacian(0);
@@ -185,7 +186,7 @@ fn simulateCase(
     var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
-    const operator_context = try flux.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
 
     const total_time = final_time_override orelse (@as(f64, @floatFromInt(config.steps)) * config.dt());
@@ -433,7 +434,7 @@ test "heat example preserves homogeneous Dirichlet boundary values" {
 
     var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
-    const operator_context = try flux.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
 
     const dt = config.dt();

@@ -6,11 +6,12 @@ const common = @import("examples_common");
 const observers = flux.operators.observers;
 const poisson = flux.operators.poisson;
 const wedge_product = flux.operators.wedge_product;
+const operator_context_mod = flux.operators.context;
 
-pub const Mesh3D = flux.Mesh(3, 3);
-pub const Velocity = flux.Cochain(Mesh3D, 1, flux.Primal);
-pub const Vorticity = flux.Cochain(Mesh3D, 2, flux.Primal);
-pub const Potential = flux.Cochain(Mesh3D, 2, flux.Primal);
+pub const Mesh3D = flux.topology.Mesh(3, 3);
+pub const Velocity = flux.forms.Cochain(Mesh3D, 1, flux.forms.Primal);
+pub const Vorticity = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
+pub const Potential = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
 
 pub const Config = struct {
     steps: u32 = 1000,
@@ -39,7 +40,7 @@ pub const RunResult = struct {
 
 pub const State = struct {
     mesh: *const Mesh3D,
-    operators: *flux.OperatorContext(Mesh3D),
+    operators: *operator_context_mod.OperatorContext(Mesh3D),
     velocity: Velocity,
     vorticity: Vorticity,
     boundary_velocity: []f64,
@@ -52,11 +53,11 @@ pub const State = struct {
         var vorticity = try Vorticity.init(allocator, mesh);
         errdefer vorticity.deinit(allocator);
 
-        const operators = try flux.OperatorContext(Mesh3D).init(allocator, mesh);
+        const operators = try operator_context_mod.OperatorContext(Mesh3D).init(allocator, mesh);
         errdefer operators.deinit();
         try operators.withCodifferential(2);
         try operators.withCodifferential(3);
-        try operators.withExteriorDerivative(flux.Primal, 1);
+        try operators.withExteriorDerivative(flux.forms.Primal, 1);
         try operators.withLaplacian(1);
 
         const boundary_velocity = try allocator.alloc(f64, mesh.num_edges());
@@ -117,7 +118,7 @@ pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *State) !void {
         value.* = field[0] * tangent[0] + field[1] * tangent[1] + field[2] * tangent[2];
     }
 
-    var vorticity = try state.operators.exteriorDerivative(flux.Primal, 1).apply(allocator, state.velocity);
+    var vorticity = try state.operators.exteriorDerivative(flux.forms.Primal, 1).apply(allocator, state.velocity);
     defer vorticity.deinit(allocator);
     @memcpy(state.vorticity.values, vorticity.values);
     @memcpy(state.boundary_velocity, state.velocity.values);
@@ -148,7 +149,7 @@ pub fn step(allocator: std.mem.Allocator, state: *State, dt: f64) !void {
     _ = dt;
     try recoverVelocityFromVorticity(allocator, state);
 
-    var vorticity = try state.operators.exteriorDerivative(flux.Primal, 1).apply(allocator, state.velocity);
+    var vorticity = try state.operators.exteriorDerivative(flux.forms.Primal, 1).apply(allocator, state.velocity);
     defer vorticity.deinit(allocator);
     @memcpy(state.vorticity.values, vorticity.values);
 

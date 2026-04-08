@@ -7,7 +7,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 const maxwell = @import("maxwell.zig");
 
-const Mesh2D = flux.Mesh(2, 2);
+const Mesh2D = flux.topology.Mesh(2, 2);
 const MaxwellState = maxwell.State(Mesh2D);
 const PointDipole = maxwell.PointDipole(Mesh2D);
 

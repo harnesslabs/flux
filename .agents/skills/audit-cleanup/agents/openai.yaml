@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Cleanup"
+  short_description: "Audit simplification, API, and structural cleanup"
+  default_prompt: "Use $audit-cleanup to audit this repo for unnecessary indirection, duplication, public API sprawl, shims, and structural cleanup opportunities."

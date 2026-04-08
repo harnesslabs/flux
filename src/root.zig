@@ -11,16 +11,17 @@
 //! const flux = @import("flux");
 //!
 //! // Build a mesh
-//! var mesh = try flux.Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
-//! const operators = try flux.OperatorContext(flux.Mesh(2, 2)).init(allocator, &mesh);
+//! const Mesh2D = flux.topology.Mesh(2, 2);
+//! var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+//! const operators = try flux.operators.context.OperatorContext(Mesh2D).init(allocator, &mesh);
 //! defer operators.deinit();
-//! try operators.withExteriorDerivative(flux.Primal, 0);
+//! try operators.withExteriorDerivative(flux.forms.Primal, 0);
 //!
 //! // Create a 0-cochain (scalar field on vertices)
-//! var omega = try flux.Cochain(flux.Mesh(2, 2), 0, flux.Primal).init(allocator, &mesh);
+//! var omega = try flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal).init(allocator, &mesh);
 //!
 //! // Apply operators with compile-time type safety
-//! var d_omega = try operators.exteriorDerivative(flux.Primal, 0).apply(allocator, omega);
+//! var d_omega = try operators.exteriorDerivative(flux.forms.Primal, 0).apply(allocator, omega);
 //! ```
 //!
 //! ## Modules
@@ -83,76 +84,6 @@ pub const integrators = struct {
 pub const concepts = struct {
     pub const mesh = @import("concepts/mesh.zig");
 };
-
-// ── Comptime concepts ───────────────────────────────────────────────────
-// Validators that enforce compile-time contracts on user-defined types.
-// Each is a function called at comptime that produces @compileError on
-// non-conformance.
-
-/// Comptime concept: validate that a type satisfies the TimeStepStrategy contract.
-pub const TimeStepStrategy = time_stepper.TimeStepStrategy;
-
-/// Generic time integrator — wraps any conforming TimeStepStrategy.
-pub const TimeStepper = time_stepper.TimeStepper;
-
-/// Comptime concept: validate that a type satisfies the Mesh contract.
-/// Requires dimension, topological_dimension, entity count accessors, and boundary().
-pub const MeshConcept = concepts.mesh.MeshConcept;
-
-/// Generic leapfrog integrator — composes two symplectic half-steps.
-pub const Leapfrog = integrators.leapfrog.Leapfrog;
-
-/// Generic forward Euler integrator — single explicit step.
-pub const ForwardEuler = integrators.forward_euler.ForwardEuler;
-
-// ── Top-level convenience re-exports ────────────────────────────────────
-// These allow `const flux = @import("flux"); flux.Cochain(...)` without
-// navigating the module hierarchy.
-
-/// Discrete k-form (cochain) on a simplicial mesh — assigns one real value
-/// per k-cell. Parameterized on mesh type, degree k, and duality (Primal/Dual).
-pub const Cochain = forms.Cochain;
-
-/// Marker: cochain lives on the primal complex.
-pub const Primal = forms.Primal;
-
-/// Marker: cochain lives on the dual complex.
-pub const Dual = forms.Dual;
-
-/// Simplicial mesh parameterized on `embedding_dimension` and `topological_dimension`.
-pub const Mesh = topology.Mesh;
-
-/// Standalone vertex record type constructor for a mesh embedding dimension.
-pub const Vertex = topology.Vertex;
-
-/// Standalone k-simplex record type constructor for a given mesh shape.
-pub const Simplex = topology.Simplex;
-
-/// Per-mesh owner of assembled DEC operators requested by a given problem.
-pub const OperatorContext = operators.context.OperatorContext;
-pub const BoundaryCondition = operators.boundary_conditions.BoundaryCondition;
-pub const Dirichlet = operators.boundary_conditions.Dirichlet;
-pub const PEC = operators.boundary_conditions.PEC;
-pub const NoSlip = operators.boundary_conditions.NoSlip;
-pub const Periodic = operators.boundary_conditions.Periodic;
-
-/// Apply a sequence of DEC operators with automatic intermediate allocation
-/// management. Degree/duality mismatches are compile errors.
-pub const chain = operators.compose.chain;
-
-/// Primal-primal discrete wedge product induced by Whitney interpolation and
-/// de Rham projection.
-pub const wedge = operators.wedge_product.wedge;
-
-pub const Observation = operators.observers.Observation;
-pub const SignedCell = operators.observers.SignedCell;
-pub const EnergyObserver = operators.observers.EnergyObserver;
-pub const L2NormObserver = operators.observers.L2NormObserver;
-pub const MaxNormObserver = operators.observers.MaxNormObserver;
-pub const CirculationObserver = operators.observers.CirculationObserver;
-pub const DivergenceNormObserver = operators.observers.DivergenceNormObserver;
-pub const HelicityObserver = operators.observers.HelicityObserver;
-pub const evaluateAllObservers = operators.observers.evaluateAll;
 
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
