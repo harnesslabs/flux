@@ -36,10 +36,20 @@ If a component is specified, scope to that component per `project/components.md`
 ### Structural consistency
 - Similar constructs should follow similar patterns (e.g., all operator types should have the same method shape)
 - Public API should be consistent in style (all snake_case, consistent parameter ordering)
+- Nested `switch` / `if` ladders over semantic axes like `(dimension, degree)` that may indicate a missing derived definition or comptime formulation rather than a true need for casework
+- Generic-looking APIs whose implementation style contradicts the abstraction they present
 
 ### Formatting
 - `zig fmt` compliance (should be caught by CI, but verify)
 - Consistent file organization (imports, types, functions, tests)
+
+## Pressure tests
+
+Before concluding that a style issue is only cosmetic, ask:
+
+- Is this "generic" function actually generic, or is it a manually enumerated case table?
+- Could the implementation be written once in terms of the native structure (incidence, recursion, comptime relation) instead of today’s supported cases?
+- Does this control flow naturally extend when the next degree/dimension/variant is added, or does it require editing multiple branches?
 
 ## Output format
 
