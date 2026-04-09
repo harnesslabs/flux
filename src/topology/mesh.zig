@@ -240,13 +240,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             errdefer allocator.free(mask);
             @memset(mask, false);
 
-            if (topological_dimension == 2) {
-                try fillBoundaryMask2D(self, allocator, k, mask);
-            } else if (topological_dimension == 3) {
-                try fillBoundaryMask3D(self, allocator, k, mask);
-            } else {
-                unreachable;
-            }
+            try fillBoundaryMask(self, allocator, k, mask);
 
             return mask;
         }
@@ -275,90 +269,58 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return indices;
         }
 
-        fn fillBoundaryMask2D(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int, mask: []bool) !void {
-            switch (k) {
-                0 => {
-                    const edge_vertices = self.simplices(1).items(.vertices);
-                    for (self.boundary_edges) |edge_idx| {
-                        const edge = edge_vertices[edge_idx];
-                        mask[edge[0]] = true;
-                        mask[edge[1]] = true;
-                    }
-                },
-                1 => {
-                    for (self.boundary_edges) |edge_idx| {
-                        mask[edge_idx] = true;
-                    }
-                },
-                2 => {
-                    const edge_mask = try self.boundary_mask(allocator, 1);
-                    defer allocator.free(edge_mask);
+        fn fillBoundaryMask(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int, mask: []bool) !void {
+            if (k == topological_dimension - 1) {
+                try fillCodimensionOneBoundaryMask(self, allocator, mask);
+                return;
+            }
 
-                    for (0..self.num_faces()) |face_idx_usize| {
-                        const row = self.boundary(2).row(@intCast(face_idx_usize));
-                        for (row.cols) |edge_idx| {
-                            if (!edge_mask[edge_idx]) continue;
-                            mask[face_idx_usize] = true;
-                            break;
-                        }
+            if (k < topological_dimension - 1) {
+                const parent_mask = try self.boundary_mask(allocator, k + 1);
+                defer allocator.free(parent_mask);
+
+                const coboundary = self.boundary(k + 1);
+                for (parent_mask, 0..) |is_boundary, parent_idx_usize| {
+                    if (!is_boundary) continue;
+                    const row = coboundary.row(@intCast(parent_idx_usize));
+                    for (row.cols) |cell_idx| {
+                        mask[cell_idx] = true;
                     }
-                },
-                else => unreachable,
+                }
+                return;
+            }
+
+            const boundary_subcell_mask = try self.boundary_mask(allocator, k - 1);
+            defer allocator.free(boundary_subcell_mask);
+
+            const boundary_operator = self.boundary(k);
+            for (0..self.num_cells(k)) |cell_idx_usize| {
+                const row = boundary_operator.row(@intCast(cell_idx_usize));
+                for (row.cols) |subcell_idx| {
+                    if (!boundary_subcell_mask[subcell_idx]) continue;
+                    mask[cell_idx_usize] = true;
+                    break;
+                }
             }
         }
 
-        fn fillBoundaryMask3D(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int, mask: []bool) !void {
-            switch (k) {
-                0 => {
-                    const face_mask = try self.boundary_mask(allocator, 2);
-                    defer allocator.free(face_mask);
+        fn fillCodimensionOneBoundaryMask(self: *const Self, allocator: std.mem.Allocator, mask: []bool) !void {
+            const incidence_count = try allocator.alloc(u8, self.num_cells(topological_dimension - 1));
+            defer allocator.free(incidence_count);
+            @memset(incidence_count, 0);
 
-                    const face_vertices = self.simplices(2).items(.vertices);
-                    for (face_mask, 0..) |is_boundary, face_idx| {
-                        if (!is_boundary) continue;
-                        const face = face_vertices[face_idx];
-                        mask[face[0]] = true;
-                        mask[face[1]] = true;
-                        mask[face[2]] = true;
-                    }
-                },
-                1 => {
-                    for (self.boundary_edges) |edge_idx| {
-                        mask[edge_idx] = true;
-                    }
-                },
-                2 => {
-                    const incidence_count = try allocator.alloc(u8, self.num_faces());
-                    defer allocator.free(incidence_count);
-                    @memset(incidence_count, 0);
+            const top_boundary = self.boundary(topological_dimension);
+            for (0..self.num_cells(topological_dimension)) |cell_idx_usize| {
+                const row = top_boundary.row(@intCast(cell_idx_usize));
+                for (row.cols) |subcell_idx| {
+                    incidence_count[subcell_idx] += 1;
+                }
+            }
 
-                    for (0..self.num_tets()) |tet_idx_usize| {
-                        const row = self.boundary(3).row(@intCast(tet_idx_usize));
-                        for (row.cols) |face_idx| {
-                            incidence_count[face_idx] += 1;
-                        }
-                    }
-
-                    for (incidence_count, 0..) |count, face_idx| {
-                        if (count == 1) {
-                            mask[face_idx] = true;
-                        }
-                    }
-                },
-                3 => {
-                    const face_mask = try self.boundary_mask(allocator, 2);
-                    defer allocator.free(face_mask);
-
-                    for (0..self.num_tets()) |tet_idx_usize| {
-                        const row = self.boundary(3).row(@intCast(tet_idx_usize));
-                        for (row.cols) |face_idx| {
-                            if (!face_mask[face_idx]) continue;
-                            mask[tet_idx_usize] = true;
-                            break;
-                        }
-                    }
-                },
-                else => unreachable,
+            for (incidence_count, 0..) |count, cell_idx| {
+                if (count == 1) {
+                    mask[cell_idx] = true;
+                }
             }
         }
 
