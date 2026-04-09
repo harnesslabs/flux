@@ -35,11 +35,7 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 fn applyCommon(cfg: *surface.Config, co: common.Common) void {
-    if (co.steps) |v| cfg.steps = v;
-    if (co.refinement) |v| cfg.refinement = v;
-    if (co.frames) |v| cfg.frames = v;
-    if (co.final_time) |v| cfg.final_time = v;
-    if (co.output_dir) |v| cfg.output_dir = v;
+    common.applySharedFields(cfg, co);
     // diffusion_surface derives dt from final_time / steps; --dt is treated as
     // an override that pins final_time = dt * steps.
     if (co.dt) |dt_value| {

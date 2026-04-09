@@ -108,11 +108,7 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 fn applyCommon(cfg: *Config, co: common.Common) void {
-    if (co.steps) |v| cfg.steps = v;
-    if (co.grid) |v| cfg.grid = v;
-    if (co.domain) |v| cfg.domain = v;
-    if (co.frames) |v| cfg.frames = v;
-    if (co.output_dir) |v| cfg.output_dir = v;
+    common.applySharedFields(cfg, co);
     if (co.dt) |dt_value| {
         // 2D Maxwell derives dt from courant * h. Solve for the courant
         // number that produces the requested dt so dt() stays the single
@@ -150,7 +146,7 @@ fn simulate(
         allocator,
         config.output_dir,
         base_name,
-        common.Plan.fromTotal(config.steps, config.frames),
+        common.Plan.fromFrames(config.steps, config.frames, .{}),
     );
     defer series.deinit();
 
@@ -169,7 +165,7 @@ fn simulate(
         maxwell.apply_pec_boundary(state);
 
         // VTK snapshot.
-        if (series.dueAt(@intCast(step_idx + 1))) {
+        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
             try series.capture(t + time_step, Maxwell2DRenderer{ .state = state });
         }
 

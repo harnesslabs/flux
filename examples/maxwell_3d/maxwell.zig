@@ -27,11 +27,6 @@ pub const Config = struct {
         const dz = self.depth / @as(f64, @floatFromInt(self.nz));
         return @min(dx, @min(dy, dz));
     }
-
-    fn snapshotCount(self: Config) u32 {
-        if (self.output_dir == null or self.output_interval == 0) return 0;
-        return self.steps / self.output_interval;
-    }
 };
 
 pub fn State(comptime MeshType: type) type {
@@ -148,9 +143,9 @@ pub fn runSimulation(
     writer: anytype,
 ) !SimResult {
     const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0)
-        .{ .interval = config.output_interval, .capacity = config.snapshotCount() }
+        common.Plan.fromInterval(config.steps, config.output_interval, .{})
     else
-        .{ .interval = 0, .capacity = 0 };
+        common.Plan.disabled();
 
     var series = try common.Series.init(
         allocator,
@@ -166,7 +161,7 @@ pub fn runSimulation(
     while (step_index < config.steps) : (step_index += 1) {
         try leapfrogStep(allocator, state, config.dt);
 
-        if (series.dueAt(step_index + 1)) {
+        if (series.dueAt(step_index + 1, config.steps)) {
             const t = @as(f64, @floatFromInt(step_index + 1)) * config.dt;
             try series.capture(t, Maxwell3DRenderer{ .state = state });
         }
@@ -190,40 +185,6 @@ const Maxwell3DRenderer = struct {
         try writeSnapshot(allocator, writer, self.state);
     }
 };
-
-fn projectEdgesToTets(
-    allocator: std.mem.Allocator,
-    mesh: *const Mesh3D,
-    edge_values: []const f64,
-) ![]f64 {
-    const tet_count = mesh.num_tets();
-    const output = try allocator.alloc(f64, tet_count);
-    errdefer allocator.free(output);
-    const touched = try allocator.alloc(bool, mesh.num_edges());
-    defer allocator.free(touched);
-
-    for (0..tet_count) |tet_idx_usize| {
-        @memset(touched, false);
-        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
-        var sum: f64 = 0.0;
-        var count: u32 = 0;
-
-        for (tet_row.cols) |face_idx| {
-            const face_row = mesh.boundary(2).row(face_idx);
-            for (face_row.cols) |edge_idx| {
-                if (touched[edge_idx]) continue;
-                touched[edge_idx] = true;
-                sum += @abs(edge_values[edge_idx]);
-                count += 1;
-            }
-        }
-
-        std.debug.assert(count > 0);
-        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(count));
-    }
-
-    return output;
-}
 
 /// Project the analytical TM₁₁₀ cavity electric field onto mesh edges.
 ///
@@ -337,36 +298,15 @@ pub fn seedTm110Mode(
     @memcpy(state.B.values, exact_flux.values);
 }
 
-fn projectFacesToTets(
-    allocator: std.mem.Allocator,
-    mesh: *const Mesh3D,
-    face_values: []const f64,
-) ![]f64 {
-    const tet_count = mesh.num_tets();
-    const output = try allocator.alloc(f64, tet_count);
-    errdefer allocator.free(output);
-
-    for (0..tet_count) |tet_idx_usize| {
-        const tet_row = mesh.boundary(3).row(@intCast(tet_idx_usize));
-        var sum: f64 = 0.0;
-        for (tet_row.cols) |face_idx| {
-            sum += @abs(face_values[face_idx]);
-        }
-        output[tet_idx_usize] = sum / @as(f64, @floatFromInt(tet_row.cols.len));
-    }
-
-    return output;
-}
-
 pub fn writeSnapshot(
     allocator: std.mem.Allocator,
     writer: anytype,
     state: *const MaxwellState3D,
 ) !void {
-    const e_projected = try projectEdgesToTets(allocator, state.mesh, state.E.values);
+    const e_projected = try common.viz.projectEdgesToTets(allocator, state.mesh, state.E.values);
     defer allocator.free(e_projected);
 
-    const b_projected = try projectFacesToTets(allocator, state.mesh, state.B.values);
+    const b_projected = try common.viz.projectFacesToTets(allocator, state.mesh, state.B.values);
     defer allocator.free(b_projected);
 
     const cell_data = [_]flux.io.DataArraySlice{

@@ -157,10 +157,8 @@ fn simulateCase(
     const has_output = config.frames > 0;
     const plan: common.Plan = if (has_output) blk: {
         const interval = outputInterval(config);
-        // +2 capacity: one for the t=0 frame and one to guarantee a final
-        // frame even when the last step is not on an interval boundary.
-        break :blk .{ .interval = interval, .capacity = (config.steps / interval) + 2 };
-    } else .{ .interval = 0, .capacity = 0 };
+        break :blk common.Plan.fromInterval(config.steps, interval, .{ .emit_final = true });
+    } else common.Plan.disabled();
 
     var series = try common.Series.init(
         allocator,
@@ -189,8 +187,7 @@ fn simulateCase(
     for (0..config.steps) |step_idx| {
         const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
         try stepBackwardEuler(&system, state.values, rhs, solution);
-        const last_step = step_idx + 1 == config.steps;
-        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
+        if (series.enabled() and series.dueAt(@intCast(step_idx + 1), config.steps)) {
             initializeState(&mesh, exact, next_time);
             try series.capture(next_time, SurfaceRenderer{
                 .mesh = &mesh,
@@ -249,7 +246,7 @@ fn convergenceConfig(refinement: u32) Config {
 
 fn outputInterval(config: Config) u32 {
     std.debug.assert(config.frames > 0);
-    return @max(1, config.steps / config.frames);
+    return common.framesToInterval(config.steps, config.frames);
 }
 
 fn buildSphereMesh(

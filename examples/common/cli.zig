@@ -35,6 +35,37 @@ pub const Common = struct {
     help: bool = false,
 };
 
+pub fn applySharedFields(cfg: anytype, common: Common) void {
+    if (common.steps) |value| assignIfPresent(cfg, "steps", value);
+    if (common.output_dir) |value| assignIfPresent(cfg, "output_dir", value);
+    if (common.frames) |value| assignIfPresent(cfg, "frames", value);
+    if (common.grid) |value| assignIfPresent(cfg, "grid", value);
+    if (common.domain) |value| assignIfPresent(cfg, "domain", value);
+    if (common.refinement) |value| assignIfPresent(cfg, "refinement", value);
+    if (common.final_time) |value| assignIfPresent(cfg, "final_time", value);
+}
+
+pub fn framesToInterval(total_steps: u32, frames: u32) u32 {
+    if (frames == 0) return 0;
+    return @max(@as(u32, 1), total_steps / frames);
+}
+
+fn assignIfPresent(cfg: anytype, comptime field_name: []const u8, value: anytype) void {
+    const ConfigType = @TypeOf(cfg.*);
+    if (!@hasField(ConfigType, field_name)) return;
+
+    const FieldType = @FieldType(ConfigType, field_name);
+    const ValueType = @TypeOf(value);
+    if (FieldType == ValueType) {
+        @field(cfg, field_name) = value;
+        return;
+    }
+    if (FieldType == ?ValueType) {
+        @field(cfg, field_name) = value;
+        return;
+    }
+}
+
 /// Stateful argument cursor. Holds a slice of argv-style strings and an
 /// index. The parser does not own the storage — the caller (typically
 /// `std.process.argsAlloc`) is responsible for lifetime.

@@ -67,21 +67,10 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 fn applyCommon(cfg: *euler.Config, co: common.Common) void {
-    if (co.steps) |v| cfg.steps = v;
+    common.applySharedFields(cfg, co);
     if (co.dt) |v| cfg.dt = v;
-    // euler_3d's Config stores output_dir as ?[]const u8 (nullable means
-    // "don't write snapshots"). The shared flag is non-optional so we lift
-    // it back into the option here.
-    if (co.output_dir) |v| cfg.output_dir = v;
     if (co.frames) |frames| {
-        // Translate the shared --frames flag into the example's
-        // output_interval semantics so 3D Euler honors the same convention
-        // as 2D simulations.
-        if (frames == 0) {
-            cfg.output_interval = 0;
-        } else {
-            cfg.output_interval = @max(@as(u32, 1), cfg.steps / frames);
-        }
+        cfg.output_interval = common.framesToInterval(cfg.steps, frames);
     }
 }
 

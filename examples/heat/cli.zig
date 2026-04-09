@@ -39,11 +39,7 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 fn applyCommon(cfg: *heat.Config, co: common.Common) void {
-    if (co.steps) |v| cfg.steps = v;
-    if (co.grid) |v| cfg.grid = v;
-    if (co.domain) |v| cfg.domain = v;
-    if (co.frames) |v| cfg.frames = v;
-    if (co.output_dir) |v| cfg.output_dir = v;
+    common.applySharedFields(cfg, co);
     if (co.dt) |v| cfg.dt_override = v;
 }
 

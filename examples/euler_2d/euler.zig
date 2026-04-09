@@ -167,7 +167,7 @@ pub fn run(
         allocator,
         config.output_dir,
         baseName(config.demo),
-        common.Plan.fromTotal(config.steps, config.frames),
+        common.Plan.fromFrames(config.steps, config.frames, .{}),
     );
     defer series.deinit();
 
@@ -175,7 +175,7 @@ pub fn run(
     for (0..config.steps) |step_idx| {
         try step(allocator, &state, dt);
 
-        if (series.dueAt(@intCast(step_idx + 1))) {
+        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
             const t = @as(f64, @floatFromInt(step_idx + 1)) * dt;
             try series.capture(t, EulerRenderer{ .state = &state });
         }

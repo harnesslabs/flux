@@ -8,11 +8,15 @@
 pub const cli = @import("cli.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const progress = @import("progress.zig");
+pub const viz = @import("viz.zig");
 
 pub const Common = cli.Common;
 pub const Parser = cli.Parser;
 pub const ParseError = cli.ParseError;
+pub const applySharedFields = cli.applySharedFields;
+pub const framesToInterval = cli.framesToInterval;
 pub const Plan = snapshot.Plan;
+pub const PlanOptions = snapshot.PlanOptions;
 pub const Series = snapshot.Series;
 pub const ensureDir = snapshot.ensureDir;
 pub const Progress = progress.Progress;

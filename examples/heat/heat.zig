@@ -205,12 +205,11 @@ fn simulateCase(
     // the very last step even when it does not land on an interval boundary.
     const has_output = config.frames > 0;
     const interval: u32 = if (has_output) outputInterval(config) else 0;
-    const capacity: u32 = if (has_output) (config.steps / interval) + 2 else 0;
     var series = try common.Series.init(
         allocator,
         config.output_dir,
         "heat",
-        .{ .interval = interval, .capacity = capacity },
+        if (has_output) common.Plan.fromInterval(config.steps, interval, .{ .emit_final = true }) else common.Plan.disabled(),
     );
     defer series.deinit();
 
@@ -229,8 +228,7 @@ fn simulateCase(
     for (0..config.steps) |step_idx| {
         const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
         try stepBackwardEuler(allocator, &mesh, &heat_system, state.values, reduced_rhs, reduced_solution);
-        const last_step = step_idx + 1 == config.steps;
-        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
+        if (series.enabled() and series.dueAt(@intCast(step_idx + 1), config.steps)) {
             initializeState(&mesh, exact, initial_condition, next_time);
             try series.capture(next_time, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
         }
@@ -288,7 +286,7 @@ fn convergenceConfig(grid: u32) Config {
 
 fn outputInterval(config: Config) u32 {
     std.debug.assert(config.frames > 0);
-    return @max(1, config.steps / config.frames);
+    return common.framesToInterval(config.steps, config.frames);
 }
 
 fn boundaryVertexMask(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]bool {

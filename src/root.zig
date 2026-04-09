@@ -56,7 +56,6 @@ pub const Error = error{
 
 pub const forms = @import("forms/cochain.zig");
 pub const io = @import("io/root.zig");
-pub const obj = @import("io/obj.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");
     pub const cg = @import("math/cg.zig");

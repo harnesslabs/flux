@@ -56,15 +56,10 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 fn applyCommon(cfg: *maxwell.Config, co: common.Common) void {
-    if (co.steps) |v| cfg.steps = v;
+    common.applySharedFields(cfg, co);
     if (co.dt) |v| cfg.dt = v;
-    if (co.output_dir) |v| cfg.output_dir = v;
     if (co.frames) |frames| {
-        if (frames == 0) {
-            cfg.output_interval = 0;
-        } else {
-            cfg.output_interval = @max(@as(u32, 1), cfg.steps / frames);
-        }
+        cfg.output_interval = common.framesToInterval(cfg.steps, frames);
     }
 }
 
