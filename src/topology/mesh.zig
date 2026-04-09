@@ -240,90 +240,12 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             errdefer allocator.free(mask);
             @memset(mask, false);
 
-            switch (topological_dimension) {
-                2 => switch (k) {
-                    0 => {
-                        const edge_vertices = self.simplices(1).items(.vertices);
-                        for (self.boundary_edges) |edge_idx| {
-                            const edge = edge_vertices[edge_idx];
-                            mask[edge[0]] = true;
-                            mask[edge[1]] = true;
-                        }
-                    },
-                    1 => {
-                        for (self.boundary_edges) |edge_idx| {
-                            mask[edge_idx] = true;
-                        }
-                    },
-                    2 => {
-                        const boundary_edge_mask = try self.boundary_mask(allocator, 1);
-                        defer allocator.free(boundary_edge_mask);
-
-                        for (0..self.num_faces()) |face_idx_usize| {
-                            const row = self.boundary(2).row(@intCast(face_idx_usize));
-                            for (row.cols) |edge_idx| {
-                                if (!boundary_edge_mask[edge_idx]) continue;
-                                mask[face_idx_usize] = true;
-                                break;
-                            }
-                        }
-                    },
-                    else => unreachable,
-                },
-                3 => switch (k) {
-                    0 => {
-                        const boundary_face_mask = try self.boundary_mask(allocator, 2);
-                        defer allocator.free(boundary_face_mask);
-
-                        const face_vertices = self.simplices(2).items(.vertices);
-                        for (boundary_face_mask, 0..) |is_boundary, face_idx| {
-                            if (!is_boundary) continue;
-                            const face = face_vertices[face_idx];
-                            mask[face[0]] = true;
-                            mask[face[1]] = true;
-                            mask[face[2]] = true;
-                        }
-                    },
-                    1 => {
-                        for (self.boundary_edges) |edge_idx| {
-                            mask[edge_idx] = true;
-                        }
-                    },
-                    2 => {
-                        const face_count = self.num_faces();
-                        const incidence_count = try allocator.alloc(u8, face_count);
-                        defer allocator.free(incidence_count);
-                        @memset(incidence_count, 0);
-
-                        for (0..self.num_tets()) |tet_idx_usize| {
-                            const row = self.boundary(3).row(@intCast(tet_idx_usize));
-                            for (row.cols) |face_idx| {
-                                incidence_count[face_idx] += 1;
-                            }
-                        }
-
-                        for (incidence_count, 0..) |count, face_idx| {
-                            if (count == 1) {
-                                mask[face_idx] = true;
-                            }
-                        }
-                    },
-                    3 => {
-                        const boundary_face_mask = try self.boundary_mask(allocator, 2);
-                        defer allocator.free(boundary_face_mask);
-
-                        for (0..self.num_tets()) |tet_idx_usize| {
-                            const row = self.boundary(3).row(@intCast(tet_idx_usize));
-                            for (row.cols) |face_idx| {
-                                if (!boundary_face_mask[face_idx]) continue;
-                                mask[tet_idx_usize] = true;
-                                break;
-                            }
-                        }
-                    },
-                    else => unreachable,
-                },
-                else => unreachable,
+            if (topological_dimension == 2) {
+                try fillBoundaryMask2D(self, allocator, k, mask);
+            } else if (topological_dimension == 3) {
+                try fillBoundaryMask3D(self, allocator, k, mask);
+            } else {
+                unreachable;
             }
 
             return mask;
@@ -351,6 +273,93 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             std.debug.assert(write_idx == count);
 
             return indices;
+        }
+
+        fn fillBoundaryMask2D(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int, mask: []bool) !void {
+            switch (k) {
+                0 => {
+                    const edge_vertices = self.simplices(1).items(.vertices);
+                    for (self.boundary_edges) |edge_idx| {
+                        const edge = edge_vertices[edge_idx];
+                        mask[edge[0]] = true;
+                        mask[edge[1]] = true;
+                    }
+                },
+                1 => {
+                    for (self.boundary_edges) |edge_idx| {
+                        mask[edge_idx] = true;
+                    }
+                },
+                2 => {
+                    const edge_mask = try self.boundary_mask(allocator, 1);
+                    defer allocator.free(edge_mask);
+
+                    for (0..self.num_faces()) |face_idx_usize| {
+                        const row = self.boundary(2).row(@intCast(face_idx_usize));
+                        for (row.cols) |edge_idx| {
+                            if (!edge_mask[edge_idx]) continue;
+                            mask[face_idx_usize] = true;
+                            break;
+                        }
+                    }
+                },
+                else => unreachable,
+            }
+        }
+
+        fn fillBoundaryMask3D(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int, mask: []bool) !void {
+            switch (k) {
+                0 => {
+                    const face_mask = try self.boundary_mask(allocator, 2);
+                    defer allocator.free(face_mask);
+
+                    const face_vertices = self.simplices(2).items(.vertices);
+                    for (face_mask, 0..) |is_boundary, face_idx| {
+                        if (!is_boundary) continue;
+                        const face = face_vertices[face_idx];
+                        mask[face[0]] = true;
+                        mask[face[1]] = true;
+                        mask[face[2]] = true;
+                    }
+                },
+                1 => {
+                    for (self.boundary_edges) |edge_idx| {
+                        mask[edge_idx] = true;
+                    }
+                },
+                2 => {
+                    const incidence_count = try allocator.alloc(u8, self.num_faces());
+                    defer allocator.free(incidence_count);
+                    @memset(incidence_count, 0);
+
+                    for (0..self.num_tets()) |tet_idx_usize| {
+                        const row = self.boundary(3).row(@intCast(tet_idx_usize));
+                        for (row.cols) |face_idx| {
+                            incidence_count[face_idx] += 1;
+                        }
+                    }
+
+                    for (incidence_count, 0..) |count, face_idx| {
+                        if (count == 1) {
+                            mask[face_idx] = true;
+                        }
+                    }
+                },
+                3 => {
+                    const face_mask = try self.boundary_mask(allocator, 2);
+                    defer allocator.free(face_mask);
+
+                    for (0..self.num_tets()) |tet_idx_usize| {
+                        const row = self.boundary(3).row(@intCast(tet_idx_usize));
+                        for (row.cols) |face_idx| {
+                            if (!face_mask[face_idx]) continue;
+                            mask[tet_idx_usize] = true;
+                            break;
+                        }
+                    }
+                },
+                else => unreachable,
+            }
         }
 
         pub fn whitney_mass(self: *const Self, comptime k: comptime_int) sparse.CsrMatrix(f64) {
