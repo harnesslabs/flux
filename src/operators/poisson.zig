@@ -40,6 +40,7 @@ pub fn solve_zero_form_dirichlet(
     boundary_values: []const f64,
     config: SolveConfig,
 ) !SolveResult {
+    _ = MeshType;
     const mesh = operator_context.mesh;
     std.debug.assert(forcing_values.len == mesh.num_vertices());
     std.debug.assert(boundary_values.len == mesh.num_vertices());
@@ -48,20 +49,8 @@ pub fn solve_zero_form_dirichlet(
     const stiffness = laplacian.stiffness;
     const dual_volumes = mesh.vertices.slice().items(.dual_volume);
 
-    const boundary_mask = try boundary_vertex_mask(MeshType, allocator, mesh);
+    const boundary_mask = try mesh.boundary_mask(allocator, 0);
     defer allocator.free(boundary_mask);
-
-    const reduced_index = try allocator.alloc(u32, mesh.num_vertices());
-    defer allocator.free(reduced_index);
-    @memset(reduced_index, std.math.maxInt(u32));
-
-    var free_count: u32 = 0;
-    for (0..mesh.num_vertices()) |vertex_idx_usize| {
-        const vertex_idx: u32 = @intCast(vertex_idx_usize);
-        if (boundary_mask[vertex_idx]) continue;
-        reduced_index[vertex_idx] = free_count;
-        free_count += 1;
-    }
 
     const full_rhs = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(full_rhs);
@@ -69,89 +58,14 @@ pub fn solve_zero_form_dirichlet(
         rhs_value.* = forcing_value * dual_volume;
     }
 
-    if (free_count == 0) {
-        const solution = try allocator.dupe(f64, boundary_values);
-        return .{
-            .solution = solution,
-            .cg_result = .{ .iterations = 0, .relative_residual = 0.0, .converged = true },
-        };
-    }
-
-    var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
-    defer triplets.deinit(allocator);
-
-    const reduced_rhs = try allocator.alloc(f64, free_count);
-    defer allocator.free(reduced_rhs);
-    @memset(reduced_rhs, 0.0);
-
-    for (0..mesh.num_vertices()) |row_idx_usize| {
-        const row_idx: u32 = @intCast(row_idx_usize);
-        if (boundary_mask[row_idx]) continue;
-
-        const reduced_row = reduced_index[row_idx];
-        var rhs_value = full_rhs[row_idx];
-        const row = stiffness.row(row_idx);
-        for (row.cols, row.vals) |col_idx, value| {
-            if (boundary_mask[col_idx]) {
-                rhs_value -= value * boundary_values[col_idx];
-            } else {
-                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], value);
-            }
-        }
-        reduced_rhs[reduced_row] = rhs_value;
-    }
-
-    var reduced_matrix = try triplets.build(allocator);
-    defer reduced_matrix.deinit(allocator);
-
-    const diagonal = try allocator.alloc(f64, free_count);
-    defer allocator.free(diagonal);
-    @memset(diagonal, 0.0);
-    for (0..free_count) |row_idx_usize| {
-        const row_idx: u32 = @intCast(row_idx_usize);
-        const row = reduced_matrix.row(row_idx);
-        for (row.cols, row.vals) |col_idx, value| {
-            if (col_idx == row_idx) {
-                diagonal[row_idx] = value;
-                break;
-            }
-        }
-        std.debug.assert(diagonal[row_idx] > 0.0);
-    }
-
-    var preconditioner = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
-    const reduced_solution = try allocator.alloc(f64, free_count);
-    defer allocator.free(reduced_solution);
-    @memset(reduced_solution, 0.0);
-
-    var scratch = try conjugate_gradient.Scratch.init(allocator, free_count);
-    defer scratch.deinit(allocator);
-
-    const cg_result = conjugate_gradient.solve(
-        reduced_matrix,
-        reduced_rhs,
-        reduced_solution,
-        config.tolerance_relative,
-        config.iteration_limit,
-        &preconditioner,
-        scratch,
+    return solve_dirichlet_reduced_system(
+        allocator,
+        stiffness,
+        full_rhs,
+        boundary_mask,
+        boundary_values,
+        config,
     );
-    if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
-
-    const solution = try allocator.alloc(f64, mesh.num_vertices());
-    errdefer allocator.free(solution);
-    for (0..mesh.num_vertices()) |vertex_idx_usize| {
-        const vertex_idx: u32 = @intCast(vertex_idx_usize);
-        solution[vertex_idx] = if (boundary_mask[vertex_idx])
-            boundary_values[vertex_idx]
-        else
-            reduced_solution[reduced_index[vertex_idx]];
-    }
-
-    return .{
-        .solution = solution,
-        .cg_result = cg_result,
-    };
 }
 
 pub fn solve_one_form_dirichlet(
@@ -166,18 +80,43 @@ pub fn solve_one_form_dirichlet(
     std.debug.assert(forcing_values.len == mesh.num_edges());
     std.debug.assert(boundary_values.len == mesh.num_edges());
 
-    const boundary_mask = try boundary_edge_mask(allocator, mesh);
+    const boundary_mask = try mesh.boundary_mask(allocator, 1);
     defer allocator.free(boundary_mask);
 
-    const reduced_index = try allocator.alloc(u32, mesh.num_edges());
+    var full_matrix = try assemble_one_form_matrix(MeshType, allocator, operator_context);
+    defer full_matrix.deinit(allocator);
+
+    return solve_dirichlet_reduced_system(
+        allocator,
+        full_matrix,
+        forcing_values,
+        boundary_mask,
+        boundary_values,
+        config,
+    );
+}
+
+fn solve_dirichlet_reduced_system(
+    allocator: std.mem.Allocator,
+    full_matrix: sparse.CsrMatrix(f64),
+    full_rhs: []const f64,
+    boundary_mask: []const bool,
+    boundary_values: []const f64,
+    config: SolveConfig,
+) !SolveResult {
+    std.debug.assert(full_matrix.n_rows == full_matrix.n_cols);
+    std.debug.assert(full_rhs.len == full_matrix.n_rows);
+    std.debug.assert(boundary_mask.len == full_matrix.n_rows);
+    std.debug.assert(boundary_values.len == full_matrix.n_rows);
+
+    const reduced_index = try allocator.alloc(u32, full_matrix.n_rows);
     defer allocator.free(reduced_index);
     @memset(reduced_index, std.math.maxInt(u32));
 
     var free_count: u32 = 0;
-    for (0..mesh.num_edges()) |edge_idx_usize| {
-        const edge_idx: u32 = @intCast(edge_idx_usize);
-        if (boundary_mask[edge_idx]) continue;
-        reduced_index[edge_idx] = free_count;
+    for (boundary_mask, 0..) |is_boundary, cell_idx_usize| {
+        if (is_boundary) continue;
+        reduced_index[cell_idx_usize] = free_count;
         free_count += 1;
     }
 
@@ -189,9 +128,6 @@ pub fn solve_one_form_dirichlet(
         };
     }
 
-    var full_matrix = try assemble_one_form_matrix(MeshType, allocator, operator_context);
-    defer full_matrix.deinit(allocator);
-
     var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
     defer triplets.deinit(allocator);
 
@@ -199,12 +135,12 @@ pub fn solve_one_form_dirichlet(
     defer allocator.free(reduced_rhs);
     @memset(reduced_rhs, 0.0);
 
-    for (0..mesh.num_edges()) |row_idx_usize| {
-        const row_idx: u32 = @intCast(row_idx_usize);
-        if (boundary_mask[row_idx]) continue;
+    for (0..full_matrix.n_rows) |row_idx_usize| {
+        if (boundary_mask[row_idx_usize]) continue;
 
-        const reduced_row = reduced_index[row_idx];
-        var rhs_value = forcing_values[row_idx];
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const reduced_row = reduced_index[row_idx_usize];
+        var rhs_value = full_rhs[row_idx_usize];
         const row = full_matrix.row(row_idx);
         for (row.cols, row.vals) |col_idx, value| {
             if (boundary_mask[col_idx]) {
@@ -241,77 +177,19 @@ pub fn solve_one_form_dirichlet(
     );
     if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
 
-    const solution = try allocator.alloc(f64, mesh.num_edges());
+    const solution = try allocator.alloc(f64, full_matrix.n_rows);
     errdefer allocator.free(solution);
-    for (0..mesh.num_edges()) |edge_idx_usize| {
-        const edge_idx: u32 = @intCast(edge_idx_usize);
-        solution[edge_idx] = if (boundary_mask[edge_idx])
-            boundary_values[edge_idx]
+    for (boundary_mask, 0..) |is_boundary, cell_idx_usize| {
+        solution[cell_idx_usize] = if (is_boundary)
+            boundary_values[cell_idx_usize]
         else
-            reduced_solution[reduced_index[edge_idx]];
+            reduced_solution[reduced_index[cell_idx_usize]];
     }
 
     return .{
         .solution = solution,
         .cg_result = cg_result,
     };
-}
-
-fn boundary_vertex_mask(
-    comptime MeshType: type,
-    allocator: std.mem.Allocator,
-    mesh: *const MeshType,
-) ![]bool {
-    const mask = try allocator.alloc(bool, mesh.num_vertices());
-    @memset(mask, false);
-
-    switch (MeshType.topological_dimension) {
-        2 => {
-            const edge_vertices = mesh.simplices(1).items(.vertices);
-            for (mesh.boundary_edges) |edge_idx| {
-                const edge = edge_vertices[edge_idx];
-                mask[edge[0]] = true;
-                mask[edge[1]] = true;
-            }
-        },
-        3 => {
-            const face_count = mesh.num_faces();
-            const face_incidence_count = try allocator.alloc(u8, face_count);
-            defer allocator.free(face_incidence_count);
-            @memset(face_incidence_count, 0);
-
-            for (0..mesh.num_tets()) |tet_idx_usize| {
-                const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
-                for (row.cols) |face_idx| {
-                    face_incidence_count[face_idx] += 1;
-                }
-            }
-
-            const face_vertices = mesh.simplices(2).items(.vertices);
-            for (0..face_count) |face_idx_usize| {
-                if (face_incidence_count[face_idx_usize] != 1) continue;
-                const face = face_vertices[face_idx_usize];
-                mask[face[0]] = true;
-                mask[face[1]] = true;
-                mask[face[2]] = true;
-            }
-        },
-        else => @compileError("boundary_vertex_mask supports only 2D and 3D meshes"),
-    }
-
-    return mask;
-}
-
-fn boundary_edge_mask(
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-) ![]bool {
-    const mask = try allocator.alloc(bool, mesh.num_edges());
-    @memset(mask, false);
-    for (mesh.boundary_edges) |edge_idx| {
-        mask[edge_idx] = true;
-    }
-    return mask;
 }
 
 fn assemble_one_form_matrix(

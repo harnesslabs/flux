@@ -30,6 +30,8 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - Similar examples or modules that should be one parameterized implementation
 - Copy-paste APIs that differ only by naming instead of actual semantics
 - Genericization opportunities justified by at least two real call sites; do not reward speculative abstraction
+- Public APIs that claim to be generic but are implemented as a hardcoded case table over today's supported dimensions, degrees, or variants
+- Mathematical or structural definitions that can be expressed once from existing primitives (incidence, recursion, comptime relations) but are instead re-encoded by manual enumeration
 
 ### Shim and compatibility removal
 - Deprecated pathways, transitional adapters, or "for now" wrappers
@@ -47,6 +49,7 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - APIs with redundant `withX()` then `x()` patterns when a single demand-driven path would suffice
 - Parameter lists carrying compile-time or runtime information that can be derived
 - Names that expose mechanics instead of intent
+- Generic-looking entry points whose implementations still force maintainers to touch multiple branches for every new degree/dimension case
 
 ## Judgment rules
 
@@ -56,6 +59,9 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - Favor generic code only when multiple concrete sites already want the same shape.
 - Favor moving capability to the layer where it belongs. Example glue in the library is a smell; library workarounds in examples are also a smell.
 - Treat LOC reduction as a proxy, not a goal. Shorter code that weakens invariants is not a win.
+- If an API is sold as generic, ask whether the implementation is generic in the same sense. A disguised lookup table is usually not good enough.
+- In FEEC/DEC or topology-heavy code, prefer implementations derived from the mathematical object itself (`∂`, incidence, degree recursion, duality relation) over nested switches on `(dimension, degree)`.
+- Before accepting a refactor, ask: if we added one more supported degree/dimension, would this code naturally extend, or would we add another case? If another case is needed, call that out.
 
 ## Output format
 

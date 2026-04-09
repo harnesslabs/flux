@@ -30,6 +30,14 @@ parallel convenience and "real" APIs unless there is a concrete current need.
 The project is pre-release; correctness and coherence matter more than
 backward compatibility with transitional interfaces.
 
+When an API is presented as degree-generic, dimension-generic, or otherwise
+mathematically generic, pressure-test the implementation too — not just the
+signature. A generic public API backed by a hardcoded case table over today's
+supported dimensions/degrees is usually a smell. Prefer implementations derived
+from the underlying structure or invariant (for example incidence, recursion,
+or a comptime relation) unless there is a clear measured performance reason not
+to.
+
 ---
 
 ## Hard Rules
@@ -238,6 +246,7 @@ Property-based tests on random meshes and random cochain inputs are the primary 
 - `const` by default; mutability is the exception and should be obvious
 - Assert preconditions and invariants with `std.debug.assert`; assertions are not optional
 - All loops must be bounded — no unbounded iteration
+- In topology/operator code, prefer implementations phrased in the native discrete objects (`∂`, incidence, degree relations) over nested casework on `(dimension, degree)` when the former expresses the same rule directly
 
 ### Naming
 
