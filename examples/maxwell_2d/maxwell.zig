@@ -27,6 +27,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
+const core_mod = @import("maxwell_core");
 const cochain = flux.forms;
 const topology = flux.topology;
 const sparse = flux.math.sparse;
@@ -38,68 +39,48 @@ const operator_context_mod = flux.operators.context;
 /// Holds the three physical fields (E, B, J) as typed cochains whose
 /// degrees are enforced at compile time. The mesh is borrowed — the
 /// caller must keep it alive for the lifetime of the state.
+fn hooks(comptime MeshType: type) type {
+    return struct {
+        pub const apply_boundary_in_leapfrog = false;
+
+        pub fn primeOperators(operators: *operator_context_mod.OperatorContext(MeshType)) !void {
+            _ = try operators.exteriorDerivative(cochain.Primal, 1);
+            _ = try operators.exteriorDerivative(cochain.Dual, 0);
+            _ = try operators.hodgeStar(1);
+            _ = try operators.hodgeStar(2);
+        }
+
+        pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+            var star_B = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
+            defer star_B.deinit(allocator);
+
+            var d_star_B = try (try state.operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_B);
+            defer d_star_B.deinit(allocator);
+
+            const edge_volumes = state.mesh.simplices(1).items(.volume);
+            const dual_edge_volumes = state.mesh.dual_edge_volumes;
+
+            for (state.E.values, d_star_B.values, edge_volumes, dual_edge_volumes, state.J.values) |*e, dsb, volume, dual_volume, j| {
+                std.debug.assert(dual_volume > 0.0);
+                e.* += dt * ((volume / dual_volume) * dsb - j);
+            }
+
+            comptime {
+                const BType = @TypeOf(state.B);
+                std.debug.assert(BType.degree == 2 and BType.duality == cochain.Primal);
+                std.debug.assert(@TypeOf(state.E).degree == 1 and @TypeOf(state.E).duality == cochain.Primal);
+            }
+        }
+    };
+}
+
 pub fn State(comptime MeshType: type) type {
     comptime {
         if (!@hasDecl(MeshType, "embedding_dimension")) {
             @compileError("Maxwell State requires a Mesh type with an 'embedding_dimension' declaration");
         }
     }
-
-    return struct {
-        const Self = @This();
-
-        pub const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
-        pub const TwoForm = cochain.Cochain(MeshType, 2, cochain.Primal);
-
-        /// Electric field — primal 1-form (circulation along edges).
-        E: OneForm,
-        /// Magnetic flux — primal 2-form (flux through faces).
-        B: TwoForm,
-        /// Current density source — primal 1-form (same space as E).
-        J: OneForm,
-        /// The mesh this state is defined on.
-        mesh: *const MeshType,
-        /// Assembled operator owner for this Maxwell system.
-        operators: *operator_context_mod.OperatorContext(MeshType),
-        /// Discrete timestep counter (number of completed leapfrog steps).
-        timestep: u64,
-
-        /// Allocate a zero-initialized Maxwell state on the given mesh.
-        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
-            var E = try OneForm.init(allocator, mesh);
-            errdefer E.deinit(allocator);
-
-            var B = try TwoForm.init(allocator, mesh);
-            errdefer B.deinit(allocator);
-
-            var J = try OneForm.init(allocator, mesh);
-            errdefer J.deinit(allocator);
-
-            const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
-            errdefer operators.deinit();
-            _ = try operators.exteriorDerivative(cochain.Primal, 1);
-            _ = try operators.exteriorDerivative(cochain.Dual, 0);
-            _ = try operators.hodgeStar(1);
-            _ = try operators.hodgeStar(2);
-
-            return .{
-                .E = E,
-                .B = B,
-                .J = J,
-                .mesh = mesh,
-                .operators = operators,
-                .timestep = 0,
-            };
-        }
-
-        /// Free all field storage.
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.operators.deinit();
-            self.J.deinit(allocator);
-            self.B.deinit(allocator);
-            self.E.deinit(allocator);
-        }
-    };
+    return core_mod.Core(MeshType, hooks(MeshType)).State;
 }
 
 /// Faraday update: B += −dt · d(E).
@@ -115,11 +96,7 @@ pub fn faraday_step(
     state: anytype,
     dt: f64,
 ) !void {
-    var dE = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
-    defer dE.deinit(allocator);
-
-    dE.scale(dt);
-    state.B.sub(dE);
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).faradayStep(allocator, state, dt);
 }
 
 /// Ampere-Maxwell update: E += dt · (★₁⁻¹ d ★₂ B − J).
@@ -142,31 +119,7 @@ pub fn ampere_step(
     state: anytype,
     dt: f64,
 ) !void {
-    // Step 1: ★₂(B) — primal 2-form → dual 0-form.
-    var star_B = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
-    defer star_B.deinit(allocator);
-
-    // Step 2: d(★₂B) — dual 0-form → dual 1-form.
-    var d_star_B = try (try state.operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_B);
-    defer d_star_B.deinit(allocator);
-
-    // Step 3: ★₁⁻¹(d(★₂B)) — dual 1-form → primal 1-form.
-    const edge_volumes = state.mesh.simplices(1).items(.volume);
-    const dual_edge_volumes = state.mesh.dual_edge_volumes;
-
-    for (state.E.values, d_star_B.values, edge_volumes, dual_edge_volumes, state.J.values) |*e, dsb, volume, dual_volume, j| {
-        std.debug.assert(dual_volume > 0.0);
-        e.* += dt * ((volume / dual_volume) * dsb - j);
-    }
-
-    // Comptime type assertion: verify the operator chain types are correct.
-    // B is a primal 2-form. ★₂B is a dual 0-form. d(★₂B) is a dual 1-form.
-    // ★₁⁻¹ maps dual 1-form → primal 1-form = E's type.
-    comptime {
-        const BType = @TypeOf(state.B);
-        std.debug.assert(BType.degree == 2 and BType.duality == cochain.Primal);
-        std.debug.assert(@TypeOf(state.E).degree == 1 and @TypeOf(state.E).duality == cochain.Primal);
-    }
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).ampereStep(allocator, state, dt);
 }
 
 /// Apply perfect electric conductor (PEC) boundary conditions.
@@ -178,9 +131,7 @@ pub fn ampere_step(
 ///
 /// Must be called after each Ampere step to enforce the constraint.
 pub fn apply_pec_boundary(state: anytype) void {
-    for (state.mesh.boundary_edges) |edge_idx| {
-        state.E.values[edge_idx] = 0.0;
-    }
+    core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).applyPecBoundary(state);
 }
 
 /// Leapfrog integrator: advance (E, B) by one full timestep dt.
@@ -205,9 +156,7 @@ pub fn leapfrog_step(
     state: anytype,
     dt: f64,
 ) !void {
-    try faraday_step(allocator, state, dt);
-    try ampere_step(allocator, state, dt);
-    state.timestep += 1;
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).leapfrogStep(allocator, state, dt);
 }
 
 /// Maxwell system for the generic leapfrog integrator.

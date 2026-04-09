@@ -2,12 +2,42 @@ const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
+const core_mod = @import("maxwell_core");
 
 const cochain = flux.forms;
 const topology = flux.topology;
 const operator_context_mod = flux.operators.context;
 
 pub const Mesh3D = topology.Mesh(3, 3);
+
+fn hooks(comptime MeshType: type) type {
+    return struct {
+        pub const apply_boundary_in_leapfrog = true;
+
+        pub fn primeOperators(operators: *operator_context_mod.OperatorContext(MeshType)) !void {
+            _ = try operators.exteriorDerivative(cochain.Primal, 1);
+            _ = try operators.exteriorDerivative(cochain.Primal, 2);
+            _ = try operators.exteriorDerivative(cochain.Dual, 1);
+            _ = try operators.hodgeStar(2);
+            _ = try operators.hodgeStarInverse(1);
+        }
+
+        pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+            var star_b = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
+            defer star_b.deinit(allocator);
+
+            var derivative = try (try state.operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
+            defer derivative.deinit(allocator);
+
+            var curl_b = try (try state.operators.hodgeStarInverse(1)).apply(allocator, derivative);
+            defer curl_b.deinit(allocator);
+
+            for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
+                electric.* += dt * (curl_value - current);
+            }
+        }
+    };
+}
 
 pub const Config = struct {
     steps: u32 = 1000,
@@ -30,55 +60,7 @@ pub const Config = struct {
 };
 
 pub fn State(comptime MeshType: type) type {
-    return struct {
-        const Self = @This();
-
-        pub const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
-        pub const TwoForm = cochain.Cochain(MeshType, 2, cochain.Primal);
-
-        E: OneForm,
-        B: TwoForm,
-        J: OneForm,
-        mesh: *const MeshType,
-        operators: *operator_context_mod.OperatorContext(MeshType),
-        timestep: u64,
-
-        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
-            var electric = try OneForm.init(allocator, mesh);
-            errdefer electric.deinit(allocator);
-
-            var magnetic = try TwoForm.init(allocator, mesh);
-            errdefer magnetic.deinit(allocator);
-
-            var current = try OneForm.init(allocator, mesh);
-            errdefer current.deinit(allocator);
-
-            const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
-            errdefer operators.deinit();
-
-            _ = try operators.exteriorDerivative(cochain.Primal, 1);
-            _ = try operators.exteriorDerivative(cochain.Primal, 2);
-            _ = try operators.exteriorDerivative(cochain.Dual, 1);
-            _ = try operators.hodgeStar(2);
-            _ = try operators.hodgeStarInverse(1);
-
-            return .{
-                .E = electric,
-                .B = magnetic,
-                .J = current,
-                .mesh = mesh,
-                .operators = operators,
-                .timestep = 0,
-            };
-        }
-
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            self.operators.deinit();
-            self.J.deinit(allocator);
-            self.B.deinit(allocator);
-            self.E.deinit(allocator);
-        }
-    };
+    return core_mod.Core(MeshType, hooks(MeshType)).State;
 }
 
 pub const MaxwellState3D = State(Mesh3D);
@@ -96,39 +78,19 @@ fn tm110AngularFrequency(width: f64, height: f64) f64 {
 }
 
 pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-    var derivative = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
-    defer derivative.deinit(allocator);
-
-    derivative.scale(dt);
-    state.B.sub(derivative);
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).faradayStep(allocator, state, dt);
 }
 
 pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-    var star_b = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
-    defer star_b.deinit(allocator);
-
-    var derivative = try (try state.operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
-    defer derivative.deinit(allocator);
-
-    var curl_b = try (try state.operators.hodgeStarInverse(1)).apply(allocator, derivative);
-    defer curl_b.deinit(allocator);
-
-    for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
-        electric.* += dt * (curl_value - current);
-    }
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).ampereStep(allocator, state, dt);
 }
 
 pub fn applyPecBoundary(_: std.mem.Allocator, state: anytype) !void {
-    for (state.mesh.boundary_edges) |edge_idx| {
-        state.E.values[edge_idx] = 0.0;
-    }
+    core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).applyPecBoundary(state);
 }
 
 pub fn leapfrogStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-    try faradayStep(allocator, state, dt);
-    try ampereStep(allocator, state, dt);
-    try applyPecBoundary(allocator, state);
-    state.timestep += 1;
+    try core_mod.Core(@TypeOf(state.mesh.*), hooks(@TypeOf(state.mesh.*))).leapfrogStep(allocator, state, dt);
 }
 
 const SimResult = struct {
