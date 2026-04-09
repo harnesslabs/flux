@@ -13,55 +13,7 @@
 //! `--frames`, `--grid`, `--domain`, `--refinement`, `--final-time`).
 
 const std = @import("std");
-
-const maxwell_2d_cli = @import("maxwell_2d/cli.zig");
-const maxwell_3d_cli = @import("maxwell_3d/cli.zig");
-const euler_2d_cli = @import("euler_2d/cli.zig");
-const euler_3d_cli = @import("euler_3d/cli.zig");
-const heat_cli = @import("heat/cli.zig");
-const diffusion_surface_cli = @import("diffusion_surface/cli.zig");
-
-/// One row of the dispatch table. The `run` function receives the entire
-/// argv tail (subcommand name plus its own flags) and is responsible for
-/// printing its own usage on `--help`.
-const Subcommand = struct {
-    name: []const u8,
-    summary: []const u8,
-    run: *const fn (allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void,
-};
-
-const subcommands = [_]Subcommand{
-    .{
-        .name = "maxwell-2d",
-        .summary = "2D Maxwell on simplicial meshes (cavity, dipole)",
-        .run = maxwell_2d_cli.run,
-    },
-    .{
-        .name = "maxwell-3d",
-        .summary = "3D Maxwell TM_110 cavity on tetrahedra",
-        .run = maxwell_3d_cli.run,
-    },
-    .{
-        .name = "euler-2d",
-        .summary = "2D incompressible Euler vorticity-stream",
-        .run = euler_2d_cli.run,
-    },
-    .{
-        .name = "euler-3d",
-        .summary = "3D incompressible Euler with helicity conservation",
-        .run = euler_3d_cli.run,
-    },
-    .{
-        .name = "heat",
-        .summary = "Implicit heat equation via backward Euler + CG",
-        .run = heat_cli.run,
-    },
-    .{
-        .name = "diffusion-surface",
-        .summary = "Heat equation on a curved surface (Riemannian Hodge)",
-        .run = diffusion_surface_cli.run,
-    },
-};
+const registry = @import("examples_registry");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -86,7 +38,7 @@ pub fn main() !void {
         return;
     }
 
-    inline for (subcommands) |sub| {
+    inline for (registry.subcommands) |sub| {
         if (eql(cmd, sub.name)) {
             return sub.run(allocator, argv[1..]);
         }
@@ -113,7 +65,7 @@ fn printUsage() void {
         \\  subcommands:
         \\
     , .{});
-    inline for (subcommands) |sub| {
+    inline for (registry.subcommands) |sub| {
         std.debug.print("    {s:<20}  {s}\n", .{ sub.name, sub.summary });
     }
     std.debug.print(
@@ -138,7 +90,7 @@ fn printUsage() void {
 }
 
 fn listCommands() void {
-    inline for (subcommands) |sub| {
+    inline for (registry.subcommands) |sub| {
         std.debug.print("{s}\n", .{sub.name});
     }
 }

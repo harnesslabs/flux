@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const common = @import("examples_common");
-const surface = @import("surface.zig");
+const surface = @import("example_physics");
 
 pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var config = surface.Config{};

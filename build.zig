@@ -1,5 +1,182 @@
 const std = @import("std");
 
+const ExampleSpec = struct {
+    command: []const u8,
+    summary: []const u8,
+    run_step: []const u8,
+    run_doc: []const u8,
+    cli_source: []const u8,
+    cli_module: []const u8,
+    physics_source: []const u8,
+    physics_module: []const u8,
+};
+
+const example_specs = [_]ExampleSpec{
+    .{
+        .command = "maxwell-2d",
+        .summary = "2D Maxwell on simplicial meshes (cavity, dipole)",
+        .run_step = "run-maxwell-2d",
+        .run_doc = "Run the 2D Maxwell example",
+        .cli_source = "examples/maxwell_2d/cli.zig",
+        .cli_module = "maxwell_2d_cli",
+        .physics_source = "examples/maxwell_2d/maxwell.zig",
+        .physics_module = "maxwell_2d",
+    },
+    .{
+        .command = "maxwell-3d",
+        .summary = "3D Maxwell TM_110 cavity on tetrahedra",
+        .run_step = "run-maxwell-3d",
+        .run_doc = "Run the 3D Maxwell cavity example",
+        .cli_source = "examples/maxwell_3d/cli.zig",
+        .cli_module = "maxwell_3d_cli",
+        .physics_source = "examples/maxwell_3d/maxwell.zig",
+        .physics_module = "maxwell_3d",
+    },
+    .{
+        .command = "euler-2d",
+        .summary = "2D incompressible Euler vorticity-stream",
+        .run_step = "run-euler-2d",
+        .run_doc = "Run the 2D incompressible Euler example",
+        .cli_source = "examples/euler_2d/cli.zig",
+        .cli_module = "euler_2d_cli",
+        .physics_source = "examples/euler_2d/euler.zig",
+        .physics_module = "euler_2d",
+    },
+    .{
+        .command = "euler-3d",
+        .summary = "3D incompressible Euler with helicity conservation",
+        .run_step = "run-euler-3d",
+        .run_doc = "Run the 3D incompressible Euler example",
+        .cli_source = "examples/euler_3d/cli.zig",
+        .cli_module = "euler_3d_cli",
+        .physics_source = "examples/euler_3d/euler.zig",
+        .physics_module = "euler_3d",
+    },
+    .{
+        .command = "heat",
+        .summary = "Implicit heat equation via backward Euler + CG",
+        .run_step = "run-heat",
+        .run_doc = "Run the implicit heat-equation example",
+        .cli_source = "examples/heat/cli.zig",
+        .cli_module = "heat_cli",
+        .physics_source = "examples/heat/heat.zig",
+        .physics_module = "heat",
+    },
+    .{
+        .command = "diffusion-surface",
+        .summary = "Heat equation on a curved surface (Riemannian Hodge)",
+        .run_step = "run-diffusion-surface",
+        .run_doc = "Run the curved-surface diffusion example",
+        .cli_source = "examples/diffusion_surface/cli.zig",
+        .cli_module = "diffusion_surface_cli",
+        .physics_source = "examples/diffusion_surface/surface.zig",
+        .physics_module = "diffusion_surface",
+    },
+};
+
+fn createPhysicsModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    mod: *std.Build.Module,
+    examples_common_mod: *std.Build.Module,
+    source: []const u8,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(source),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+            .{ .name = "examples_common", .module = examples_common_mod },
+        },
+    });
+}
+
+fn createCliModule(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    mod: *std.Build.Module,
+    examples_common_mod: *std.Build.Module,
+    physics_module: *std.Build.Module,
+    source: []const u8,
+) *std.Build.Module {
+    return b.createModule(.{
+        .root_source_file = b.path(source),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+            .{ .name = "examples_common", .module = examples_common_mod },
+            .{ .name = "example_physics", .module = physics_module },
+        },
+    });
+}
+
+fn emitExamplesRegistry(
+    b: *std.Build,
+    write_files: *std.Build.Step.WriteFile,
+) std.Build.LazyPath {
+    var source = std.ArrayListUnmanaged(u8){};
+    defer source.deinit(b.allocator);
+    const writer = source.writer(b.allocator);
+
+    writer.writeAll("const std = @import(\"std\");\n") catch unreachable;
+    for (example_specs) |spec| {
+        writer.print("const {s} = @import(\"{s}\");\n", .{ spec.cli_module, spec.cli_module }) catch unreachable;
+    }
+    writer.writeAll(
+        \\
+        \\
+        \\pub const Subcommand = struct {
+        \\    name: []const u8,
+        \\    summary: []const u8,
+        \\    run: *const fn (allocator: std.mem.Allocator, args: []const [:0]const u8) anyerror!void,
+        \\};
+        \\
+        \\pub const subcommands = [_]Subcommand{
+        \\
+    ) catch unreachable;
+    for (example_specs) |spec| {
+        writer.print(
+            "    .{{ .name = \"{s}\", .summary = \"{s}\", .run = {s}.run }},\n",
+            .{ spec.command, spec.summary, spec.cli_module },
+        ) catch unreachable;
+    }
+    writer.writeAll("};\n") catch unreachable;
+
+    return write_files.add("generated/examples_registry.zig", source.items);
+}
+
+fn emitExampleTestRoot(
+    b: *std.Build,
+    write_files: *std.Build.Step.WriteFile,
+    spec: ExampleSpec,
+) std.Build.LazyPath {
+    var source = std.ArrayListUnmanaged(u8){};
+    defer source.deinit(b.allocator);
+    const writer = source.writer(b.allocator);
+
+    writer.writeAll("const std = @import(\"std\");\n") catch unreachable;
+    writer.print("const cli = @import(\"{s}\");\n", .{spec.cli_module}) catch unreachable;
+    writer.print("const physics = @import(\"{s}\");\n", .{spec.physics_module}) catch unreachable;
+    writer.writeAll(
+        \\
+        \\
+        \\test {
+        \\    _ = cli;
+        \\    _ = physics;
+        \\}
+        \\
+    ) catch unreachable;
+
+    return write_files.add(
+        b.fmt("generated/tests/{s}.zig", .{spec.physics_module}),
+        source.items,
+    );
+}
+
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
 // executed by an external runner. The functions in `std.Build` implement a DSL
@@ -152,11 +329,53 @@ pub fn build(b: *std.Build) void {
     });
     const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
 
+    const generated_sources = b.addWriteFiles();
+    const examples_registry_source = emitExamplesRegistry(b, generated_sources);
+
+    var physics_modules: [example_specs.len]*std.Build.Module = undefined;
+    inline for (example_specs, 0..) |spec, idx| {
+        physics_modules[idx] = createPhysicsModule(
+            b,
+            target,
+            optimize,
+            mod,
+            examples_common_mod,
+            spec.physics_source,
+        );
+    }
+
+    var example_cli_modules: [example_specs.len]*std.Build.Module = undefined;
+    inline for (example_specs, 0..) |spec, idx| {
+        example_cli_modules[idx] = createCliModule(
+            b,
+            target,
+            optimize,
+            mod,
+            examples_common_mod,
+            physics_modules[idx],
+            spec.cli_source,
+        );
+    }
+
+    var examples_registry_imports: [example_specs.len]std.Build.Module.Import = undefined;
+    inline for (example_specs, 0..) |spec, idx| {
+        examples_registry_imports[idx] = .{
+            .name = spec.cli_module,
+            .module = example_cli_modules[idx],
+        };
+    }
+    const examples_registry_mod = b.createModule(.{
+        .root_source_file = examples_registry_source,
+        .target = target,
+        .optimize = optimize,
+        .imports = &examples_registry_imports,
+    });
+
     // -- flux-examples umbrella binary --
-    // A single executable exposes every example as a subcommand. The root
-    // source file (examples/main.zig) imports each per-example cli.zig via
-    // a relative path; those files are part of the same module and inherit
-    // the named imports declared here (`flux`, `examples_common`).
+    // A single executable exposes every example as a subcommand. The build
+    // graph owns the canonical example manifest and emits the runtime
+    // subcommand table from it so the CLI, run targets, and example test roots
+    // stay in sync.
     const examples_exe = b.addExecutable(.{
         .name = "flux-examples",
         .root_module = b.createModule(.{
@@ -164,8 +383,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "flux", .module = mod },
-                .{ .name = "examples_common", .module = examples_common_mod },
+                .{ .name = "examples_registry", .module = examples_registry_mod },
             },
         }),
     });
@@ -180,68 +398,34 @@ pub fn build(b: *std.Build) void {
     // Convenience run steps. Each `run-<name>` is a thin wrapper that runs
     // `flux-examples <name>` with the user's `--` arguments appended. The
     // build step name uses hyphens for parity with the subcommand names.
-    const run_targets = [_]struct { step: []const u8, sub: []const u8, doc: []const u8 }{
-        .{ .step = "run-maxwell-2d", .sub = "maxwell-2d", .doc = "Run the 2D Maxwell example" },
-        .{ .step = "run-maxwell-3d", .sub = "maxwell-3d", .doc = "Run the 3D Maxwell cavity example" },
-        .{ .step = "run-euler-2d", .sub = "euler-2d", .doc = "Run the 2D incompressible Euler example" },
-        .{ .step = "run-euler-3d", .sub = "euler-3d", .doc = "Run the 3D incompressible Euler example" },
-        .{ .step = "run-heat", .sub = "heat", .doc = "Run the implicit heat-equation example" },
-        .{ .step = "run-diffusion-surface", .sub = "diffusion-surface", .doc = "Run the curved-surface diffusion example" },
-    };
-    for (run_targets) |target_info| {
+    for (example_specs) |spec| {
         const run_cmd_step = b.addRunArtifact(examples_exe);
         run_cmd_step.step.dependOn(b.getInstallStep());
-        run_cmd_step.addArg(target_info.sub);
+        run_cmd_step.addArg(spec.command);
         if (b.args) |args| {
             run_cmd_step.addArgs(args);
         }
-        const top = b.step(target_info.step, target_info.doc);
+        const top = b.step(spec.run_step, spec.run_doc);
         top.dependOn(&run_cmd_step.step);
     }
 
-    // Per-physics test executables. The umbrella binary's test discovery does
-    // not pick up integration tests inside `examples/<name>/<physics>.zig`
-    // because the umbrella root file does not (and should not) `@import` the
-    // physics modules directly. We compile a small test exe per physics
-    // module so the existing integration tests keep running in CI.
-    const TestModule = struct { name: []const u8, source: []const u8 };
-    const example_test_modules = [_]TestModule{
-        .{ .name = "maxwell_2d", .source = "examples/maxwell_2d/cli.zig" },
-        .{ .name = "maxwell_3d", .source = "examples/maxwell_3d/maxwell.zig" },
-        .{ .name = "euler_2d", .source = "examples/euler_2d/euler.zig" },
-        .{ .name = "euler_3d", .source = "examples/euler_3d/euler.zig" },
-        .{ .name = "heat", .source = "examples/heat/heat.zig" },
-        .{ .name = "diffusion_surface", .source = "examples/diffusion_surface/surface.zig" },
-        // M3 capstone — short cross-cutting acceptance test that imports every
-        // physics module and asserts each milestone conservation invariant in
-        // one place. See `examples/acceptance.zig` for the rationale.
-        .{ .name = "m3_acceptance", .source = "examples/acceptance.zig" },
-    };
-    // Each example physics module is built once as a named module so the
-    // capstone acceptance test can `@import` it without picking up the
-    // example's own tests transitively (named modules form separate
-    // compilation units; only the root module's tests are discovered).
-    const PhysicsModule = struct { name: []const u8, source: []const u8, ptr: *std.Build.Module };
-    var physics_modules: [example_test_modules.len - 1]PhysicsModule = undefined;
-    inline for (example_test_modules[0 .. example_test_modules.len - 1], 0..) |entry, idx| {
-        physics_modules[idx] = .{
-            .name = entry.name,
-            .source = entry.source,
-            .ptr = b.createModule(.{
-                .root_source_file = b.path(entry.source),
-                .target = target,
-                .optimize = optimize,
-                .imports = &.{
-                    .{ .name = "flux", .module = mod },
-                    .{ .name = "examples_common", .module = examples_common_mod },
-                },
-            }),
-        };
-    }
-
-    var example_run_test_steps: [example_test_modules.len]*std.Build.Step.Run = undefined;
-    inline for (example_test_modules[0 .. example_test_modules.len - 1], 0..) |_, idx| {
-        const test_exe = b.addTest(.{ .root_module = physics_modules[idx].ptr });
+    // Each example's CLI and physics module is registered once as a named
+    // module. Dedicated generated test roots import those modules by name and
+    // explicitly ref all decls, so adding a new `@import()` inside an example
+    // can no longer silently expand its test suite.
+    var example_run_test_steps: [example_specs.len + 1]*std.Build.Step.Run = undefined;
+    inline for (example_specs, 0..) |spec, idx| {
+        var test_imports: [2]std.Build.Module.Import = undefined;
+        test_imports[0] = .{ .name = spec.cli_module, .module = example_cli_modules[idx] };
+        test_imports[1] = .{ .name = spec.physics_module, .module = physics_modules[idx] };
+        const test_root = emitExampleTestRoot(b, generated_sources, spec);
+        const test_mod = b.createModule(.{
+            .root_source_file = test_root,
+            .target = target,
+            .optimize = optimize,
+            .imports = &test_imports,
+        });
+        const test_exe = b.addTest(.{ .root_module = test_mod });
         example_run_test_steps[idx] = b.addRunArtifact(test_exe);
     }
 
@@ -252,17 +436,17 @@ pub fn build(b: *std.Build) void {
         var acceptance_imports: [physics_modules.len + 2]std.Build.Module.Import = undefined;
         acceptance_imports[0] = .{ .name = "flux", .module = mod };
         acceptance_imports[1] = .{ .name = "examples_common", .module = examples_common_mod };
-        inline for (physics_modules, 0..) |pm, idx| {
-            acceptance_imports[2 + idx] = .{ .name = pm.name, .module = pm.ptr };
+        inline for (example_specs, 0..) |spec, idx| {
+            acceptance_imports[2 + idx] = .{ .name = spec.physics_module, .module = physics_modules[idx] };
         }
         const acceptance_mod = b.createModule(.{
-            .root_source_file = b.path(example_test_modules[example_test_modules.len - 1].source),
+            .root_source_file = b.path("examples/acceptance.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &acceptance_imports,
         });
         const acceptance_test_exe = b.addTest(.{ .root_module = acceptance_mod });
-        example_run_test_steps[example_test_modules.len - 1] = b.addRunArtifact(acceptance_test_exe);
+        example_run_test_steps[example_specs.len] = b.addRunArtifact(acceptance_test_exe);
     }
 
     // A top level step for running all tests. dependOn can be called multiple

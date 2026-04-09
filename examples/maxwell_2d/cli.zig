@@ -5,7 +5,7 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
-const maxwell = @import("maxwell.zig");
+const maxwell = @import("example_physics");
 
 const Mesh2D = flux.topology.Mesh(2, 2);
 const MaxwellState = maxwell.State(Mesh2D);
@@ -341,6 +341,4 @@ fn printUsage() void {
 
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
-    // Pull in maxwell module tests (physics integration tests).
-    _ = @import("maxwell.zig");
 }
