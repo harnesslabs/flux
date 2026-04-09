@@ -223,6 +223,136 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return @intCast(self.simplex_lists[k - 1].len);
         }
 
+        /// Return a heap-allocated mask selecting k-cells incident to the
+        /// geometric boundary.
+        ///
+        /// For codimension-1 cells this is the literal boundary subcomplex.
+        /// For top-dimensional cells this means cells adjacent to the boundary.
+        pub fn boundary_mask(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int) ![]bool {
+            if (k < 0 or k > topological_dimension) {
+                @compileError(std.fmt.comptimePrint(
+                    "no boundary mask for {d}-cells on a {d}-dimensional mesh",
+                    .{ k, topological_dimension },
+                ));
+            }
+
+            const mask = try allocator.alloc(bool, self.num_cells(k));
+            errdefer allocator.free(mask);
+            @memset(mask, false);
+
+            switch (topological_dimension) {
+                2 => switch (k) {
+                    0 => {
+                        const edge_vertices = self.simplices(1).items(.vertices);
+                        for (self.boundary_edges) |edge_idx| {
+                            const edge = edge_vertices[edge_idx];
+                            mask[edge[0]] = true;
+                            mask[edge[1]] = true;
+                        }
+                    },
+                    1 => {
+                        for (self.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const boundary_edge_mask = try self.boundary_mask(allocator, 1);
+                        defer allocator.free(boundary_edge_mask);
+
+                        for (0..self.num_faces()) |face_idx_usize| {
+                            const row = self.boundary(2).row(@intCast(face_idx_usize));
+                            for (row.cols) |edge_idx| {
+                                if (!boundary_edge_mask[edge_idx]) continue;
+                                mask[face_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                3 => switch (k) {
+                    0 => {
+                        const boundary_face_mask = try self.boundary_mask(allocator, 2);
+                        defer allocator.free(boundary_face_mask);
+
+                        const face_vertices = self.simplices(2).items(.vertices);
+                        for (boundary_face_mask, 0..) |is_boundary, face_idx| {
+                            if (!is_boundary) continue;
+                            const face = face_vertices[face_idx];
+                            mask[face[0]] = true;
+                            mask[face[1]] = true;
+                            mask[face[2]] = true;
+                        }
+                    },
+                    1 => {
+                        for (self.boundary_edges) |edge_idx| {
+                            mask[edge_idx] = true;
+                        }
+                    },
+                    2 => {
+                        const face_count = self.num_faces();
+                        const incidence_count = try allocator.alloc(u8, face_count);
+                        defer allocator.free(incidence_count);
+                        @memset(incidence_count, 0);
+
+                        for (0..self.num_tets()) |tet_idx_usize| {
+                            const row = self.boundary(3).row(@intCast(tet_idx_usize));
+                            for (row.cols) |face_idx| {
+                                incidence_count[face_idx] += 1;
+                            }
+                        }
+
+                        for (incidence_count, 0..) |count, face_idx| {
+                            if (count == 1) {
+                                mask[face_idx] = true;
+                            }
+                        }
+                    },
+                    3 => {
+                        const boundary_face_mask = try self.boundary_mask(allocator, 2);
+                        defer allocator.free(boundary_face_mask);
+
+                        for (0..self.num_tets()) |tet_idx_usize| {
+                            const row = self.boundary(3).row(@intCast(tet_idx_usize));
+                            for (row.cols) |face_idx| {
+                                if (!boundary_face_mask[face_idx]) continue;
+                                mask[tet_idx_usize] = true;
+                                break;
+                            }
+                        }
+                    },
+                    else => unreachable,
+                },
+                else => unreachable,
+            }
+
+            return mask;
+        }
+
+        /// Return boundary-adjacent k-cell indices in ascending mesh order.
+        pub fn boundary_indices(self: *const Self, allocator: std.mem.Allocator, comptime k: comptime_int) ![]u32 {
+            const mask = try self.boundary_mask(allocator, k);
+            defer allocator.free(mask);
+
+            var count: u32 = 0;
+            for (mask) |selected| {
+                if (selected) count += 1;
+            }
+
+            const indices = try allocator.alloc(u32, count);
+            errdefer allocator.free(indices);
+
+            var write_idx: u32 = 0;
+            for (mask, 0..) |selected, cell_idx| {
+                if (!selected) continue;
+                indices[write_idx] = @intCast(cell_idx);
+                write_idx += 1;
+            }
+            std.debug.assert(write_idx == count);
+
+            return indices;
+        }
+
         pub fn whitney_mass(self: *const Self, comptime k: comptime_int) sparse.CsrMatrix(f64) {
             if (k <= 0 or k >= topological_dimension) {
                 @compileError(std.fmt.comptimePrint(
@@ -1471,6 +1601,52 @@ test "boundary of boundary is zero for 2D triangulations" {
     }
 }
 
+test "boundary queries on 2D meshes agree with boundary incidence" {
+    const allocator = testing.allocator;
+    const Mesh2D = Mesh(2, 2);
+
+    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const boundary_vertex_mask = try mesh.boundary_mask(allocator, 0);
+    defer allocator.free(boundary_vertex_mask);
+    const boundary_edge_mask = try mesh.boundary_mask(allocator, 1);
+    defer allocator.free(boundary_edge_mask);
+    const boundary_face_mask = try mesh.boundary_mask(allocator, 2);
+    defer allocator.free(boundary_face_mask);
+    const boundary_edge_indices = try mesh.boundary_indices(allocator, 1);
+    defer allocator.free(boundary_edge_indices);
+
+    const edge_vertices = mesh.simplices(1).items(.vertices);
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expect(boundary_edge_mask[edge_idx]);
+        const edge = edge_vertices[edge_idx];
+        try testing.expect(boundary_vertex_mask[edge[0]]);
+        try testing.expect(boundary_vertex_mask[edge[1]]);
+    }
+
+    var selected_edge_count: usize = 0;
+    for (boundary_edge_mask, 0..) |is_boundary, edge_idx| {
+        if (is_boundary) {
+            try testing.expectEqual(mesh.boundary_edges[selected_edge_count], @as(u32, @intCast(edge_idx)));
+            selected_edge_count += 1;
+        }
+    }
+    try testing.expectEqual(mesh.boundary_edges.len, selected_edge_count);
+    try testing.expectEqual(mesh.boundary_edges.len, boundary_edge_indices.len);
+
+    for (0..mesh.num_faces()) |face_idx_usize| {
+        const row = mesh.boundary(2).row(@intCast(face_idx_usize));
+        var expected_boundary = false;
+        for (row.cols) |edge_idx| {
+            if (!boundary_edge_mask[edge_idx]) continue;
+            expected_boundary = true;
+            break;
+        }
+        try testing.expectEqual(expected_boundary, boundary_face_mask[face_idx_usize]);
+    }
+}
+
 test "edge lengths for unit square 1×1 grid" {
     const allocator = testing.allocator;
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
@@ -1978,6 +2154,65 @@ test "uniform tetrahedral grid boundary of boundary is zero" {
         for (edge_sum) |sum| {
             try testing.expectEqual(@as(i32, 0), sum);
         }
+    }
+}
+
+test "boundary queries on 3D meshes agree with boundary incidence" {
+    const allocator = testing.allocator;
+    const Mesh3D = Mesh(3, 3);
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const boundary_vertex_mask = try mesh.boundary_mask(allocator, 0);
+    defer allocator.free(boundary_vertex_mask);
+    const boundary_edge_mask = try mesh.boundary_mask(allocator, 1);
+    defer allocator.free(boundary_edge_mask);
+    const boundary_face_mask = try mesh.boundary_mask(allocator, 2);
+    defer allocator.free(boundary_face_mask);
+    const boundary_tet_mask = try mesh.boundary_mask(allocator, 3);
+    defer allocator.free(boundary_tet_mask);
+    const boundary_face_indices = try mesh.boundary_indices(allocator, 2);
+    defer allocator.free(boundary_face_indices);
+
+    var expected_face_count: usize = 0;
+    for (0..mesh.num_faces()) |face_idx_usize| {
+        var incidence_count: u32 = 0;
+        for (0..mesh.num_tets()) |tet_idx_usize| {
+            const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+            for (row.cols) |face_idx| {
+                if (face_idx != face_idx_usize) continue;
+                incidence_count += 1;
+            }
+        }
+        const expected_boundary = incidence_count == 1;
+        try testing.expectEqual(expected_boundary, boundary_face_mask[face_idx_usize]);
+        if (expected_boundary) expected_face_count += 1;
+    }
+    try testing.expectEqual(expected_face_count, boundary_face_indices.len);
+
+    const face_vertices = mesh.simplices(2).items(.vertices);
+    for (boundary_face_mask, 0..) |is_boundary, face_idx| {
+        if (!is_boundary) continue;
+        const face = face_vertices[face_idx];
+        try testing.expect(boundary_vertex_mask[face[0]]);
+        try testing.expect(boundary_vertex_mask[face[1]]);
+        try testing.expect(boundary_vertex_mask[face[2]]);
+    }
+
+    for (mesh.boundary_edges) |edge_idx| {
+        try testing.expect(boundary_edge_mask[edge_idx]);
+    }
+
+    for (0..mesh.num_tets()) |tet_idx_usize| {
+        const row = mesh.boundary(3).row(@intCast(tet_idx_usize));
+        var expected_boundary = false;
+        for (row.cols) |face_idx| {
+            if (!boundary_face_mask[face_idx]) continue;
+            expected_boundary = true;
+            break;
+        }
+        try testing.expectEqual(expected_boundary, boundary_tet_mask[tet_idx_usize]);
     }
 }
 
