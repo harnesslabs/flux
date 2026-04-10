@@ -296,6 +296,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &command_imports,
     });
+    const example_app_mod = b.createModule(.{
+        .root_source_file = b.path("examples/app.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "example_commands", .module = example_commands_mod },
+        },
+    });
+    exe.root_module.addImport("example_app", example_app_mod);
 
     // -- flux-examples umbrella binary --
     // A single executable exposes every example as a subcommand. The build
@@ -309,7 +318,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "example_commands", .module = example_commands_mod },
+                .{ .name = "example_app", .module = example_app_mod },
             },
         }),
     });
