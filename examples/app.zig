@@ -68,8 +68,8 @@ pub fn printUsage() void {
         \\
         \\  examples:
         \\    zig build run -- diffusion --surface plane --grid 32 --frames 4
-        \\    zig build run -- maxwell-2d --demo cavity --frames 50
-        \\    zig build run-diffusion-surface -- --frames 8
+        \\    zig build run -- maxwell --dim 2 --demo cavity --frames 50
+        \\    zig build run -- euler --dim 3 --steps 100 --frames 5
         \\
     , .{});
 }

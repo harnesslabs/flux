@@ -1,9 +1,7 @@
 const std = @import("std");
 const common = @import("examples_common");
-const maxwell_2d = @import("maxwell_2d");
-const maxwell_3d = @import("maxwell_3d");
-const euler_2d = @import("euler_2d");
-const euler_3d = @import("euler_3d");
+const maxwell = @import("maxwell");
+const euler = @import("euler");
 const diffusion = @import("diffusion");
 
 const DiffusionSurface = enum { plane, sphere };
@@ -16,102 +14,134 @@ pub const Subcommand = struct {
 };
 
 pub const subcommands = [_]Subcommand{
-    .{ .name = "maxwell-2d", .summary = "2D Maxwell on simplicial meshes (cavity, dipole)", .run = runMaxwell2d },
-    .{ .name = "maxwell-3d", .summary = "3D Maxwell TM_110 cavity on tetrahedra", .run = runMaxwell3d },
-    .{ .name = "euler-2d", .summary = "2D incompressible Euler vorticity-stream", .run = runEuler2d },
-    .{ .name = "euler-3d", .summary = "3D incompressible Euler with helicity conservation", .run = runEuler3d },
-    .{ .name = "diffusion", .summary = "Scalar diffusion on a plane or curved surface", .run = runDiffusion },
+    .{ .name = "maxwell", .summary = "Discrete Maxwell simulation in 2D or 3D", .run = runMaxwell },
+    .{ .name = "euler", .summary = "Incompressible Euler simulation in 2D or 3D", .run = runEuler },
+    .{ .name = "diffusion", .summary = "Scalar diffusion on a plane or sphere", .run = runDiffusion },
 };
 
-const usage_maxwell_2d =
-    \\  flux-examples maxwell-2d — 2D electromagnetic simulation on simplicial meshes
+const usage_maxwell =
+    \\  flux maxwell --dim 2|3 [options]
     \\
-    \\  usage: flux-examples maxwell-2d [--demo <name>] [options]
+    \\  Choose `--dim 2` for the fast structured-mesh cavity/dipole run or
+    \\  `--dim 3` for the tetrahedral cavity run.
+    \\
+    \\  common:
+    \\    --dim N           2 (default) or 3
+    \\    --steps N         number of timesteps
+    \\    --dt DT           explicit timestep override
+    \\    --output DIR      output directory for VTK snapshots
+    \\    --frames N        evenly-spaced snapshots
+    \\
+    \\  2D:
+    \\    --demo NAME       dipole (default) or cavity
+    \\    --grid N          cells per side
+    \\    --domain L        square side length
+    \\    --courant C       dt = C * h
+    \\    --frequency F     dipole frequency
+    \\    --amplitude A     dipole amplitude
+    \\
+    \\  3D:
+    \\    --nx N --ny N --nz N
+    \\    --width L --height L --depth L
+    \\    --output-interval N
+    \\
+;
+
+const usage_maxwell_2d =
+    \\  flux maxwell --dim 2 [--demo <name>] [options]
     \\
     \\  demos:
     \\    dipole    (default) point dipole radiating in a PEC cavity
-    \\    cavity    TE10 standing wave — exact mode, source-free
+    \\    cavity    TE10 standing wave, source-free
     \\
-    \\  mesh & physics:
+    \\  options:
     \\    --grid N          cells per side (default: 32)
     \\    --domain L        domain side length (default: 1.0)
-    \\    --courant C       Courant number, dt = C·h (default: 0.1)
-    \\    --dt DT           explicit timestep override (computes courant = dt/h)
-    \\
-    \\  dipole source (ignored for cavity):
-    \\    --frequency F     source frequency in Hz (default: TE10 resonance)
-    \\    --amplitude A     source amplitude (default: 1.0)
-    \\
-    \\  time stepping:
-    \\    --steps N         number of timesteps (default: 1000)
-    \\
-    \\  output:
-    \\    --output DIR      VTK output directory (default: output)
-    \\    --frames N        number of snapshots (default: 100)
+    \\    --courant C       Courant number, dt = C*h (default: 0.1)
+    \\    --dt DT           explicit timestep override
+    \\    --frequency F     source frequency in Hz
+    \\    --amplitude A     source amplitude
+    \\    --steps N         number of timesteps
+    \\    --output DIR      VTK output directory
+    \\    --frames N        number of snapshots
     \\
 ;
 
 const usage_maxwell_3d =
-    \\  flux-examples maxwell-3d — TM_110 cavity resonance on tetrahedra
-    \\
-    \\  usage: flux-examples maxwell-3d [options]
+    \\  flux maxwell --dim 3 [options]
     \\
     \\  options:
-    \\    --nx N                tetrahedral cells in x (default: 2)
-    \\    --ny N                tetrahedral cells in y (default: 2)
-    \\    --nz N                tetrahedral cells in z (default: 2)
-    \\    --width L             cavity width  (default: 1.0)
-    \\    --height L            cavity height (default: 1.0)
-    \\    --depth L             cavity depth  (default: 1.0)
-    \\    --steps N             leapfrog steps (default: 1000)
-    \\    --dt DT               fixed timestep (default: 0.01)
-    \\    --output DIR          write VTK snapshots into DIR
-    \\    --output-interval N   write every N steps (overrides --frames)
-    \\    --frames N            number of evenly-spaced snapshots
+    \\    --nx N --ny N --nz N   tetrahedral cells per axis
+    \\    --width L              cavity width
+    \\    --height L             cavity height
+    \\    --depth L              cavity depth
+    \\    --steps N              leapfrog steps
+    \\    --dt DT                fixed timestep
+    \\    --output DIR           write VTK snapshots into DIR
+    \\    --output-interval N    write every N steps
+    \\    --frames N             evenly-spaced snapshots
+    \\
+;
+
+const usage_euler =
+    \\  flux euler --dim 2|3 [options]
+    \\
+    \\  Choose `--dim 2` for the vorticity-stream example or `--dim 3` for the
+    \\  helicity-preserving tetrahedral reference mode.
+    \\
+    \\  common:
+    \\    --dim N           2 (default) or 3
+    \\    --steps N         number of timesteps
+    \\    --dt DT           explicit timestep override
+    \\    --output DIR      output directory for VTK snapshots
+    \\    --frames N        evenly-spaced snapshots
+    \\
+    \\  2D:
+    \\    --demo NAME       gaussian or dipole
+    \\    --grid N          cells per side
+    \\    --domain L        square side length
+    \\    --cfl C           dt = C*h
+    \\
+    \\  3D:
+    \\    --nx N --ny N --nz N
+    \\    --width L --height L --depth L
+    \\    --output-interval N
     \\
 ;
 
 const usage_euler_2d =
-    \\  flux-examples euler-2d — 2D incompressible Euler vorticity-stream
-    \\
-    \\  usage: flux-examples euler-2d [options]
+    \\  flux euler --dim 2 [options]
     \\
     \\  options:
-    \\    --demo NAME       gaussian (invariant reference) or dipole (dynamic showcase)
+    \\    --demo NAME       gaussian (default) or dipole
     \\    --grid N          grid cells per side (default: 16)
     \\    --steps N         number of timesteps (default: 1000)
     \\    --domain L        square domain side length (default: 1.0)
-    \\    --cfl C           timestep scale dt = C·h (default: 0.1)
-    \\    --dt DT           explicit timestep override (computes cfl = dt/h)
-    \\    --output DIR      output directory for VTK files (default: output/euler_2d)
-    \\    --frames N        number of snapshots to write (default: 50)
+    \\    --cfl C           timestep scale dt = C*h (default: 0.1)
+    \\    --dt DT           explicit timestep override
+    \\    --output DIR      output directory for VTK files
+    \\    --frames N        number of snapshots
     \\
 ;
 
 const usage_euler_3d =
-    \\  flux-examples euler-3d — 3D incompressible Euler with helicity
-    \\
-    \\  usage: flux-examples euler-3d [options]
+    \\  flux euler --dim 3 [options]
     \\
     \\  options:
-    \\    --steps N             number of timesteps (default: 1000)
-    \\    --nx N                x-axis cube count (default: 2)
-    \\    --ny N                y-axis cube count (default: 2)
-    \\    --nz N                z-axis cube count (default: 2)
-    \\    --width L             domain width (default: 1.0)
-    \\    --height L            domain height (default: 1.0)
-    \\    --depth L             domain depth (default: 1.0)
-    \\    --dt DT               timestep size (default: 0.01)
+    \\    --steps N             number of timesteps
+    \\    --nx N --ny N --nz N  cube count per axis
+    \\    --width L             domain width
+    \\    --height L            domain height
+    \\    --depth L             domain depth
+    \\    --dt DT               timestep size
     \\    --output DIR          output directory for VTK snapshots
-    \\    --output-interval N   snapshot cadence in steps (overrides --frames)
-    \\    --frames N            number of evenly-spaced snapshots
+    \\    --output-interval N   snapshot cadence in steps
+    \\    --frames N            evenly-spaced snapshots
     \\
 ;
 
 const usage_diffusion =
-    \\  flux-examples diffusion — scalar diffusion on a plane or sphere
-    \\
-    \\  usage: flux-examples diffusion [options]
+    \\  flux diffusion [options]
     \\
     \\  options:
     \\    --surface NAME     plane (default) or sphere
@@ -121,23 +151,45 @@ const usage_diffusion =
     \\    --output DIR       output directory for VTK files
     \\    --frames N         number of snapshots to write
     \\
-    \\  plane-only:
-    \\    --grid N           grid cells per side (default: 8)
-    \\    --domain L         square domain side length (default: 1.0)
+    \\  plane:
+    \\    --grid N           grid cells per side
+    \\    --domain L         square domain side length
     \\
-    \\  sphere-only:
-    \\    --refinement N     spherical mesh refinement level (default: 0)
-    \\    --final-time T     total simulated time (default: 0.05)
+    \\  sphere:
+    \\    --refinement N     spherical mesh refinement level
+    \\    --final-time T     total simulated time
     \\
 ;
 
-pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = maxwell_2d.Config{};
+pub fn runMaxwell(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    const topological_dimension = try parseDimensionArg(args, 2);
+    switch (topological_dimension) {
+        2 => try runMaxwell2d(allocator, args),
+        3 => try runMaxwell3d(allocator, args),
+        else => unreachable,
+    }
+}
+
+pub fn runEuler(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    const topological_dimension = try parseDimensionArg(args, 2);
+    switch (topological_dimension) {
+        2 => try runEuler2d(allocator, args),
+        3 => try runEuler3d(allocator, args),
+        else => unreachable,
+    }
+}
+
+fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    var config = maxwell.Config(2){};
     var shared = common.Common{};
     var parser = common.Parser.init(args);
     _ = parser.next();
 
     while (parser.next()) |arg| {
+        if (eql(arg, "--dim")) {
+            _ = try parser.requireValue("--dim");
+            continue;
+        }
         if (eql(arg, "--demo")) {
             const value = try parser.requireValue("--demo");
             if (eql(value, "dipole")) {
@@ -177,22 +229,31 @@ pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
         config.courant = dt_value / h;
     }
 
-    try maxwell_2d.runDriver(allocator, config);
+    try maxwell.runDriver(2, allocator, config);
 }
 
-pub fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    const config = try parseBox3Command(maxwell_3d.Config, args, printMaxwell3dUsage, applyMaxwell3dShared) orelse return;
-    try maxwell_3d.runDriver(allocator, config);
+fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    const config = try parseBox3Command(
+        maxwell.Config(3),
+        args,
+        printMaxwell3dUsage,
+        applyMaxwell3dShared,
+    ) orelse return;
+    try maxwell.runDriver(3, allocator, config);
 }
 
-pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = euler_2d.Config{};
+fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    var config = euler.Config(2){};
     var shared = common.Common{};
     var output_explicit = false;
     var parser = common.Parser.init(args);
     _ = parser.next();
 
     while (parser.next()) |arg| {
+        if (eql(arg, "--dim")) {
+            _ = try parser.requireValue("--dim");
+            continue;
+        }
         if (eql(arg, "--demo")) {
             const value = try parser.requireValue("--demo");
             if (eql(value, "gaussian")) {
@@ -233,7 +294,7 @@ pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    const result = try euler_2d.run(allocator, config, stderr);
+    const result = try euler.run(2, allocator, config, stderr);
     const drift = @abs(result.circulation_final - result.circulation_initial);
     try stderr.print(
         "elapsed={d:.3}s snapshots={d} drift={e} output={s}\n",
@@ -241,13 +302,18 @@ pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
     );
 }
 
-pub fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    const config = try parseBox3Command(euler_3d.Config, args, printEuler3dUsage, applyEuler3dShared) orelse return;
+fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    const config = try parseBox3Command(
+        euler.Config(3),
+        args,
+        printEuler3dUsage,
+        applyEuler3dShared,
+    ) orelse return;
 
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    const result = try euler_3d.run(allocator, config, stderr);
+    const result = try euler.run(3, allocator, config, stderr);
     try stderr.print(
         "elapsed={d:.3}s snapshots={d} drift={e}\n",
         .{
@@ -328,6 +394,23 @@ fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.SphereConf
     _ = try diffusion.runSphere(allocator, config, stderr);
 }
 
+fn parseDimensionArg(args: []const [:0]const u8, default_dimension: u8) !u8 {
+    var parser = common.Parser.init(args);
+    _ = parser.next();
+    while (parser.next()) |arg| {
+        if (!eql(arg, "--dim")) continue;
+        const value = try parser.parseU32("--dim");
+        return switch (value) {
+            2, 3 => @intCast(value),
+            else => {
+                std.debug.print("error: unsupported --dim {d}; expected 2 or 3\n", .{value});
+                std.process.exit(2);
+            },
+        };
+    }
+    return default_dimension;
+}
+
 fn parseBox3Command(
     comptime ConfigType: type,
     args: []const [:0]const u8,
@@ -340,6 +423,10 @@ fn parseBox3Command(
     _ = parser.next();
 
     while (parser.next()) |arg| {
+        if (eql(arg, "--dim")) {
+            _ = try parser.requireValue("--dim");
+            continue;
+        }
         if (try common.tryBox3Flag(&parser, arg, &config)) continue;
         if (try parser.tryCommon(arg, &shared)) continue;
         failUnknownFlag(arg, usage_fn);
@@ -362,11 +449,11 @@ fn applyFixedDtWithFrameInterval(cfg: anytype, shared: common.Common) void {
     }
 }
 
-fn applyMaxwell3dShared(cfg: *maxwell_3d.Config, shared: common.Common) void {
+fn applyMaxwell3dShared(cfg: *maxwell.Config(3), shared: common.Common) void {
     applyFixedDtWithFrameInterval(cfg, shared);
 }
 
-fn applyEuler3dShared(cfg: *euler_3d.Config, shared: common.Common) void {
+fn applyEuler3dShared(cfg: *euler.Config(3), shared: common.Common) void {
     applyFixedDtWithFrameInterval(cfg, shared);
 }
 
@@ -380,12 +467,20 @@ fn printUsageText(text: []const u8) void {
     std.debug.print("{s}", .{text});
 }
 
+fn printMaxwellUsage() void {
+    printUsageText(usage_maxwell);
+}
+
 fn printMaxwell2dUsage() void {
     printUsageText(usage_maxwell_2d);
 }
 
 fn printMaxwell3dUsage() void {
     printUsageText(usage_maxwell_3d);
+}
+
+fn printEulerUsage() void {
+    printUsageText(usage_euler);
 }
 
 fn printEuler2dUsage() void {
@@ -402,6 +497,11 @@ fn printDiffusionUsage() void {
 
 inline fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
+}
+
+test "generic command usage strings stay reachable" {
+    printMaxwellUsage();
+    printEulerUsage();
 }
 
 test {

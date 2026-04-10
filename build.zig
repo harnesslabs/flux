@@ -11,42 +11,26 @@ const ExampleSpec = struct {
 
 const example_specs = [_]ExampleSpec{
     .{
-        .run_args = &.{"maxwell-2d"},
-        .summary = "2D Maxwell on simplicial meshes (cavity, dipole)",
-        .run_step = "run-maxwell-2d",
-        .run_doc = "Run the 2D Maxwell example",
-        .physics_source = "examples/maxwell_2d/maxwell.zig",
-        .physics_module = "maxwell_2d",
+        .run_args = &.{"maxwell"},
+        .summary = "Maxwell on 2D or 3D meshes (`--dim 2|3`)",
+        .run_step = "run-maxwell",
+        .run_doc = "Run the Maxwell example suite",
+        .physics_source = "examples/maxwell.zig",
+        .physics_module = "maxwell",
     },
     .{
-        .run_args = &.{"maxwell-3d"},
-        .summary = "3D Maxwell TM_110 cavity on tetrahedra",
-        .run_step = "run-maxwell-3d",
-        .run_doc = "Run the 3D Maxwell cavity example",
-        .physics_source = "examples/maxwell_3d/maxwell.zig",
-        .physics_module = "maxwell_3d",
-    },
-    .{
-        .run_args = &.{"euler-2d"},
-        .summary = "2D incompressible Euler vorticity-stream",
-        .run_step = "run-euler-2d",
-        .run_doc = "Run the 2D incompressible Euler example",
-        .physics_source = "examples/euler_2d/euler.zig",
-        .physics_module = "euler_2d",
-    },
-    .{
-        .run_args = &.{"euler-3d"},
-        .summary = "3D incompressible Euler with helicity conservation",
-        .run_step = "run-euler-3d",
-        .run_doc = "Run the 3D incompressible Euler example",
-        .physics_source = "examples/euler_3d/euler.zig",
-        .physics_module = "euler_3d",
+        .run_args = &.{"euler"},
+        .summary = "Incompressible Euler in 2D or 3D (`--dim 2|3`)",
+        .run_step = "run-euler",
+        .run_doc = "Run the Euler example suite",
+        .physics_source = "examples/euler.zig",
+        .physics_module = "euler",
     },
     .{
         .run_args = &.{ "diffusion", "--surface", "plane" },
-        .summary = "Implicit heat equation via backward Euler + CG",
-        .run_step = "run-heat",
-        .run_doc = "Run the implicit heat-equation example",
+        .summary = "Scalar diffusion on a plane or sphere",
+        .run_step = "run-diffusion",
+        .run_doc = "Run the diffusion example suite",
         .physics_source = "examples/diffusion.zig",
         .physics_module = "diffusion",
     },
@@ -335,17 +319,6 @@ pub fn build(b: *std.Build) void {
         const top = b.step(spec.run_step, spec.run_doc);
         top.dependOn(&run_cmd_step.step);
     }
-    {
-        const run_cmd_step = b.addRunArtifact(examples_exe);
-        run_cmd_step.step.dependOn(b.getInstallStep());
-        run_cmd_step.addArgs(&.{ "diffusion", "--surface", "sphere" });
-        if (b.args) |args| {
-            run_cmd_step.addArgs(args);
-        }
-        const top = b.step("run-diffusion-surface", "Run the curved-surface diffusion example");
-        top.dependOn(&run_cmd_step.step);
-    }
-
     // Each example physics module is registered once as a named module.
     // Dedicated generated test roots import those modules by name and
     // explicitly ref all decls, so adding a new `@import()` inside an example
@@ -444,11 +417,13 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "flux", .module = mod },
                 .{ .name = "maxwell_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/maxwell_2d/maxwell.zig"),
+                    .root_source_file = b.path("examples/maxwell.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
                     .imports = &.{
                         .{ .name = "flux", .module = mod },
+                        .{ .name = "examples_common", .module = examples_common_mod },
+                        .{ .name = "maxwell_core", .module = maxwell_core_mod },
                     },
                 }) },
             },

@@ -19,9 +19,8 @@ const flux = @import("flux");
 // Each physics example is imported as a named module (declared in build.zig)
 // so its tests do not get pulled into this compilation unit. Only the five
 // acceptance tests defined in this file run when this target executes.
-const maxwell_3d = @import("maxwell_3d");
-const euler_2d = @import("euler_2d");
-const euler_3d = @import("euler_3d");
+const maxwell = @import("maxwell");
+const euler = @import("euler");
 const diffusion = @import("diffusion");
 
 /// Step count for the short capstone runs. The per-example deep tests run for
@@ -33,7 +32,7 @@ const acceptance_steps: u32 = 10;
 test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a short cavity run" {
     const allocator = testing.allocator;
 
-    const config = maxwell_3d.Config{
+    const config = maxwell.Config(3){
         .nx = 2,
         .ny = 2,
         .nz = 2,
@@ -41,21 +40,21 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
         .steps = acceptance_steps,
     };
 
-    var mesh = try maxwell_3d.makeCavityMesh(allocator, config);
+    var mesh = try maxwell.makeMesh(3, allocator, config);
     defer mesh.deinit(allocator);
 
-    var state = try maxwell_3d.MaxwellState3D.init(allocator, &mesh);
+    var state = try maxwell.State(3).init(allocator, &mesh);
     defer state.deinit(allocator);
 
-    try maxwell_3d.seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
+    try maxwell.seedReferenceMode(3, allocator, &state, config.dt, config.width, config.height);
 
     // The invariant must hold at every step, not just at the end — a leapfrog
     // step that *temporarily* introduces ∇·B is already a failure.
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try maxwell_3d.leapfrogStep(allocator, &state, config.dt);
+        try maxwell.leapfrogStep(3, allocator, &state, config.dt);
 
-        const divergence = try maxwell_3d.divergenceNorm(allocator, &state);
+        const divergence = try maxwell.divergenceNorm(allocator, &state);
         try testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
     }
 }
@@ -63,44 +62,44 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
 test "M3 acceptance: Euler 2D conserves total circulation to machine precision over a short dipole run" {
     const allocator = testing.allocator;
 
-    var mesh = try euler_2d.Mesh2D.uniform_grid(allocator, 16, 16, 1.0, 1.0);
+    var mesh = try euler.Mesh(2).uniform_grid(allocator, 16, 16, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var state = try euler_2d.State.init(allocator, &mesh);
+    var state = try euler.State(2).init(allocator, &mesh);
     defer state.deinit(allocator);
 
-    euler_2d.initializeVortexDipole(&state);
+    try euler.seedReferenceMode(2, allocator, &state);
 
     const dt: f64 = 0.1 * (1.0 / 16.0);
-    const circulation_initial = euler_2d.totalCirculation(&state);
+    const circulation_initial = try euler.conservedQuantity(2, allocator, &state);
 
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler_2d.step(allocator, &state, dt);
+        try euler.step(2, allocator, &state, dt);
     }
 
-    const circulation_final = euler_2d.totalCirculation(&state);
+    const circulation_final = try euler.conservedQuantity(2, allocator, &state);
     try testing.expectApproxEqAbs(circulation_initial, circulation_final, 1e-12);
 }
 
 test "M3 acceptance: Euler 3D conserves helicity to machine precision over a short reference-mode run" {
     const allocator = testing.allocator;
 
-    var mesh = try euler_3d.Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    var mesh = try euler.Mesh(3).uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var state = try euler_3d.State.init(allocator, &mesh);
+    var state = try euler.State(3).init(allocator, &mesh);
     defer state.deinit(allocator);
 
-    try euler_3d.seedReferenceMode(allocator, &state);
-    const helicity_initial = try euler_3d.computeHelicity(allocator, &state);
+    try euler.seedReferenceMode(3, allocator, &state);
+    const helicity_initial = try euler.conservedQuantity(3, allocator, &state);
 
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler_3d.step(allocator, &state, 0.01);
+        try euler.step(3, allocator, &state, 0.01);
     }
 
-    const helicity_final = try euler_3d.computeHelicity(allocator, &state);
+    const helicity_final = try euler.conservedQuantity(3, allocator, &state);
     try testing.expectApproxEqAbs(helicity_initial, helicity_final, 1e-12);
 }
 

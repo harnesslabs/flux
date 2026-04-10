@@ -28,7 +28,7 @@ const PrimalC0 = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
 const PrimalC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Primal);
 const PrimalC2 = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 const OperatorContext2D = flux.operators.context.OperatorContext(Mesh2D);
-const MaxwellState2D = maxwell.State(Mesh2D);
+const MaxwellState2D = maxwell.State(2);
 const ArithmeticMesh = struct {
     pub const embedding_dimension = 2;
     pub const topological_dimension = 2;
@@ -198,7 +198,7 @@ const BenchmarkContext = struct {
         errdefer cavity_mesh.deinit(allocator);
         var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
         errdefer cavity_state.deinit(allocator);
-        maxwell.project_te10_b(cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain);
+        maxwell.projectReferenceMagneticField(2, cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
         _ = try operator_context.exteriorDerivative(flux.forms.Primal, 0);
