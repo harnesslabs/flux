@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
+const sphere = @import("diffusion_surface/surface.zig");
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
 pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
@@ -46,6 +47,13 @@ pub const ConvergenceResult = struct {
     grid: u32,
     l2_error: f64,
 };
+
+pub const PlaneConfig = Config;
+pub const PlaneRunResult = RunResult;
+pub const PlaneConvergenceResult = ConvergenceResult;
+pub const SphereConfig = sphere.Config;
+pub const SphereRunResult = sphere.RunResult;
+pub const SphereConvergenceResult = sphere.ConvergenceResult;
 
 const HeatSystem = struct {
     reduced_matrix: sparse.CsrMatrix(f64),
@@ -151,6 +159,14 @@ pub fn run(
     return result;
 }
 
+pub fn runPlane(
+    allocator: std.mem.Allocator,
+    config: PlaneConfig,
+    writer: anytype,
+) !PlaneRunResult {
+    return run(allocator, config, writer);
+}
+
 pub fn runConvergenceStudy(
     allocator: std.mem.Allocator,
     grids: []const u32,
@@ -168,6 +184,28 @@ pub fn runConvergenceStudy(
     }
 
     return results;
+}
+
+pub fn runPlaneConvergenceStudy(
+    allocator: std.mem.Allocator,
+    grids: []const u32,
+) ![]PlaneConvergenceResult {
+    return runConvergenceStudy(allocator, grids);
+}
+
+pub fn runSphere(
+    allocator: std.mem.Allocator,
+    config: SphereConfig,
+    writer: anytype,
+) !SphereRunResult {
+    return sphere.run(allocator, config, writer);
+}
+
+pub fn runSphereConvergenceStudy(
+    allocator: std.mem.Allocator,
+    refinements: []const u32,
+) ![]SphereConvergenceResult {
+    return sphere.runConvergenceStudy(allocator, refinements);
 }
 
 fn simulateCase(

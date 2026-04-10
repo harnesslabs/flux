@@ -4,8 +4,7 @@ const maxwell_2d = @import("maxwell_2d");
 const maxwell_3d = @import("maxwell_3d");
 const euler_2d = @import("euler_2d");
 const euler_3d = @import("euler_3d");
-const heat = @import("heat");
-const diffusion_surface = @import("diffusion_surface");
+const diffusion = @import("diffusion");
 
 const DiffusionSurface = enum { plane, sphere };
 const UsageFn = *const fn () void;
@@ -261,8 +260,8 @@ pub fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
 
 pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var surface_kind: DiffusionSurface = .plane;
-    var plane_config = heat.Config{};
-    var sphere_config = diffusion_surface.Config{};
+    var plane_config = diffusion.PlaneConfig{};
+    var sphere_config = diffusion.SphereConfig{};
     var shared = common.Common{};
     var parser = common.Parser.init(args);
     _ = parser.next();
@@ -311,22 +310,22 @@ pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
     }
 }
 
-fn runPlaneDiffusion(allocator: std.mem.Allocator, config: heat.Config) !void {
+fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.PlaneConfig) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    const result = try heat.run(allocator, config, stderr);
+    const result = try diffusion.runPlane(allocator, config, stderr);
     try stderr.print(
         "elapsed={d:.3}s steps={d} snapshots={d} l2_error={e} output={s}\n",
         .{ result.elapsed_s, result.steps, result.snapshot_count, result.l2_error, config.output_dir },
     );
 }
 
-fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion_surface.Config) !void {
+fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.SphereConfig) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    _ = try diffusion_surface.run(allocator, config, stderr);
+    _ = try diffusion.runSphere(allocator, config, stderr);
 }
 
 fn parseBox3Command(

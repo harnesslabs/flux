@@ -22,8 +22,7 @@ const flux = @import("flux");
 const maxwell_3d = @import("maxwell_3d");
 const euler_2d = @import("euler_2d");
 const euler_3d = @import("euler_3d");
-const heat = @import("heat");
-const diffusion_surface = @import("diffusion_surface");
+const diffusion = @import("diffusion");
 
 /// Step count for the short capstone runs. The per-example deep tests run for
 /// 1000 steps; the capstone runs the same physics for an order of magnitude
@@ -111,7 +110,7 @@ test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     // Two-grid pair is the smallest configuration that exhibits a measurable
     // rate. The deeper {8,16,32} sweep lives in the per-example test.
     const grids = [_]u32{ 8, 16 };
-    const results = try heat.runConvergenceStudy(allocator, &grids);
+    const results = try diffusion.runPlaneConvergenceStudy(allocator, &grids);
     defer allocator.free(results);
 
     try testing.expectEqual(grids.len, results.len);
@@ -129,7 +128,7 @@ test "M3 acceptance: diffusion-surface solution matches the analytic eigenmode u
     // strictly decreasing on the sphere; refinement 0 is too coarse for the
     // analytic eigenmode comparison.
     const refinements = [_]u32{ 1, 2 };
-    const results = try diffusion_surface.runConvergenceStudy(allocator, &refinements);
+    const results = try diffusion.runSphereConvergenceStudy(allocator, &refinements);
     defer allocator.free(results);
 
     try testing.expectEqual(refinements.len, results.len);

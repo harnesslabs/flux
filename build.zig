@@ -47,16 +47,8 @@ const example_specs = [_]ExampleSpec{
         .summary = "Implicit heat equation via backward Euler + CG",
         .run_step = "run-heat",
         .run_doc = "Run the implicit heat-equation example",
-        .physics_source = "examples/heat/heat.zig",
-        .physics_module = "heat",
-    },
-    .{
-        .run_args = &.{ "diffusion", "--surface", "sphere" },
-        .summary = "Heat equation on a curved surface (Riemannian Hodge)",
-        .run_step = "run-diffusion-surface",
-        .run_doc = "Run the curved-surface diffusion example",
-        .physics_source = "examples/diffusion_surface/surface.zig",
-        .physics_module = "diffusion_surface",
+        .physics_source = "examples/diffusion.zig",
+        .physics_module = "diffusion",
     },
 };
 
@@ -341,6 +333,16 @@ pub fn build(b: *std.Build) void {
             run_cmd_step.addArgs(args);
         }
         const top = b.step(spec.run_step, spec.run_doc);
+        top.dependOn(&run_cmd_step.step);
+    }
+    {
+        const run_cmd_step = b.addRunArtifact(examples_exe);
+        run_cmd_step.step.dependOn(b.getInstallStep());
+        run_cmd_step.addArgs(&.{ "diffusion", "--surface", "sphere" });
+        if (b.args) |args| {
+            run_cmd_step.addArgs(args);
+        }
+        const top = b.step("run-diffusion-surface", "Run the curved-surface diffusion example");
         top.dependOn(&run_cmd_step.step);
     }
 
