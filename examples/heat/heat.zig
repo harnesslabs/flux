@@ -5,7 +5,6 @@ const common = @import("examples_common");
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
 pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
-const flux_io = flux.io;
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const operator_context_mod = flux.operators.context;
@@ -200,75 +199,45 @@ fn simulateCase(
     const exact = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(exact);
 
-    // Snapshot bookkeeping. The series carries an extra slot beyond the
-    // standard `(steps/interval)+1` because heat always emits a frame on
-    // the very last step even when it does not land on an interval boundary.
-    const has_output = config.frames > 0;
-    const interval: u32 = if (has_output) outputInterval(config) else 0;
-    var series = try common.Series.init(
-        allocator,
-        config.output_dir,
-        "heat",
-        if (has_output) common.Plan.fromInterval(config.steps, interval, .{ .emit_final = true }) else common.Plan.disabled(),
-    );
-    defer series.deinit();
-
-    if (series.enabled()) {
-        initializeState(&mesh, exact, initial_condition, 0.0);
-        try series.capture(0.0, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
-    }
-
     const reduced_rhs = try allocator.alloc(f64, heat_system.interior_vertices.len);
     defer allocator.free(reduced_rhs);
     const reduced_solution = try allocator.alloc(f64, heat_system.interior_vertices.len);
     defer allocator.free(reduced_solution);
     seedReducedSolution(&heat_system, state.values, reduced_solution);
 
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_idx| {
-        const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
-        try stepBackwardEuler(allocator, &mesh, &heat_system, state.values, reduced_rhs, reduced_solution);
-        if (series.enabled() and series.dueAt(@intCast(step_idx + 1), config.steps)) {
-            initializeState(&mesh, exact, initial_condition, next_time);
-            try series.capture(next_time, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
-        }
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+    const loop_result = try common.runExactFieldLoop(
+        Mesh2D,
+        allocator,
+        &mesh,
+        state.values,
+        exact,
+        .{
+            .steps = config.steps,
+            .dt = dt,
+            .final_time = total_time,
+            .frames = config.frames,
+            .output_dir = config.output_dir,
+            .output_base_name = "heat",
+        },
+        HeatExactInitializer{ .initial_condition = initial_condition },
+        HeatStepper{
+            .mesh = &mesh,
+            .heat_system = &heat_system,
+            .state_values = state.values,
+            .reduced_rhs = reduced_rhs,
+            .reduced_solution = reduced_solution,
+        },
+    );
 
-    initializeState(&mesh, exact, initial_condition, total_time);
     const l2_error = weightedL2Error(&mesh, state.values, exact);
 
-    try series.finalize();
-
     return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .elapsed_s = loop_result.elapsed_s,
         .steps = config.steps,
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
         .l2_error = l2_error,
     };
 }
-
-/// Renders a single heat snapshot. The struct-with-method pattern is how
-/// callers smuggle context into `Series.capture` since Zig has no closures.
-const HeatRenderer = struct {
-    mesh: *const Mesh2D,
-    state: []const f64,
-    exact: []const f64,
-
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        const error_values = try allocator.alloc(f64, self.state.len);
-        defer allocator.free(error_values);
-        for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
-            error_value.* = approx_value - exact_value;
-        }
-        const point_data = [_]flux_io.DataArraySlice{
-            .{ .name = "temperature", .values = self.state },
-            .{ .name = "temperature_exact", .values = self.exact },
-            .{ .name = "temperature_error", .values = error_values },
-        };
-        try flux_io.write(writer, self.mesh.*, &point_data, &.{});
-    }
-};
 
 fn convergenceConfig(grid: u32) Config {
     const probe = Config{ .grid = grid };
@@ -282,11 +251,6 @@ fn convergenceConfig(grid: u32) Config {
         .frames = 0,
         .output_dir = "output/heat-convergence",
     };
-}
-
-fn outputInterval(config: Config) u32 {
-    std.debug.assert(config.frames > 0);
-    return common.framesToInterval(config.steps, config.frames);
 }
 
 fn boundaryVertexMask(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]bool {
@@ -320,6 +284,33 @@ fn seedReducedSolution(
         reduced_solution[interior_idx] = full_state[vertex_idx];
     }
 }
+
+const HeatStepper = struct {
+    mesh: *const Mesh2D,
+    heat_system: *const HeatSystem,
+    state_values: []f64,
+    reduced_rhs: []f64,
+    reduced_solution: []f64,
+
+    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+        try stepBackwardEuler(
+            allocator,
+            self.mesh,
+            self.heat_system,
+            self.state_values,
+            self.reduced_rhs,
+            self.reduced_solution,
+        );
+    }
+};
+
+const HeatExactInitializer = struct {
+    initial_condition: InitialCondition,
+
+    pub fn fill(self: @This(), mesh: *const Mesh2D, values: []f64, time: f64) void {
+        initializeState(mesh, values, self.initial_condition, time);
+    }
+};
 
 fn stepBackwardEuler(
     allocator: std.mem.Allocator,
