@@ -8,6 +8,7 @@ const heat = @import("heat");
 const diffusion_surface = @import("diffusion_surface");
 
 const DiffusionSurface = enum { plane, sphere };
+const UsageFn = *const fn () void;
 
 pub const Subcommand = struct {
     name: []const u8,
@@ -22,6 +23,114 @@ pub const subcommands = [_]Subcommand{
     .{ .name = "euler-3d", .summary = "3D incompressible Euler with helicity conservation", .run = runEuler3d },
     .{ .name = "diffusion", .summary = "Scalar diffusion on a plane or curved surface", .run = runDiffusion },
 };
+
+const usage_maxwell_2d =
+    \\  flux-examples maxwell-2d — 2D electromagnetic simulation on simplicial meshes
+    \\
+    \\  usage: flux-examples maxwell-2d [--demo <name>] [options]
+    \\
+    \\  demos:
+    \\    dipole    (default) point dipole radiating in a PEC cavity
+    \\    cavity    TE10 standing wave — exact mode, source-free
+    \\
+    \\  mesh & physics:
+    \\    --grid N          cells per side (default: 32)
+    \\    --domain L        domain side length (default: 1.0)
+    \\    --courant C       Courant number, dt = C·h (default: 0.1)
+    \\    --dt DT           explicit timestep override (computes courant = dt/h)
+    \\
+    \\  dipole source (ignored for cavity):
+    \\    --frequency F     source frequency in Hz (default: TE10 resonance)
+    \\    --amplitude A     source amplitude (default: 1.0)
+    \\
+    \\  time stepping:
+    \\    --steps N         number of timesteps (default: 1000)
+    \\
+    \\  output:
+    \\    --output DIR      VTK output directory (default: output)
+    \\    --frames N        number of snapshots (default: 100)
+    \\
+;
+
+const usage_maxwell_3d =
+    \\  flux-examples maxwell-3d — TM_110 cavity resonance on tetrahedra
+    \\
+    \\  usage: flux-examples maxwell-3d [options]
+    \\
+    \\  options:
+    \\    --nx N                tetrahedral cells in x (default: 2)
+    \\    --ny N                tetrahedral cells in y (default: 2)
+    \\    --nz N                tetrahedral cells in z (default: 2)
+    \\    --width L             cavity width  (default: 1.0)
+    \\    --height L            cavity height (default: 1.0)
+    \\    --depth L             cavity depth  (default: 1.0)
+    \\    --steps N             leapfrog steps (default: 1000)
+    \\    --dt DT               fixed timestep (default: 0.01)
+    \\    --output DIR          write VTK snapshots into DIR
+    \\    --output-interval N   write every N steps (overrides --frames)
+    \\    --frames N            number of evenly-spaced snapshots
+    \\
+;
+
+const usage_euler_2d =
+    \\  flux-examples euler-2d — 2D incompressible Euler vorticity-stream
+    \\
+    \\  usage: flux-examples euler-2d [options]
+    \\
+    \\  options:
+    \\    --demo NAME       gaussian (invariant reference) or dipole (dynamic showcase)
+    \\    --grid N          grid cells per side (default: 16)
+    \\    --steps N         number of timesteps (default: 1000)
+    \\    --domain L        square domain side length (default: 1.0)
+    \\    --cfl C           timestep scale dt = C·h (default: 0.1)
+    \\    --dt DT           explicit timestep override (computes cfl = dt/h)
+    \\    --output DIR      output directory for VTK files (default: output/euler_2d)
+    \\    --frames N        number of snapshots to write (default: 50)
+    \\
+;
+
+const usage_euler_3d =
+    \\  flux-examples euler-3d — 3D incompressible Euler with helicity
+    \\
+    \\  usage: flux-examples euler-3d [options]
+    \\
+    \\  options:
+    \\    --steps N             number of timesteps (default: 1000)
+    \\    --nx N                x-axis cube count (default: 2)
+    \\    --ny N                y-axis cube count (default: 2)
+    \\    --nz N                z-axis cube count (default: 2)
+    \\    --width L             domain width (default: 1.0)
+    \\    --height L            domain height (default: 1.0)
+    \\    --depth L             domain depth (default: 1.0)
+    \\    --dt DT               timestep size (default: 0.01)
+    \\    --output DIR          output directory for VTK snapshots
+    \\    --output-interval N   snapshot cadence in steps (overrides --frames)
+    \\    --frames N            number of evenly-spaced snapshots
+    \\
+;
+
+const usage_diffusion =
+    \\  flux-examples diffusion — scalar diffusion on a plane or sphere
+    \\
+    \\  usage: flux-examples diffusion [options]
+    \\
+    \\  options:
+    \\    --surface NAME     plane (default) or sphere
+    \\    --steps N          backward-Euler steps
+    \\    --dt-scale C       diffusion timestep scale hint
+    \\    --dt DT            explicit timestep override
+    \\    --output DIR       output directory for VTK files
+    \\    --frames N         number of snapshots to write
+    \\
+    \\  plane-only:
+    \\    --grid N           grid cells per side (default: 8)
+    \\    --domain L         square domain side length (default: 1.0)
+    \\
+    \\  sphere-only:
+    \\    --refinement N     spherical mesh refinement level (default: 0)
+    \\    --final-time T     total simulated time (default: 0.05)
+    \\
+;
 
 pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var config = maxwell_2d.Config{};
@@ -55,10 +164,7 @@ pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
             continue;
         }
         if (try parser.tryCommon(arg, &shared)) continue;
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printMaxwell2dUsage();
-        std.process.exit(2);
+        failUnknownFlag(arg, printMaxwell2dUsage);
     }
 
     if (shared.help) {
@@ -66,7 +172,7 @@ pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
         return;
     }
 
-    applySharedFields(&config, shared);
+    common.applySharedFields(&config, shared);
     if (shared.dt) |dt_value| {
         const h = config.domain / @as(f64, @floatFromInt(config.grid));
         config.courant = dt_value / h;
@@ -76,31 +182,7 @@ pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
 }
 
 pub fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = maxwell_3d.Config{};
-    var shared = common.Common{};
-    var parser = common.Parser.init(args);
-    _ = parser.next();
-
-    while (parser.next()) |arg| {
-        if (try common.tryBox3Flag(&parser, arg, &config)) continue;
-        if (try parser.tryCommon(arg, &shared)) continue;
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printMaxwell3dUsage();
-        std.process.exit(2);
-    }
-
-    if (shared.help) {
-        printMaxwell3dUsage();
-        return;
-    }
-
-    applySharedFields(&config, shared);
-    if (shared.dt) |value| config.dt = value;
-    if (shared.frames) |frames| {
-        config.output_interval = common.framesToInterval(config.steps, frames);
-    }
-
+    const config = try parseBox3Command(maxwell_3d.Config, args, printMaxwell3dUsage, applyMaxwell3dShared) orelse return;
     try maxwell_3d.runDriver(allocator, config);
 }
 
@@ -132,10 +214,7 @@ pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
             if (shared.output_dir != null) output_explicit = true;
             continue;
         }
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printEuler2dUsage();
-        std.process.exit(2);
+        failUnknownFlag(arg, printEuler2dUsage);
     }
 
     if (shared.help) {
@@ -143,7 +222,7 @@ pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
         return;
     }
 
-    applySharedFields(&config, shared);
+    common.applySharedFields(&config, shared);
     if (shared.dt) |dt_value| {
         const h = config.domain / @as(f64, @floatFromInt(config.grid));
         config.cfl = dt_value / h;
@@ -164,30 +243,7 @@ pub fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
 }
 
 pub fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = euler_3d.Config{};
-    var shared = common.Common{};
-    var parser = common.Parser.init(args);
-    _ = parser.next();
-
-    while (parser.next()) |arg| {
-        if (try common.tryBox3Flag(&parser, arg, &config)) continue;
-        if (try parser.tryCommon(arg, &shared)) continue;
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printEuler3dUsage();
-        std.process.exit(2);
-    }
-
-    if (shared.help) {
-        printEuler3dUsage();
-        return;
-    }
-
-    applySharedFields(&config, shared);
-    if (shared.dt) |value| config.dt = value;
-    if (shared.frames) |frames| {
-        config.output_interval = common.framesToInterval(config.steps, frames);
-    }
+    const config = try parseBox3Command(euler_3d.Config, args, printEuler3dUsage, applyEuler3dShared) orelse return;
 
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
@@ -231,10 +287,7 @@ pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
             sphere_config.dt_scale = value;
             continue;
         }
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printDiffusionUsage();
-        std.process.exit(2);
+        failUnknownFlag(arg, printDiffusionUsage);
     }
 
     if (shared.help) {
@@ -244,44 +297,18 @@ pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
 
     switch (surface_kind) {
         .plane => {
-            applySharedFields(&plane_config, shared);
+            common.applySharedFields(&plane_config, shared);
             if (shared.dt) |value| plane_config.dt_override = value;
             try runPlaneDiffusion(allocator, plane_config);
         },
         .sphere => {
-            applySharedFields(&sphere_config, shared);
+            common.applySharedFields(&sphere_config, shared);
             if (shared.dt) |dt_value| {
                 sphere_config.final_time = dt_value * @as(f64, @floatFromInt(sphere_config.steps));
             }
             try runSphereDiffusion(allocator, sphere_config);
         },
     }
-}
-
-fn printDiffusionUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples diffusion — scalar diffusion on a plane or sphere
-        \\
-        \\  usage: flux-examples diffusion [options]
-        \\
-        \\  options:
-        \\    --surface NAME     plane (default) or sphere
-        \\    --steps N          backward-Euler steps
-        \\    --dt-scale C       diffusion timestep scale hint
-        \\    --dt DT            explicit timestep override
-        \\    --output DIR       output directory for VTK files
-        \\    --frames N         number of snapshots to write
-        \\
-        \\  plane-only:
-        \\    --grid N           grid cells per side (default: 8)
-        \\    --domain L         square domain side length (default: 1.0)
-        \\
-        \\  sphere-only:
-        \\    --refinement N     spherical mesh refinement level (default: 0)
-        \\    --final-time T     total simulated time (default: 0.05)
-        \\
-    , .{});
 }
 
 fn runPlaneDiffusion(allocator: std.mem.Allocator, config: heat.Config) !void {
@@ -302,109 +329,80 @@ fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion_surface.Co
     _ = try diffusion_surface.run(allocator, config, stderr);
 }
 
-fn applySharedFields(cfg: anytype, shared: common.Common) void {
-    common.applySharedFields(cfg, shared);
+fn parseBox3Command(
+    comptime ConfigType: type,
+    args: []const [:0]const u8,
+    usage_fn: UsageFn,
+    apply_shared: *const fn (*ConfigType, common.Common) void,
+) !?ConfigType {
+    var config = ConfigType{};
+    var shared = common.Common{};
+    var parser = common.Parser.init(args);
+    _ = parser.next();
+
+    while (parser.next()) |arg| {
+        if (try common.tryBox3Flag(&parser, arg, &config)) continue;
+        if (try parser.tryCommon(arg, &shared)) continue;
+        failUnknownFlag(arg, usage_fn);
+    }
+
+    if (shared.help) {
+        usage_fn();
+        return null;
+    }
+
+    common.applySharedFields(&config, shared);
+    apply_shared(&config, shared);
+    return config;
+}
+
+fn applyFixedDtWithFrameInterval(cfg: anytype, shared: common.Common) void {
+    if (shared.dt) |value| cfg.dt = value;
+    if (shared.frames) |frames| {
+        cfg.output_interval = common.framesToInterval(cfg.steps, frames);
+    }
+}
+
+fn applyMaxwell3dShared(cfg: *maxwell_3d.Config, shared: common.Common) void {
+    applyFixedDtWithFrameInterval(cfg, shared);
+}
+
+fn applyEuler3dShared(cfg: *euler_3d.Config, shared: common.Common) void {
+    applyFixedDtWithFrameInterval(cfg, shared);
+}
+
+fn failUnknownFlag(arg: []const u8, usage_fn: UsageFn) noreturn {
+    std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
+    usage_fn();
+    std.process.exit(2);
+}
+
+fn printUsageText(text: []const u8) void {
+    std.debug.print("{s}", .{text});
+}
+
+fn printMaxwell2dUsage() void {
+    printUsageText(usage_maxwell_2d);
+}
+
+fn printMaxwell3dUsage() void {
+    printUsageText(usage_maxwell_3d);
+}
+
+fn printEuler2dUsage() void {
+    printUsageText(usage_euler_2d);
+}
+
+fn printEuler3dUsage() void {
+    printUsageText(usage_euler_3d);
+}
+
+fn printDiffusionUsage() void {
+    printUsageText(usage_diffusion);
 }
 
 inline fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
-}
-
-fn printMaxwell2dUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples maxwell-2d — 2D electromagnetic simulation on simplicial meshes
-        \\
-        \\  usage: flux-examples maxwell-2d [--demo <name>] [options]
-        \\
-        \\  demos:
-        \\    dipole    (default) point dipole radiating in a PEC cavity
-        \\    cavity    TE10 standing wave — exact mode, source-free
-        \\
-        \\  mesh & physics:
-        \\    --grid N          cells per side (default: 32)
-        \\    --domain L        domain side length (default: 1.0)
-        \\    --courant C       Courant number, dt = C·h (default: 0.1)
-        \\    --dt DT           explicit timestep override (computes courant = dt/h)
-        \\
-        \\  dipole source (ignored for cavity):
-        \\    --frequency F     source frequency in Hz (default: TE10 resonance)
-        \\    --amplitude A     source amplitude (default: 1.0)
-        \\
-        \\  time stepping:
-        \\    --steps N         number of timesteps (default: 1000)
-        \\
-        \\  output:
-        \\    --output DIR      VTK output directory (default: output)
-        \\    --frames N        number of snapshots (default: 100)
-        \\
-    , .{});
-}
-
-fn printMaxwell3dUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples maxwell-3d — TM_110 cavity resonance on tetrahedra
-        \\
-        \\  usage: flux-examples maxwell-3d [options]
-        \\
-        \\  options:
-        \\    --nx N                tetrahedral cells in x (default: 2)
-        \\    --ny N                tetrahedral cells in y (default: 2)
-        \\    --nz N                tetrahedral cells in z (default: 2)
-        \\    --width L             cavity width  (default: 1.0)
-        \\    --height L            cavity height (default: 1.0)
-        \\    --depth L             cavity depth  (default: 1.0)
-        \\    --steps N             leapfrog steps (default: 1000)
-        \\    --dt DT               fixed timestep (default: 0.01)
-        \\    --output DIR          write VTK snapshots into DIR
-        \\    --output-interval N   write every N steps (overrides --frames)
-        \\    --frames N            number of evenly-spaced snapshots
-        \\
-    , .{});
-}
-
-fn printEuler2dUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples euler-2d — 2D incompressible Euler vorticity-stream
-        \\
-        \\  usage: flux-examples euler-2d [options]
-        \\
-        \\  options:
-        \\    --demo NAME       gaussian (invariant reference) or dipole (dynamic showcase)
-        \\    --grid N          grid cells per side (default: 16)
-        \\    --steps N         number of timesteps (default: 1000)
-        \\    --domain L        square domain side length (default: 1.0)
-        \\    --cfl C           timestep scale dt = C·h (default: 0.1)
-        \\    --dt DT           explicit timestep override (computes cfl = dt/h)
-        \\    --output DIR      output directory for VTK files (default: output/euler_2d)
-        \\    --frames N        number of snapshots to write (default: 50)
-        \\
-    , .{});
-}
-
-fn printEuler3dUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples euler-3d — 3D incompressible Euler with helicity
-        \\
-        \\  usage: flux-examples euler-3d [options]
-        \\
-        \\  options:
-        \\    --steps N             number of timesteps (default: 1000)
-        \\    --nx N                x-axis cube count (default: 2)
-        \\    --ny N                y-axis cube count (default: 2)
-        \\    --nz N                z-axis cube count (default: 2)
-        \\    --width L             domain width (default: 1.0)
-        \\    --height L            domain height (default: 1.0)
-        \\    --depth L             domain depth (default: 1.0)
-        \\    --dt DT               timestep size (default: 0.01)
-        \\    --output DIR          output directory for VTK snapshots
-        \\    --output-interval N   snapshot cadence in steps (overrides --frames)
-        \\    --frames N            number of evenly-spaced snapshots
-        \\
-    , .{});
 }
 
 test {
