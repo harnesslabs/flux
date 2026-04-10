@@ -11,34 +11,7 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     _ = parser.next();
 
     while (parser.next()) |arg| {
-        if (eql(arg, "--nx")) {
-            config.nx = try parser.parseU32("--nx");
-            continue;
-        }
-        if (eql(arg, "--ny")) {
-            config.ny = try parser.parseU32("--ny");
-            continue;
-        }
-        if (eql(arg, "--nz")) {
-            config.nz = try parser.parseU32("--nz");
-            continue;
-        }
-        if (eql(arg, "--width")) {
-            config.width = try parser.parseF64("--width");
-            continue;
-        }
-        if (eql(arg, "--height")) {
-            config.height = try parser.parseF64("--height");
-            continue;
-        }
-        if (eql(arg, "--depth")) {
-            config.depth = try parser.parseF64("--depth");
-            continue;
-        }
-        if (eql(arg, "--output-interval")) {
-            config.output_interval = try parser.parseU32("--output-interval");
-            continue;
-        }
+        if (try common.tryBox3Flag(&parser, arg, &config)) continue;
         if (try parser.tryCommon(arg, &co)) continue;
         std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
         printUsage();

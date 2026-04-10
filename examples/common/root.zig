@@ -15,6 +15,7 @@ pub const Parser = cli.Parser;
 pub const ParseError = cli.ParseError;
 pub const applySharedFields = cli.applySharedFields;
 pub const framesToInterval = cli.framesToInterval;
+pub const tryBox3Flag = cli.tryBox3Flag;
 pub const Plan = snapshot.Plan;
 pub const PlanOptions = snapshot.PlanOptions;
 pub const Series = snapshot.Series;
