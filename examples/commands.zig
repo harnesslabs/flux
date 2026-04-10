@@ -7,6 +7,8 @@ const euler_3d = @import("euler_3d");
 const heat = @import("heat");
 const diffusion_surface = @import("diffusion_surface");
 
+const DiffusionSurface = enum { plane, sphere };
+
 pub const Subcommand = struct {
     name: []const u8,
     summary: []const u8,
@@ -18,8 +20,7 @@ pub const subcommands = [_]Subcommand{
     .{ .name = "maxwell-3d", .summary = "3D Maxwell TM_110 cavity on tetrahedra", .run = runMaxwell3d },
     .{ .name = "euler-2d", .summary = "2D incompressible Euler vorticity-stream", .run = runEuler2d },
     .{ .name = "euler-3d", .summary = "3D incompressible Euler with helicity conservation", .run = runEuler3d },
-    .{ .name = "heat", .summary = "Implicit heat equation via backward Euler + CG", .run = runHeat },
-    .{ .name = "diffusion-surface", .summary = "Heat equation on a curved surface (Riemannian Hodge)", .run = runDiffusionSurface },
+    .{ .name = "diffusion", .summary = "Scalar diffusion on a plane or curved surface", .run = runDiffusion },
 };
 
 pub fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -202,32 +203,88 @@ pub fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !voi
     );
 }
 
-pub fn runHeat(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = heat.Config{};
+pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    var surface_kind: DiffusionSurface = .plane;
+    var plane_config = heat.Config{};
+    var sphere_config = diffusion_surface.Config{};
     var shared = common.Common{};
     var parser = common.Parser.init(args);
     _ = parser.next();
 
     while (parser.next()) |arg| {
+        if (eql(arg, "--surface")) {
+            const value = try parser.requireValue("--surface");
+            if (eql(value, "plane")) {
+                surface_kind = .plane;
+            } else if (eql(value, "sphere")) {
+                surface_kind = .sphere;
+            } else {
+                std.debug.print("error: unknown surface '{s}'. available: plane, sphere\n", .{value});
+                std.process.exit(2);
+            }
+            continue;
+        }
         if (try parser.tryCommon(arg, &shared)) continue;
         if (eql(arg, "--dt-scale")) {
-            config.dt_scale = try parser.parseF64("--dt-scale");
+            const value = try parser.parseF64("--dt-scale");
+            plane_config.dt_scale = value;
+            sphere_config.dt_scale = value;
             continue;
         }
 
         std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printHeatUsage();
+        printDiffusionUsage();
         std.process.exit(2);
     }
 
     if (shared.help) {
-        printHeatUsage();
+        printDiffusionUsage();
         return;
     }
 
-    applySharedFields(&config, shared);
-    if (shared.dt) |value| config.dt_override = value;
+    switch (surface_kind) {
+        .plane => {
+            applySharedFields(&plane_config, shared);
+            if (shared.dt) |value| plane_config.dt_override = value;
+            try runPlaneDiffusion(allocator, plane_config);
+        },
+        .sphere => {
+            applySharedFields(&sphere_config, shared);
+            if (shared.dt) |dt_value| {
+                sphere_config.final_time = dt_value * @as(f64, @floatFromInt(sphere_config.steps));
+            }
+            try runSphereDiffusion(allocator, sphere_config);
+        },
+    }
+}
 
+fn printDiffusionUsage() void {
+    std.debug.print(
+        \\
+        \\  flux-examples diffusion — scalar diffusion on a plane or sphere
+        \\
+        \\  usage: flux-examples diffusion [options]
+        \\
+        \\  options:
+        \\    --surface NAME     plane (default) or sphere
+        \\    --steps N          backward-Euler steps
+        \\    --dt-scale C       diffusion timestep scale hint
+        \\    --dt DT            explicit timestep override
+        \\    --output DIR       output directory for VTK files
+        \\    --frames N         number of snapshots to write
+        \\
+        \\  plane-only:
+        \\    --grid N           grid cells per side (default: 8)
+        \\    --domain L         square domain side length (default: 1.0)
+        \\
+        \\  sphere-only:
+        \\    --refinement N     spherical mesh refinement level (default: 0)
+        \\    --final-time T     total simulated time (default: 0.05)
+        \\
+    , .{});
+}
+
+fn runPlaneDiffusion(allocator: std.mem.Allocator, config: heat.Config) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
@@ -238,34 +295,7 @@ pub fn runHeat(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     );
 }
 
-pub fn runDiffusionSurface(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = diffusion_surface.Config{};
-    var shared = common.Common{};
-    var parser = common.Parser.init(args);
-    _ = parser.next();
-
-    while (parser.next()) |arg| {
-        if (try parser.tryCommon(arg, &shared)) continue;
-        if (eql(arg, "--dt-scale")) {
-            config.dt_scale = try parser.parseF64("--dt-scale");
-            continue;
-        }
-
-        std.debug.print("error: unknown flag '{s}'\n\n", .{arg});
-        printDiffusionSurfaceUsage();
-        std.process.exit(2);
-    }
-
-    if (shared.help) {
-        printDiffusionSurfaceUsage();
-        return;
-    }
-
-    applySharedFields(&config, shared);
-    if (shared.dt) |dt_value| {
-        config.final_time = dt_value * @as(f64, @floatFromInt(config.steps));
-    }
-
+fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion_surface.Config) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
@@ -373,44 +403,6 @@ fn printEuler3dUsage() void {
         \\    --output DIR          output directory for VTK snapshots
         \\    --output-interval N   snapshot cadence in steps (overrides --frames)
         \\    --frames N            number of evenly-spaced snapshots
-        \\
-    , .{});
-}
-
-fn printHeatUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples heat — implicit heat equation on the unit square
-        \\
-        \\  usage: flux-examples heat [options]
-        \\
-        \\  options:
-        \\    --grid N          grid cells per side (default: 8)
-        \\    --steps N         backward-Euler steps (default: 8)
-        \\    --domain L        square domain side length (default: 1.0)
-        \\    --dt-scale C      parabolic timestep scale dt = C·h² (default: 0.1)
-        \\    --dt DT           explicit timestep override (replaces dt-scale derived dt)
-        \\    --output DIR      output directory for VTK files (default: output/heat)
-        \\    --frames N        number of snapshots to write (default: 4)
-        \\
-    , .{});
-}
-
-fn printDiffusionSurfaceUsage() void {
-    std.debug.print(
-        \\
-        \\  flux-examples diffusion-surface — heat equation on a sphere
-        \\
-        \\  usage: flux-examples diffusion-surface [options]
-        \\
-        \\  options:
-        \\    --refinement N    icosahedral refinement level (default: 0)
-        \\    --steps N         backward-Euler steps (default: 8)
-        \\    --dt-scale C      parabolic scale hint (default: 0.1)
-        \\    --dt DT           explicit timestep — pins final-time = dt * steps
-        \\    --final-time T    total simulated time (default: 0.05)
-        \\    --output DIR      output directory for VTK files
-        \\    --frames N        number of snapshots to write (default: 4)
         \\
     , .{});
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const ExampleSpec = struct {
-    command: []const u8,
+    run_args: []const []const u8,
     summary: []const u8,
     run_step: []const u8,
     run_doc: []const u8,
@@ -11,7 +11,7 @@ const ExampleSpec = struct {
 
 const example_specs = [_]ExampleSpec{
     .{
-        .command = "maxwell-2d",
+        .run_args = &.{"maxwell-2d"},
         .summary = "2D Maxwell on simplicial meshes (cavity, dipole)",
         .run_step = "run-maxwell-2d",
         .run_doc = "Run the 2D Maxwell example",
@@ -19,7 +19,7 @@ const example_specs = [_]ExampleSpec{
         .physics_module = "maxwell_2d",
     },
     .{
-        .command = "maxwell-3d",
+        .run_args = &.{"maxwell-3d"},
         .summary = "3D Maxwell TM_110 cavity on tetrahedra",
         .run_step = "run-maxwell-3d",
         .run_doc = "Run the 3D Maxwell cavity example",
@@ -27,7 +27,7 @@ const example_specs = [_]ExampleSpec{
         .physics_module = "maxwell_3d",
     },
     .{
-        .command = "euler-2d",
+        .run_args = &.{"euler-2d"},
         .summary = "2D incompressible Euler vorticity-stream",
         .run_step = "run-euler-2d",
         .run_doc = "Run the 2D incompressible Euler example",
@@ -35,7 +35,7 @@ const example_specs = [_]ExampleSpec{
         .physics_module = "euler_2d",
     },
     .{
-        .command = "euler-3d",
+        .run_args = &.{"euler-3d"},
         .summary = "3D incompressible Euler with helicity conservation",
         .run_step = "run-euler-3d",
         .run_doc = "Run the 3D incompressible Euler example",
@@ -43,7 +43,7 @@ const example_specs = [_]ExampleSpec{
         .physics_module = "euler_3d",
     },
     .{
-        .command = "heat",
+        .run_args = &.{ "diffusion", "--surface", "plane" },
         .summary = "Implicit heat equation via backward Euler + CG",
         .run_step = "run-heat",
         .run_doc = "Run the implicit heat-equation example",
@@ -51,7 +51,7 @@ const example_specs = [_]ExampleSpec{
         .physics_module = "heat",
     },
     .{
-        .command = "diffusion-surface",
+        .run_args = &.{ "diffusion", "--surface", "sphere" },
         .summary = "Heat equation on a curved surface (Riemannian Hodge)",
         .run_step = "run-diffusion-surface",
         .run_doc = "Run the curved-surface diffusion example",
@@ -327,7 +327,7 @@ pub fn build(b: *std.Build) void {
     for (example_specs) |spec| {
         const run_cmd_step = b.addRunArtifact(examples_exe);
         run_cmd_step.step.dependOn(b.getInstallStep());
-        run_cmd_step.addArg(spec.command);
+        run_cmd_step.addArgs(spec.run_args);
         if (b.args) |args| {
             run_cmd_step.addArgs(args);
         }

@@ -5,7 +5,7 @@
 //!
 //!     flux-examples list
 //!     flux-examples maxwell-2d --steps 1000 --frames 50
-//!     flux-examples heat --grid 32 --frames 4
+//!     flux-examples diffusion --surface plane --grid 32 --frames 4
 //!     flux-examples euler-3d --nx 4 --ny 4 --nz 4
 //!
 //! Each subcommand parses its own physics-specific flags on top of the shared
@@ -85,6 +85,7 @@ fn printUsage() void {
         \\    zig build examples           # build the umbrella binary
         \\    zig build run-maxwell-2d -- --frames 50
         \\    zig build run-heat -- --grid 32
+        \\    zig build run-diffusion-surface -- --frames 8
         \\
     , .{});
 }
