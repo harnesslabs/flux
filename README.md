@@ -39,27 +39,32 @@ flags on top of its own physics-specific options.
 ```sh
 zig build examples                       # build the umbrella binary
 ./zig-out/bin/flux-examples list         # list all subcommands
-./zig-out/bin/flux-examples maxwell-2d --help
+./zig-out/bin/flux-examples maxwell --dim 2 --help
 
 # convenience run steps (forwards `--` arguments to the subcommand)
-zig build run-maxwell-2d -- --demo cavity --steps 2000
-zig build run-heat -- --grid 32 --frames 4
+zig build run-maxwell -- --dim 2 --demo cavity --steps 2000
+zig build run-diffusion -- --surface plane --grid 32 --frames 4
 ```
 
-### 2D Maxwell electromagnetics
+### Example families
 
-Cavity resonance (TE₁₀ standing wave) and point dipole radiation on a triangulated PEC cavity. Demonstrates the full DEC operator stack: exterior derivative, Whitney/Galerkin Hodge star, symplectic leapfrog integration.
+The example suite is organized into three physics modules:
+
+- `maxwell` with `--dim 2|3`
+- `euler` with `--dim 2|3`
+- `diffusion` with `--surface plane|sphere`
 
 Use `-Doptimize=ReleaseFast` for any meaningful performance measurement. The default
 `zig build` mode is a debug build and is much slower on large grids.
 
 ```sh
-zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo cavity --steps 2000
-zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo dipole --grid 64
-zig build -Doptimize=ReleaseFast run-maxwell-2d -- --help
+zig build -Doptimize=ReleaseFast run-maxwell -- --dim 2 --demo cavity --steps 2000
+zig build -Doptimize=ReleaseFast run-euler -- --dim 3 --steps 1000
+zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --refinement 3 --frames 8
 ```
 
-The example includes 40 integration tests covering Whitney ★₁ convergence (O(h²) verified), TE₁₀ eigenvalue accuracy, energy conservation over hundreds of timesteps, and PEC boundary correctness.
+Each family keeps its convergence and invariant tests inside the module that owns
+the example.
 
 Generate a polished full-color animation with:
 

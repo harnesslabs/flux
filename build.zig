@@ -15,7 +15,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Maxwell on 2D or 3D meshes (`--dim 2|3`)",
         .run_step = "run-maxwell",
         .run_doc = "Run the Maxwell example suite",
-        .physics_source = "examples/maxwell.zig",
+        .physics_source = "examples/maxwell/root.zig",
         .physics_module = "maxwell",
     },
     .{
@@ -23,7 +23,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Incompressible Euler in 2D or 3D (`--dim 2|3`)",
         .run_step = "run-euler",
         .run_doc = "Run the Euler example suite",
-        .physics_source = "examples/euler.zig",
+        .physics_source = "examples/euler/root.zig",
         .physics_module = "euler",
     },
     .{
@@ -31,7 +31,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Scalar diffusion on a plane or sphere",
         .run_step = "run-diffusion",
         .run_doc = "Run the diffusion example suite",
-        .physics_source = "examples/diffusion.zig",
+        .physics_source = "examples/diffusion/root.zig",
         .physics_module = "diffusion",
     },
 };
@@ -417,7 +417,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "flux", .module = mod },
                 .{ .name = "maxwell_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/maxwell.zig"),
+                    .root_source_file = b.path("examples/maxwell/root.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
                     .imports = &.{

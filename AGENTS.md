@@ -57,7 +57,7 @@ zig build test --summary all    # run all tests (with output)
 zig build fmt                   # check formatting
 zig build ci --summary all      # all CI checks: build + test + fmt
 zig build run                   # run stub (directs to examples)
-zig build run-maxwell-2d     # run 2D Maxwell electromagnetic example
+zig build run-maxwell           # run Maxwell examples (`--dim 2|3`)
 zig build bench                 # run operator benchmarks (informational)
 zig build bench -- --check      # compare against baselines, fail on >20% regression
 zig build bench -- --update     # run benchmarks and save baselines.json
@@ -374,7 +374,7 @@ src/
   integrators/      # generic time steppers (leapfrog, forward Euler)
   concepts/         # comptime concept validators
 examples/
-  maxwell_2d/       # 2D electromagnetic simulation (cavity, dipole)
+  maxwell/          # Maxwell examples (`root.zig` + README)
 project/
   initial.md
   epoch_1/

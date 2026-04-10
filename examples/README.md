@@ -1,7 +1,7 @@
 # Examples
 
-Electromagnetic examples demonstrating the flux Maxwell solver on
-triangulated and tetrahedral PEC cavities.
+Simulation examples demonstrating the flux operator stack across Maxwell,
+Euler, and diffusion problems.
 
 ![TE10 cavity animation](../assets/cavity-512-grid-10000-steps.png)
 
@@ -12,11 +12,10 @@ triangulated and tetrahedral PEC cavities.
 For realistic throughput numbers, run the example in `ReleaseFast`:
 
 ```sh
-zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo dipole
-zig build -Doptimize=ReleaseFast run-maxwell-2d -- --help
-zig build -Doptimize=ReleaseFast run-maxwell-3d -- --steps 400 --dt 0.0025
-zig build -Doptimize=ReleaseFast run-euler-3d -- --steps 1000
-zig build -Doptimize=ReleaseFast run-heat -- --grid 32 --frames 8
+zig build -Doptimize=ReleaseFast run-maxwell -- --dim 2 --demo dipole
+zig build -Doptimize=ReleaseFast run-maxwell -- --dim 3 --steps 400 --dt 0.0025
+zig build -Doptimize=ReleaseFast run-euler -- --dim 3 --steps 1000
+zig build -Doptimize=ReleaseFast run-diffusion -- --surface plane --grid 32 --frames 8
 ```
 
 The default `zig build` mode is `Debug`, which is useful for development but
@@ -27,7 +26,7 @@ Visualize the output (requires Python 3.10+ and [uv](https://github.com/astral-s
 ```sh
 uv run tools/visualize.py output --field B_flux --output animation.png
 uv run tools/visualize.py output --field B_flux --output animation.gif
-uv run tools/visualize.py output/euler_2d --output animation.png
+uv run tools/visualize.py output/euler_dipole --output animation.png
 ```
 
 APNG is now the default recommendation because it preserves full color. Use
@@ -40,59 +39,34 @@ APNG is now the default recommendation because it preserves full color. Use
 
 | Demo | What it does | Example |
 |------|-------------|---------|
-| [**dipole**](dipole-radiation.md) | Point source radiating + reflecting off PEC walls | `zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo dipole` |
-| [**cavity**](cavity-resonance.md) | Source-free TE₁₀ standing wave, analytical validation | `zig build -Doptimize=ReleaseFast run-maxwell-2d -- --demo cavity` |
-| [**maxwell_3d**](maxwell_3d/README.md) | Source-free TM₁₁₀ rectangular cavity mode on tetrahedra with 3D convergence check | `zig build -Doptimize=ReleaseFast run-maxwell-3d -- --steps 400 --dt 0.0025` |
-| [**euler_2d**](euler_2d/README.md) | Incompressible vorticity-stream evolution with conservative circulation transport | `zig build -Doptimize=ReleaseFast run-euler-2d -- --grid 32 --steps 1000` |
-| [**euler_3d**](euler_3d/README.md) | Steady helical reference mode on tetrahedra with exact helicity regression checks through the 1-form solve path | `zig build -Doptimize=ReleaseFast run-euler-3d -- --steps 1000` |
-| [**heat**](heat/README.md) | Backward-Euler diffusion on a unit square with CG solve, homogeneous Dirichlet boundary data, and convergence verification | `zig build -Doptimize=ReleaseFast run-heat -- --grid 32 --frames 8` |
+| [**maxwell**](maxwell/README.md) | Discrete Maxwell examples in 2D and 3D with one command surface and shared field-evolution core | `zig build -Doptimize=ReleaseFast run-maxwell -- --dim 2 --steps 400 --frames 8` |
+| [**euler**](euler/README.md) | Incompressible Euler examples in 2D and 3D with conserved circulation/helicity regression checks | `zig build -Doptimize=ReleaseFast run-euler -- --dim 2 --grid 32 --steps 1000` |
+| [**diffusion**](diffusion/README.md) | Scalar diffusion on a plane or sphere with exact-solution convergence checks | `zig build -Doptimize=ReleaseFast run-diffusion -- --surface plane --grid 32 --frames 8` |
 
 ---
 
 ## CLI reference
 
-```
-usage: flux [--demo <name>] [options]
+```text
+usage: flux <family> [options]
 
-demos:
-  dipole    (default) point dipole radiating in a PEC cavity
-  cavity    TE₁₀ standing wave — exact analytical mode, source-free
-
-mesh & physics:
-  --grid N          grid cells per side (default: 32)
-  --domain L        square domain side length (default: 1.0)
-  --courant C       Courant number dt = C·h (default: 0.1)
-
-dipole source (ignored for cavity demo):
-  --frequency F     source frequency in Hz (default: TE₁₀ resonance)
-  --amplitude A     source amplitude (default: 1.0)
-
-time stepping:
-  --steps N         number of timesteps (default: 1000)
-
-output:
-  --output DIR      output directory for VTK files (default: output)
-  --frames N        number of VTK snapshots to write (default: 100)
+families:
+  maxwell   use `--dim 2|3`
+  euler     use `--dim 2|3`
+  diffusion use `--surface plane|sphere`
 ```
 
 ### Parameter relationships
 
-The timestep is derived from the mesh: **dt = courant × h**, where h = domain / grid.
-This means:
-- Doubling `--grid` halves h and halves dt — you need ~2× more steps for the
-  same physical time.
-- Increasing `--courant` makes each step cover more time but adds numerical
-  dispersion.
+The timestep policy depends on the family:
 
-The total simulation time is **t = steps × dt**. For the cavity demo, one field
-period is T = 2 × domain, so you need steps = T / dt = 2 × domain / (courant × h)
-steps per period.
-
-| Grid | dt (C=0.1) | Steps for 1 period (L=1) |
-|------|-----------|--------------------------|
-| 16 | 0.00625 | 320 |
-| 32 | 0.003125 | 640 |
-| 64 | 0.001563 | 1280 |
+- `maxwell --dim 2` derives `dt` from `--courant` and grid spacing unless
+  `--dt` is passed explicitly.
+- `euler --dim 2` derives `dt` from `--cfl` and grid spacing unless `--dt` is
+  passed explicitly.
+- `maxwell --dim 3` and `euler --dim 3` use explicit fixed `--dt`.
+- `diffusion --surface plane` uses `dt_scale * h^2` unless `--dt` is passed.
+- `diffusion --surface sphere` uses `final_time / steps`.
 
 ---
 
