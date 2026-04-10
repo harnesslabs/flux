@@ -239,22 +239,15 @@ pub fn computeHelicity(allocator: std.mem.Allocator, state: *const State) !f64 {
 }
 
 fn writeSnapshot(allocator: std.mem.Allocator, writer: anytype, state: *const State) !void {
-    const velocity_projected = try common.viz.projectEdgesToTets(allocator, state.mesh, state.velocity.values);
-    defer allocator.free(velocity_projected);
-
-    const vorticity_projected = try common.viz.projectFacesToTets(allocator, state.mesh, state.vorticity.values);
-    defer allocator.free(vorticity_projected);
-
-    const cell_data = [_]flux.io.DataArraySlice{
-        .{ .name = "velocity_intensity", .values = velocity_projected },
-        .{ .name = "vorticity_flux", .values = vorticity_projected },
-    };
-
-    try flux.io.write(
+    try common.viz.writeProjectedTetFields(
+        2,
+        allocator,
         writer,
-        state.mesh.*,
-        &.{},
-        &cell_data,
+        state.mesh,
+        .{
+            .{ .name = "velocity_intensity", .kind = .edge_abs_mean, .values = state.velocity.values },
+            .{ .name = "vorticity_flux", .kind = .face_abs_mean, .values = state.vorticity.values },
+        },
     );
 }
 

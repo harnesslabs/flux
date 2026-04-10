@@ -265,22 +265,15 @@ pub fn writeSnapshot(
     writer: anytype,
     state: *const MaxwellState3D,
 ) !void {
-    const e_projected = try common.viz.projectEdgesToTets(allocator, state.mesh, state.E.values);
-    defer allocator.free(e_projected);
-
-    const b_projected = try common.viz.projectFacesToTets(allocator, state.mesh, state.B.values);
-    defer allocator.free(b_projected);
-
-    const cell_data = [_]flux.io.DataArraySlice{
-        .{ .name = "E_intensity", .values = e_projected },
-        .{ .name = "B_flux", .values = b_projected },
-    };
-
-    try flux.io.write(
+    try common.viz.writeProjectedTetFields(
+        2,
+        allocator,
         writer,
-        state.mesh.*,
-        &.{},
-        &cell_data,
+        state.mesh,
+        .{
+            .{ .name = "E_intensity", .kind = .edge_abs_mean, .values = state.E.values },
+            .{ .name = "B_flux", .kind = .face_abs_mean, .values = state.B.values },
+        },
     );
 }
 
