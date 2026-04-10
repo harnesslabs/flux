@@ -27,6 +27,7 @@
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
+const common = @import("examples_common");
 const core_mod = @import("maxwell_core");
 const cochain = flux.forms;
 const topology = flux.topology;
@@ -317,6 +318,44 @@ pub fn electromagnetic_energy(
 const flux_io = flux.io;
 const std_fs = std.fs;
 
+pub const Demo = enum { dipole, cavity };
+
+pub const Config = struct {
+    demo: Demo = .dipole,
+    steps: u32 = 1000,
+    grid: u32 = 32,
+    domain: f64 = 1.0,
+    courant: f64 = 0.1,
+    frequency: f64 = 0.0,
+    amplitude: f64 = 1.0,
+    output_dir: []const u8 = "output",
+    frames: u32 = 100,
+
+    pub fn spacing(self: Config) f64 {
+        return self.domain / @as(f64, @floatFromInt(self.grid));
+    }
+
+    pub fn dt(self: Config) f64 {
+        return self.courant * self.spacing();
+    }
+
+    pub fn outputInterval(self: Config) u32 {
+        if (self.frames == 0) return 0;
+        return @max(1, self.steps / self.frames);
+    }
+
+    pub fn sourceFrequency(self: Config) f64 {
+        if (self.frequency != 0.0) return self.frequency;
+        return 1.0 / (2.0 * self.domain);
+    }
+};
+
+pub const RunResult = struct {
+    elapsed_s: f64,
+    energy_final: f64,
+    snapshot_count: u32,
+};
+
 /// Configuration for the simulation runner.
 pub const RunConfig = struct {
     /// Number of leapfrog timesteps to execute.
@@ -330,6 +369,197 @@ pub const RunConfig = struct {
     /// Base name for snapshot files (e.g., "field" → "field_0000.vtu").
     output_base_name: []const u8 = "field",
 };
+
+const DriverState = State(Mesh2D);
+const DriverDipole = PointDipole(Mesh2D);
+
+const Maxwell2DRenderer = struct {
+    state: *const DriverState,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        try flux_io.write_fields(
+            allocator,
+            writer,
+            self.state.mesh.*,
+            self.state.E.values,
+            self.state.B.values,
+        );
+    }
+};
+
+const DriverSimResult = struct {
+    elapsed_s: f64,
+    energy_final: f64,
+    snapshot_count: u32,
+};
+
+pub fn runDriver(allocator: std.mem.Allocator, config: Config) !void {
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+
+    switch (config.demo) {
+        .dipole => try runDipole(allocator, config, stderr),
+        .cavity => try runCavity(allocator, config, stderr),
+    }
+}
+
+fn simulateDriver(
+    allocator: std.mem.Allocator,
+    state: *DriverState,
+    source: ?DriverDipole,
+    config: Config,
+    base_name: []const u8,
+    writer: anytype,
+) !DriverSimResult {
+    const time_step = config.dt();
+
+    var series = try common.Series.init(
+        allocator,
+        config.output_dir,
+        base_name,
+        common.Plan.fromFrames(config.steps, config.frames, .{}),
+    );
+    defer series.deinit();
+
+    var progress = common.Progress(@TypeOf(writer)).init(writer, config.steps);
+
+    for (0..config.steps) |step_idx| {
+        const t = @as(f64, @floatFromInt(step_idx)) * time_step;
+
+        if (source) |dipole| {
+            dipole.apply(&state.J, t);
+        }
+
+        try leapfrog_step(allocator, state, time_step);
+        apply_pec_boundary(state);
+
+        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
+            try series.capture(t + time_step, Maxwell2DRenderer{ .state = state });
+        }
+
+        progress.update(@intCast(step_idx + 1));
+    }
+
+    progress.finish();
+    const elapsed_s = progress.elapsed();
+
+    try series.finalize();
+
+    return .{
+        .elapsed_s = elapsed_s,
+        .energy_final = try electromagnetic_energy(allocator, state),
+        .snapshot_count = series.count,
+    };
+}
+
+fn runDipole(allocator: std.mem.Allocator, config: Config, writer: anytype) !void {
+    const h = config.spacing();
+    const time_step = config.dt();
+    const frequency = config.sourceFrequency();
+
+    try writer.writeAll("\n  ── Dipole Simulation ───────────────────────\n\n");
+    try writer.print("  domain    [0, {d:.2}]²\n", .{config.domain});
+    try writer.print("  grid      {d}×{d} ({d} triangles)\n", .{
+        config.grid,
+        config.grid,
+        2 * @as(u64, config.grid) * config.grid,
+    });
+    try writer.print("  spacing   h = {d:.6}\n", .{h});
+    try writer.print("  timestep  dt = {d:.6} (Courant {d:.2})\n", .{ time_step, config.courant });
+    try writer.print("  source    f = {d:.4} Hz, A = {d:.2}\n\n", .{ frequency, config.amplitude });
+
+    var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    defer mesh.deinit(allocator);
+
+    try writer.print("  mesh     {d} vertices  {d} edges  {d} faces\n", .{
+        mesh.num_vertices(),
+        mesh.num_edges(),
+        mesh.num_faces(),
+    });
+
+    var state = try DriverState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    const center = [2]f64{ config.domain / 2.0, config.domain / 2.0 };
+    const dipole = DriverDipole.init(&mesh, frequency, config.amplitude, center);
+    try writer.print("  source   edge {d} (length {d:.6})\n\n", .{ dipole.edge_index, dipole.edge_length });
+
+    const result = try simulateDriver(allocator, &state, dipole, config, "dipole", writer);
+    const t_final = @as(f64, @floatFromInt(config.steps)) * time_step;
+    const steps_per_sec = @as(f64, @floatFromInt(config.steps)) / result.elapsed_s;
+
+    try writer.writeAll("\n  ── Results ─────────────────────────────────\n\n");
+    try writer.print("  time     {d:.4}\n", .{t_final});
+    try writer.print("  energy   {d:.6}\n", .{result.energy_final});
+    var duration_buffer: [16]u8 = undefined;
+    try writer.print("  elapsed  {s} ({d:.0} steps/s)\n", .{
+        common.formatDuration(&duration_buffer, result.elapsed_s),
+        steps_per_sec,
+    });
+    if (result.snapshot_count > 0) {
+        try writer.print("  output   {d} frames → {s}/\n", .{ result.snapshot_count, config.output_dir });
+        try writer.print("\n  ▸ uv run tools/visualize.py {s}\n\n", .{config.output_dir});
+    } else {
+        try writer.writeAll("\n");
+    }
+}
+
+fn runCavity(allocator: std.mem.Allocator, config: Config, writer: anytype) !void {
+    const h = config.spacing();
+    const time_step = config.dt();
+    const field_period = 2.0 * config.domain;
+    const omega = std.math.pi / config.domain;
+
+    try writer.writeAll("\n  ── TE₁₀ Cavity Resonance ──────────────────\n\n");
+    try writer.print("  domain    [0, {d:.2}]²\n", .{config.domain});
+    try writer.print("  grid      {d}×{d} ({d} triangles)\n", .{
+        config.grid,
+        config.grid,
+        2 * @as(u64, config.grid) * config.grid,
+    });
+    try writer.print("  spacing   h = {d:.6}\n", .{h});
+    try writer.print("  timestep  dt = {d:.6} (Courant {d:.2})\n", .{ time_step, config.courant });
+    try writer.print("  period    T = {d:.4} (ω = {d:.4})\n\n", .{ field_period, omega });
+
+    var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    defer mesh.deinit(allocator);
+
+    try writer.print("  mesh     {d} vertices  {d} edges  {d} faces\n", .{
+        mesh.num_vertices(),
+        mesh.num_edges(),
+        mesh.num_faces(),
+    });
+
+    var state = try DriverState.init(allocator, &mesh);
+    defer state.deinit(allocator);
+
+    project_te10_b(&mesh, state.B.values, -time_step / 2.0, config.domain);
+
+    const energy_initial = try electromagnetic_energy(allocator, &state);
+    try writer.print("  energy₀  {d:.6}\n\n", .{energy_initial});
+
+    const result = try simulateDriver(allocator, &state, null, config, "cavity", writer);
+    const t_final = @as(f64, @floatFromInt(config.steps)) * time_step;
+    const periods = t_final / field_period;
+    const drift_pct = @abs(result.energy_final - energy_initial) / energy_initial * 100.0;
+    const steps_per_sec = @as(f64, @floatFromInt(config.steps)) / result.elapsed_s;
+
+    try writer.writeAll("\n  ── Results ─────────────────────────────────\n\n");
+    try writer.print("  time     {d:.4} ({d:.2} periods)\n", .{ t_final, periods });
+    try writer.print("  energy   {d:.6} (drift {d:.4}%)\n", .{ result.energy_final, drift_pct });
+    var duration_buffer: [16]u8 = undefined;
+    try writer.print("  elapsed  {s} ({d:.0} steps/s)\n", .{
+        common.formatDuration(&duration_buffer, result.elapsed_s),
+        steps_per_sec,
+    });
+    if (result.snapshot_count > 0) {
+        try writer.print("  output   {d} frames → {s}/\n", .{ result.snapshot_count, config.output_dir });
+        try writer.print("\n  ▸ uv run tools/visualize.py {s}\n\n", .{config.output_dir});
+    } else {
+        try writer.writeAll("\n");
+    }
+}
 
 /// Simulation runner: advances a Maxwell state through a configured number
 /// of leapfrog timesteps, applying PEC boundary conditions and optionally

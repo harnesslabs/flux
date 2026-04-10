@@ -13,7 +13,7 @@
 //! `--frames`, `--grid`, `--domain`, `--refinement`, `--final-time`).
 
 const std = @import("std");
-const registry = @import("examples_registry");
+const commands = @import("example_commands");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -38,7 +38,7 @@ pub fn main() !void {
         return;
     }
 
-    inline for (registry.subcommands) |sub| {
+    inline for (commands.subcommands) |sub| {
         if (eql(cmd, sub.name)) {
             return sub.run(allocator, argv[1..]);
         }
@@ -65,7 +65,7 @@ fn printUsage() void {
         \\  subcommands:
         \\
     , .{});
-    inline for (registry.subcommands) |sub| {
+    inline for (commands.subcommands) |sub| {
         std.debug.print("    {s:<20}  {s}\n", .{ sub.name, sub.summary });
     }
     std.debug.print(
@@ -90,7 +90,7 @@ fn printUsage() void {
 }
 
 fn listCommands() void {
-    inline for (registry.subcommands) |sub| {
+    inline for (commands.subcommands) |sub| {
         std.debug.print("{s}\n", .{sub.name});
     }
 }
