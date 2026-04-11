@@ -245,45 +245,32 @@ const SurfaceStepper = struct {
     rhs: []f64,
     solution: []f64,
 
-    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         _ = allocator;
         try stepBackwardEuler(self.system, self.state_values, self.rhs, self.solution);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.solution);
+        allocator.free(self.rhs);
     }
 };
 
 const SurfaceStepperBuilder = struct {
-    pub const Scratch = struct {
-        rhs: []f64,
-        solution: []f64,
-    };
     pub const Stepper = SurfaceStepper;
 
     system: *SurfaceSystem,
 
-    pub fn initScratch(self: @This(), allocator: std.mem.Allocator) !Scratch {
+    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
         const len = self.system.masses.len;
-        return .{
+        const stepper = Stepper{
+            .system = self.system,
+            .state_values = state_values,
             .rhs = try allocator.alloc(f64, len),
             .solution = try allocator.alloc(f64, len),
         };
-    }
-
-    pub fn deinitScratch(_: @This(), allocator: std.mem.Allocator, scratch: *Scratch) void {
-        allocator.free(scratch.solution);
-        allocator.free(scratch.rhs);
-    }
-
-    pub fn seedSolution(_: @This(), state_values: []const f64, scratch: *Scratch) void {
-        @memcpy(scratch.solution, state_values);
-    }
-
-    pub fn makeStepper(self: @This(), state_values: []f64, scratch: *Scratch) SurfaceStepper {
-        return .{
-            .system = self.system,
-            .state_values = state_values,
-            .rhs = scratch.rhs,
-            .solution = scratch.solution,
-        };
+        @memcpy(stepper.solution, state_values);
+        return stepper;
     }
 };
 

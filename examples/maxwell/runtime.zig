@@ -149,6 +149,26 @@ pub fn StateForMesh3D(comptime MeshType: type) type {
 pub const MaxwellState2D = StateForMesh2D(Mesh2D);
 pub const MaxwellState3D = StateForMesh3D(Mesh3D);
 
+pub const DrivenLeapfrog2D = struct {
+    state: *MaxwellState2D,
+    source: ?PointDipole(Mesh2D),
+    dt: f64,
+    next_step_index: u32 = 0,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        const time = @as(f64, @floatFromInt(self.next_step_index)) * self.dt;
+        if (self.source) |dipole| dipole.apply(&self.state.J, time);
+        try leapfrog_step(allocator, self.state, self.dt);
+        apply_pec_boundary(self.state);
+        self.next_step_index += 1;
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
+
 pub fn faraday_step(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
     try MaxwellCore(@TypeOf(state.mesh.*), hooks2d(@TypeOf(state.mesh.*))).faradayStep(allocator, state, dt);
 }
@@ -167,6 +187,10 @@ pub fn leapfrog_step(allocator: std.mem.Allocator, state: anytype, dt: f64) !voi
 
 pub fn leapfrog_step_3d(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
     try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).leapfrogStep(allocator, state, dt);
+}
+
+pub fn leapfrog_step_3d_typed(allocator: std.mem.Allocator, state: *MaxwellState3D, dt: f64) !void {
+    try leapfrog_step_3d(allocator, state, dt);
 }
 
 pub fn electromagnetic_energy(allocator: std.mem.Allocator, state: anytype) !f64 {

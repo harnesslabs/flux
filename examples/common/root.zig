@@ -21,6 +21,7 @@ pub const ExactFieldRenderer = runner.ExactFieldRenderer;
 pub const applySharedFields = cli.applySharedFields;
 pub const framesToInterval = cli.framesToInterval;
 pub const runConvergenceStudy = runner.runConvergenceStudy;
+pub const runEvolutionLoop = evolution_runner.runEvolutionLoop;
 pub const runExactEvolutionLoop = evolution_runner.runExactEvolutionLoop;
 pub const runExactFieldLoop = runner.runExactFieldLoop;
 pub const runSimulationLoop = runner.runSimulationLoop;

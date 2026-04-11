@@ -285,40 +285,22 @@ fn seedReducedSolution(
 }
 
 const HeatStepperBuilder = struct {
-    pub const Scratch = struct {
-        rhs: []f64,
-        solution: []f64,
-    };
     pub const Stepper = HeatStepper;
 
     mesh: *const Mesh2D,
     heat_system: *const HeatSystem,
 
-    pub fn initScratch(self: @This(), allocator: std.mem.Allocator) !Scratch {
+    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
         const len = self.heat_system.interior_vertices.len;
-        return .{
-            .rhs = try allocator.alloc(f64, len),
-            .solution = try allocator.alloc(f64, len),
-        };
-    }
-
-    pub fn deinitScratch(_: @This(), allocator: std.mem.Allocator, scratch: *Scratch) void {
-        allocator.free(scratch.solution);
-        allocator.free(scratch.rhs);
-    }
-
-    pub fn seedSolution(self: @This(), state_values: []const f64, scratch: *Scratch) void {
-        seedReducedSolution(self.heat_system, state_values, scratch.solution);
-    }
-
-    pub fn makeStepper(self: @This(), state_values: []f64, scratch: *Scratch) HeatStepper {
-        return .{
+        const stepper = Stepper{
             .mesh = self.mesh,
             .heat_system = self.heat_system,
             .state_values = state_values,
-            .reduced_rhs = scratch.rhs,
-            .reduced_solution = scratch.solution,
+            .reduced_rhs = try allocator.alloc(f64, len),
+            .reduced_solution = try allocator.alloc(f64, len),
         };
+        seedReducedSolution(self.heat_system, state_values, stepper.reduced_solution);
+        return stepper;
     }
 };
 
@@ -329,7 +311,7 @@ const HeatStepper = struct {
     reduced_rhs: []f64,
     reduced_solution: []f64,
 
-    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         try stepBackwardEuler(
             allocator,
             self.mesh,
@@ -338,6 +320,11 @@ const HeatStepper = struct {
             self.reduced_rhs,
             self.reduced_solution,
         );
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.reduced_solution);
+        allocator.free(self.reduced_rhs);
     }
 };
 

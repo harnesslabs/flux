@@ -587,31 +587,35 @@ features like profiling hooks or alternate snapshot backends in the future.
 
 ## 2026-04-11: Evolution-time state lives in `src/integrators/`, example runners keep presentation concerns
 
-**Decision:** Introduce the first reusable evolution object as
-`flux.integrators.evolution.ExactEvolution(...)`. The library object owns the
-exact/reference buffer plus reusable step scratch for one time-stepped field,
-while `examples/common/runner.zig` remains responsible for snapshot cadence,
-progress reporting, and convergence-study bookkeeping.
+**Decision:** Introduce reusable evolution mechanics under
+`flux.integrators.evolution`, centered on:
+- `Evolution(...)` for direct stateful steppers,
+- `FixedTimeEvolution(...)` for plain `(state, dt)` strategies, and
+- `ExactEvolution(...)` for exact/reference runs with owned exact buffers.
+
+The library owns stepper lifetime, exact/reference storage, and reusable
+evolution-time state, while `examples/common/runner.zig` remains responsible
+for snapshot cadence, progress reporting, and convergence-study bookkeeping.
 
 **Alternatives considered:**
 1. Put the whole abstraction in `examples/common`: rejected because the missing
    capability is not example presentation, it is reusable evolution-time state
    for assembled operator systems. Keeping it example-local would preserve the
    same architectural gap that caused the diffusion scaffold duplication.
-2. Generalize immediately to one universal PDE runtime across all examples:
-   rejected because only the diffusion family currently demonstrates the needed
-   shape honestly. Forcing Maxwell/Euler into the same API now would likely
-   create a fake generic wrapper instead of a sound integrator boundary.
+2. Generalize immediately to one universal PDE runtime with bundled rendering,
+   observers, and problem setup: rejected because the shared need is evolution
+   mechanics, not a monolithic simulation framework. The examples should share
+   the timestep boundary without forcing one giant runtime object.
 3. Move snapshots/progress into the core library together with evolution:
    rejected because ParaView output, CLI cadence, and progress bars are
    presentation concerns. The core library should expose mechanics and later
    listener hooks, not example-specific I/O policy.
 
-**Rationale:** The real duplication across examples is in exact-field storage,
-scratch ownership, and step orchestration for implicit operator systems. Those
-belong beside the other time-integration machinery, not in the example tree.
-Keeping presentation in `examples/common` preserves a clean boundary: examples
-declare the mesh, exact solution, and stepper builder; the library owns the
-reusable evolution mechanics underneath them. This also leaves room for `#184`,
-`#182`, `#185`, and `#183` to extend the same center instead of adding more
-family-local scaffolds.
+**Rationale:** The real duplication across examples is in stepper lifetime,
+exact-field storage, fixed-`dt` stepping, and step orchestration for assembled
+systems. Those belong beside the other time-integration machinery, not in the
+example tree. Keeping presentation in `examples/common` preserves a clean
+boundary: examples declare the mesh/problem and renderer, while the library
+owns the reusable evolution mechanics underneath them. This also leaves room
+for `#184`, `#182`, `#185`, and `#183` to extend the same center instead of
+adding more family-local scaffolds.
