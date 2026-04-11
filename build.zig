@@ -232,6 +232,35 @@ pub fn build(b: *std.Build) void {
         .root_module = examples_common_mod,
     });
     const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
+    const bench_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "flux", .module = mod },
+                .{ .name = "maxwell_example", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/maxwell/root.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "flux", .module = mod },
+                        .{ .name = "examples_common", .module = examples_common_mod },
+                    },
+                }) },
+                .{ .name = "diffusion_sphere_example", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/diffusion/sphere.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{
+                        .{ .name = "flux", .module = mod },
+                        .{ .name = "examples_common", .module = examples_common_mod },
+                    },
+                }) },
+            },
+        }),
+    });
+    const run_bench_tests = b.addRunArtifact(bench_tests);
 
     const generated_sources = b.addWriteFiles();
 
@@ -353,6 +382,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_common_tests.step);
+    test_step.dependOn(&run_bench_tests.step);
     for (example_run_test_steps) |run_step_ptr| {
         test_step.dependOn(&run_step_ptr.step);
     }
@@ -413,6 +443,15 @@ pub fn build(b: *std.Build) void {
                         .{ .name = "examples_common", .module = examples_common_mod },
                     },
                 }) },
+                .{ .name = "diffusion_sphere_example", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/diffusion/sphere.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                    .imports = &.{
+                        .{ .name = "flux", .module = mod },
+                        .{ .name = "examples_common", .module = examples_common_mod },
+                    },
+                }) },
             },
         }),
     });
@@ -441,6 +480,7 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&exe_tests.step);
     check_step.dependOn(&examples_exe.step);
     check_step.dependOn(&examples_common_tests.step);
+    check_step.dependOn(&bench_tests.step);
 
     // -- ci step --
     // Runs build + test + fmt in one command: `zig build ci`
@@ -449,6 +489,7 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
     ci_step.dependOn(&run_examples_common_tests.step);
+    ci_step.dependOn(&run_bench_tests.step);
     ci_step.dependOn(&examples_exe.step);
     for (example_run_test_steps) |run_step_ptr| {
         ci_step.dependOn(&run_step_ptr.step);

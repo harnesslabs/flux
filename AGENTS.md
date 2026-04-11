@@ -62,6 +62,7 @@ zig build bench                 # run operator benchmarks (informational)
 zig build bench -- --check      # compare against baselines, fail on >20% regression
 zig build bench -- --update     # run benchmarks and save baselines.json
 zig build bench -- --json       # output JSON to stdout
+zig build bench -- --compare    # run same-run implementation comparisons
 zig build docs                  # generate API docs to zig-out/docs/
 zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 ```
@@ -75,6 +76,8 @@ zig build serve-docs            # build docs and serve at http://127.0.0.1:8080
 - Bump a benchmark row's `version` when its measurement method changes: repetitions/batching, setup cost, workload size, warmup policy, data distribution, or benchmark semantics.
 - Do **not** bump a benchmark row's `version` for an implementation-only change under the same measurement method. That is exactly when we want base-vs-PR comparisons to remain live.
 - Never invalidate the whole suite because one row changed methodology. Preserve comparability for all unchanged rows.
+- The default `zig build bench` suite should contain only surviving public library operations or surviving shipped example operations.
+- Same-run implementation experiments belong behind `zig build bench -- --compare`, not in the default suite or baselines.
 - When a perf PR adds a new benchmark with no base-branch counterpart, also include a same-run comparison that demonstrates the claimed win honestly, such as scalar-vs-default or old-path-vs-new-path within one run.
 - PR benchmark comments must compare only rows with matching per-benchmark versions and must explicitly list skipped rows when versions differ.
 - After a benchmark-method change merges, refresh `bench/baselines.json` on `main` with `zig build bench -- --update`.
