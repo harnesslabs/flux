@@ -1,11 +1,11 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
-const shared = @import("shared.zig");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const operator_context_mod = flux.operators.context;
+const evolution_mod = flux.integrators.evolution;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
@@ -25,7 +25,12 @@ pub const ConfigImpl = struct {
     }
 };
 
-pub const RunResultImpl = shared.RunResult;
+pub const RunResultImpl = struct {
+    elapsed_s: f64,
+    steps: u32,
+    snapshot_count: u32,
+    l2_error: f64,
+};
 
 pub const ConvergenceResultImpl = struct {
     refinement: u32,
@@ -145,11 +150,28 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    return shared.runTimeSteppedDiffusion(
+    const Evolution = evolution_mod.ExactEvolution(
         SurfaceMesh,
+        f64,
+        SurfaceStepperBuilder,
+        ExactInitializer,
+        SurfaceErrorMeasure,
+    );
+    var evolution = try Evolution.init(
         allocator,
         &mesh,
         state.values,
+        SurfaceStepperBuilder{ .system = &system },
+        ExactInitializer{},
+        SurfaceErrorMeasure{},
+    );
+    defer evolution.deinit();
+
+    const loop_result = try common.runExactEvolutionLoop(
+        SurfaceMesh,
+        allocator,
+        &mesh,
+        &evolution,
         .{
             .steps = config.steps,
             .dt = dt,
@@ -159,10 +181,14 @@ fn simulateCase(
             .output_base_name = "diffusion_surface",
             .progress_writer = progress_writer,
         },
-        ExactInitializer{},
-        SurfaceStepperBuilder{ .system = &system },
-        SurfaceErrorMeasure{},
     );
+
+    return .{
+        .elapsed_s = loop_result.elapsed_s,
+        .steps = config.steps,
+        .snapshot_count = loop_result.snapshot_count,
+        .l2_error = evolution.l2Error(),
+    };
 }
 
 fn convergenceConfig(refinement: u32) ConfigImpl {
@@ -213,7 +239,7 @@ fn stepBackwardEuler(
     @memcpy(state_values, solution);
 }
 
-const Stepper = struct {
+const SurfaceStepper = struct {
     system: *SurfaceSystem,
     state_values: []f64,
     rhs: []f64,
@@ -226,22 +252,37 @@ const Stepper = struct {
 };
 
 const SurfaceStepperBuilder = struct {
+    pub const Scratch = struct {
+        rhs: []f64,
+        solution: []f64,
+    };
+    pub const Stepper = SurfaceStepper;
+
     system: *SurfaceSystem,
 
-    pub fn scratchLen(self: @This()) usize {
-        return self.system.masses.len;
+    pub fn initScratch(self: @This(), allocator: std.mem.Allocator) !Scratch {
+        const len = self.system.masses.len;
+        return .{
+            .rhs = try allocator.alloc(f64, len),
+            .solution = try allocator.alloc(f64, len),
+        };
     }
 
-    pub fn seedSolution(_: @This(), state_values: []const f64, solution: []f64) void {
-        @memcpy(solution, state_values);
+    pub fn deinitScratch(_: @This(), allocator: std.mem.Allocator, scratch: *Scratch) void {
+        allocator.free(scratch.solution);
+        allocator.free(scratch.rhs);
     }
 
-    pub fn makeStepper(self: @This(), state_values: []f64, rhs: []f64, solution: []f64) Stepper {
+    pub fn seedSolution(_: @This(), state_values: []const f64, scratch: *Scratch) void {
+        @memcpy(scratch.solution, state_values);
+    }
+
+    pub fn makeStepper(self: @This(), state_values: []f64, scratch: *Scratch) SurfaceStepper {
         return .{
             .system = self.system,
             .state_values = state_values,
-            .rhs = rhs,
-            .solution = solution,
+            .rhs = scratch.rhs,
+            .solution = scratch.solution,
         };
     }
 };
