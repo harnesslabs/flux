@@ -18,34 +18,6 @@ pub const subcommands = [_]Subcommand{
     .{ .name = "diffusion", .summary = "Scalar diffusion on a plane or sphere", .run = runDiffusion },
 };
 
-const usage_maxwell =
-    \\  flux maxwell --dim 2|3 [options]
-    \\
-    \\  Choose `--dim 2` for the fast structured-mesh cavity/dipole run or
-    \\  `--dim 3` for the tetrahedral cavity run.
-    \\
-    \\  common:
-    \\    --dim N           2 (default) or 3
-    \\    --steps N         number of timesteps
-    \\    --dt DT           explicit timestep override
-    \\    --output DIR      output directory for VTK snapshots
-    \\    --frames N        evenly-spaced snapshots
-    \\
-    \\  2D:
-    \\    --demo NAME       dipole (default) or cavity
-    \\    --grid N          cells per side
-    \\    --domain L        square side length
-    \\    --courant C       dt = C * h
-    \\    --frequency F     dipole frequency
-    \\    --amplitude A     dipole amplitude
-    \\
-    \\  3D:
-    \\    --nx N --ny N --nz N
-    \\    --width L --height L --depth L
-    \\    --output-interval N
-    \\
-;
-
 const usage_maxwell_2d =
     \\  flux maxwell --dim 2 [--demo <name>] [options]
     \\
@@ -79,32 +51,6 @@ const usage_maxwell_3d =
     \\    --output DIR           write VTK snapshots into DIR
     \\    --output-interval N    write every N steps
     \\    --frames N             evenly-spaced snapshots
-    \\
-;
-
-const usage_euler =
-    \\  flux euler --dim 2|3 [options]
-    \\
-    \\  Choose `--dim 2` for the vorticity-stream example or `--dim 3` for the
-    \\  helicity-preserving tetrahedral reference mode.
-    \\
-    \\  common:
-    \\    --dim N           2 (default) or 3
-    \\    --steps N         number of timesteps
-    \\    --dt DT           explicit timestep override
-    \\    --output DIR      output directory for VTK snapshots
-    \\    --frames N        evenly-spaced snapshots
-    \\
-    \\  2D:
-    \\    --demo NAME       gaussian or dipole
-    \\    --grid N          cells per side
-    \\    --domain L        square side length
-    \\    --cfl C           dt = C*h
-    \\
-    \\  3D:
-    \\    --nx N --ny N --nz N
-    \\    --width L --height L --depth L
-    \\    --output-interval N
     \\
 ;
 
@@ -472,20 +418,12 @@ fn printUsageText(text: []const u8) void {
     std.debug.print("{s}", .{text});
 }
 
-fn printMaxwellUsage() void {
-    printUsageText(usage_maxwell);
-}
-
 fn printMaxwell2dUsage() void {
     printUsageText(usage_maxwell_2d);
 }
 
 fn printMaxwell3dUsage() void {
     printUsageText(usage_maxwell_3d);
-}
-
-fn printEulerUsage() void {
-    printUsageText(usage_euler);
 }
 
 fn printEuler2dUsage() void {
@@ -502,11 +440,6 @@ fn printDiffusionUsage() void {
 
 inline fn eql(a: []const u8, b: []const u8) bool {
     return std.mem.eql(u8, a, b);
-}
-
-test "generic command usage strings stay reachable" {
-    printMaxwellUsage();
-    printEulerUsage();
 }
 
 test {
