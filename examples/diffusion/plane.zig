@@ -1,6 +1,7 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
+const shared = @import("shared.zig");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
@@ -32,12 +33,7 @@ pub const ConfigImpl = struct {
     }
 };
 
-pub const RunResultImpl = struct {
-    elapsed_s: f64,
-    steps: u32,
-    snapshot_count: u32,
-    l2_error: f64,
-};
+pub const RunResultImpl = shared.RunResult;
 
 pub const ConvergenceResultImpl = struct {
     grid: u32,
@@ -193,21 +189,11 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, initial_condition, 0.0);
 
-    const exact = try allocator.alloc(f64, mesh.num_vertices());
-    defer allocator.free(exact);
-
-    const reduced_rhs = try allocator.alloc(f64, heat_system.interior_vertices.len);
-    defer allocator.free(reduced_rhs);
-    const reduced_solution = try allocator.alloc(f64, heat_system.interior_vertices.len);
-    defer allocator.free(reduced_solution);
-    seedReducedSolution(&heat_system, state.values, reduced_solution);
-
-    const loop_result = try common.runExactFieldLoop(
+    return shared.runTimeSteppedDiffusion(
         Mesh2D,
         allocator,
         &mesh,
         state.values,
-        exact,
         .{
             .steps = config.steps,
             .dt = dt,
@@ -218,23 +204,12 @@ fn simulateCase(
             .progress_writer = progress_writer,
         },
         HeatExactInitializer{ .initial_condition = initial_condition },
-        HeatStepper{
+        HeatStepperBuilder{
             .mesh = &mesh,
             .heat_system = &heat_system,
-            .state_values = state.values,
-            .reduced_rhs = reduced_rhs,
-            .reduced_solution = reduced_solution,
         },
+        HeatErrorMeasure{},
     );
-
-    const l2_error = weightedL2Error(&mesh, state.values, exact);
-
-    return .{
-        .elapsed_s = loop_result.elapsed_s,
-        .steps = config.steps,
-        .snapshot_count = loop_result.snapshot_count,
-        .l2_error = l2_error,
-    };
 }
 
 fn convergenceConfig(grid: u32) ConfigImpl {
@@ -283,6 +258,29 @@ fn seedReducedSolution(
     }
 }
 
+const HeatStepperBuilder = struct {
+    mesh: *const Mesh2D,
+    heat_system: *const HeatSystem,
+
+    pub fn scratchLen(self: @This()) usize {
+        return self.heat_system.interior_vertices.len;
+    }
+
+    pub fn seedSolution(self: @This(), state_values: []const f64, solution: []f64) void {
+        seedReducedSolution(self.heat_system, state_values, solution);
+    }
+
+    pub fn makeStepper(self: @This(), state_values: []f64, rhs: []f64, solution: []f64) HeatStepper {
+        return .{
+            .mesh = self.mesh,
+            .heat_system = self.heat_system,
+            .state_values = state_values,
+            .reduced_rhs = rhs,
+            .reduced_solution = solution,
+        };
+    }
+};
+
 const HeatStepper = struct {
     mesh: *const Mesh2D,
     heat_system: *const HeatSystem,
@@ -299,6 +297,12 @@ const HeatStepper = struct {
             self.reduced_rhs,
             self.reduced_solution,
         );
+    }
+};
+
+const HeatErrorMeasure = struct {
+    pub fn compute(_: @This(), mesh: *const Mesh2D, approx: []const f64, exact: []const f64) f64 {
+        return weightedL2Error(mesh, approx, exact);
     }
 };
 

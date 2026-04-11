@@ -1,6 +1,7 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
+const shared = @import("shared.zig");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
@@ -24,12 +25,7 @@ pub const ConfigImpl = struct {
     }
 };
 
-pub const RunResultImpl = struct {
-    elapsed_s: f64,
-    steps: u32,
-    snapshot_count: u32,
-    l2_error: f64,
-};
+pub const RunResultImpl = shared.RunResult;
 
 pub const ConvergenceResultImpl = struct {
     refinement: u32,
@@ -149,21 +145,11 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    const exact = try allocator.alloc(f64, mesh.num_vertices());
-    defer allocator.free(exact);
-
-    const rhs = try allocator.alloc(f64, state.values.len);
-    defer allocator.free(rhs);
-    const solution = try allocator.alloc(f64, state.values.len);
-    defer allocator.free(solution);
-    @memcpy(solution, state.values);
-
-    const loop_result = try common.runExactFieldLoop(
+    return shared.runTimeSteppedDiffusion(
         SurfaceMesh,
         allocator,
         &mesh,
         state.values,
-        exact,
         .{
             .steps = config.steps,
             .dt = dt,
@@ -174,22 +160,9 @@ fn simulateCase(
             .progress_writer = progress_writer,
         },
         ExactInitializer{},
-        Stepper{
-            .system = &system,
-            .state_values = state.values,
-            .rhs = rhs,
-            .solution = solution,
-        },
+        SurfaceStepperBuilder{ .system = &system },
+        SurfaceErrorMeasure{},
     );
-
-    const l2_error = weightedL2Error(&mesh, state.values, exact);
-
-    return .{
-        .elapsed_s = loop_result.elapsed_s,
-        .steps = config.steps,
-        .snapshot_count = loop_result.snapshot_count,
-        .l2_error = l2_error,
-    };
 }
 
 fn convergenceConfig(refinement: u32) ConfigImpl {
@@ -252,9 +225,36 @@ const Stepper = struct {
     }
 };
 
+const SurfaceStepperBuilder = struct {
+    system: *SurfaceSystem,
+
+    pub fn scratchLen(self: @This()) usize {
+        return self.system.masses.len;
+    }
+
+    pub fn seedSolution(_: @This(), state_values: []const f64, solution: []f64) void {
+        @memcpy(solution, state_values);
+    }
+
+    pub fn makeStepper(self: @This(), state_values: []f64, rhs: []f64, solution: []f64) Stepper {
+        return .{
+            .system = self.system,
+            .state_values = state_values,
+            .rhs = rhs,
+            .solution = solution,
+        };
+    }
+};
+
 const ExactInitializer = struct {
     pub fn fill(_: @This(), mesh: *const SurfaceMesh, values: []f64, time: f64) void {
         initializeState(mesh, values, time);
+    }
+};
+
+const SurfaceErrorMeasure = struct {
+    pub fn compute(_: @This(), mesh: *const SurfaceMesh, approx: []const f64, exact: []const f64) f64 {
+        return weightedL2Error(mesh, approx, exact);
     }
 };
 
