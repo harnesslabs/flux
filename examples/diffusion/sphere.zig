@@ -99,7 +99,7 @@ pub fn runImpl(
     config: ConfigImpl,
     writer: anytype,
 ) !RunResultImpl {
-    const result = try simulateCase(allocator, config);
+    const result = try simulateCase(allocator, config, writer);
     try writer.print(
         "diffusion_surface: refinement={d} steps={d} dt={d:.6} l2_error={e}\n",
         .{ config.refinement, result.steps, config.timeStep(), result.l2_error },
@@ -114,7 +114,7 @@ pub fn runConvergenceStudyImpl(
     const Runner = struct {
         pub fn run(allocator_inner: std.mem.Allocator, refinement: u32) !ConvergenceResultImpl {
             const config = convergenceConfig(refinement);
-            const run_result = try simulateCase(allocator_inner, config);
+            const run_result = try simulateCase(allocator_inner, config, null);
             return .{
                 .refinement = refinement,
                 .l2_error = run_result.l2_error,
@@ -128,6 +128,7 @@ pub fn runConvergenceStudyImpl(
 fn simulateCase(
     allocator: std.mem.Allocator,
     config: ConfigImpl,
+    progress_writer: ?*std.Io.Writer,
 ) !RunResultImpl {
     std.debug.assert(config.steps > 0);
     std.debug.assert(config.dt_scale > 0.0);
@@ -166,6 +167,7 @@ fn simulateCase(
             .frames = config.frames,
             .output_dir = config.output_dir,
             .output_base_name = "diffusion_surface",
+            .progress_writer = progress_writer,
         },
         ExactInitializer{},
         Stepper{

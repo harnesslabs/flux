@@ -8,6 +8,7 @@ const std = @import("std");
 const flux = @import("flux");
 const snapshot = @import("snapshot.zig");
 const cli = @import("cli.zig");
+const progress_mod = @import("progress.zig");
 
 const flux_io = flux.io;
 
@@ -20,6 +21,7 @@ pub const RunLoopConfig = struct {
     output_base_name: []const u8,
     capture_initial: bool = true,
     emit_final: bool = true,
+    progress_writer: ?*std.Io.Writer = null,
 };
 
 pub const RunLoopResult = struct {
@@ -91,6 +93,11 @@ pub fn runSimulationLoop(
         }
     }
 
+    var progress = if (config.progress_writer) |writer|
+        progress_mod.Progress.init(writer, config.steps)
+    else
+        null;
+
     const start_ns = std.time.nanoTimestamp();
     for (0..config.steps) |step_idx| {
         const next_time = config.dt * @as(f64, @floatFromInt(step_idx + 1));
@@ -106,8 +113,16 @@ pub fn runSimulationLoop(
                 });
             }
         }
+
+        if (progress) |*bar| {
+            bar.update(@intCast(step_idx + 1));
+        }
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+
+    if (progress) |*bar| {
+        bar.finish();
+    }
 
     if (exact_values) |exact| {
         exact_initializer.fill(mesh, exact, config.final_time);

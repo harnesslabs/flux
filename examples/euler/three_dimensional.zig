@@ -105,6 +105,7 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     var series = try common.Series.init(allocator, config.output_dir orelse "", "euler_3d", plan);
     defer series.deinit();
 
+    var progress = common.Progress.init(writer, config.steps);
     const start_ns = std.time.nanoTimestamp();
     for (0..config.steps) |step_index| {
         try stepImpl(allocator, &state, config.dt);
@@ -113,8 +114,10 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
             const t = @as(f64, @floatFromInt(step_index + 1)) * config.dt;
             try series.capture(t, Renderer{ .state = &state });
         }
+        progress.update(@intCast(step_index + 1));
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+    progress.finish();
     try series.finalize();
 
     const helicity_final = try conservedQuantity(allocator, &state);

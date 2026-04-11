@@ -52,7 +52,7 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
     var series = try common.Series.init(allocator, config.output_dir, base_name, common.Plan.fromFrames(config.steps, config.frames, .{}));
     defer series.deinit();
 
-    var progress = common.Progress(@TypeOf(writer)).init(writer, config.steps);
+    var progress = common.Progress.init(writer, config.steps);
     for (0..config.steps) |step_idx| {
         const t = @as(f64, @floatFromInt(step_idx)) * dt;
         if (source) |dipole| dipole.apply(&state.J, t);
@@ -151,7 +151,7 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
     const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0) common.Plan.fromInterval(config.steps, config.output_interval, .{}) else common.Plan.disabled();
     var series = try common.Series.init(allocator, config.output_dir orelse "", "maxwell_3d", plan);
     defer series.deinit();
-    var progress = common.Progress(@TypeOf(writer)).init(writer, config.steps);
+    var progress = common.Progress.init(writer, config.steps);
     for (0..config.steps) |step_idx| {
         try runtime.leapfrog_step_3d(allocator, &state, config.dt);
         if (series.dueAt(@intCast(step_idx + 1), config.steps)) {

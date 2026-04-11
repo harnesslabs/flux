@@ -120,6 +120,7 @@ pub fn runImpl(
     );
     defer series.deinit();
 
+    var progress = common.Progress.init(writer, config.steps);
     const start_ns = std.time.nanoTimestamp();
     for (0..config.steps) |step_idx| {
         try stepImpl(allocator, &state, dt);
@@ -128,8 +129,10 @@ pub fn runImpl(
             const t = @as(f64, @floatFromInt(step_idx + 1)) * dt;
             try series.capture(t, Renderer{ .state = &state });
         }
+        progress.update(@intCast(step_idx + 1));
     }
     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+    progress.finish();
     try series.finalize();
 
     const circulation_final = totalCirculation(&state);

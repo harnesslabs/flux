@@ -140,7 +140,7 @@ pub fn runImpl(
     config: ConfigImpl,
     writer: anytype,
 ) !RunResultImpl {
-    const result = try simulateCase(allocator, config, .sine_mode, null);
+    const result = try simulateCase(allocator, config, .sine_mode, null, writer);
     try writer.print(
         "heat: grid={d} steps={d} dt={d:.6} l2_error={e}\n",
         .{ config.grid, config.steps, config.dt(), result.l2_error },
@@ -155,7 +155,7 @@ pub fn runConvergenceStudyImpl(
     const Runner = struct {
         pub fn run(allocator_inner: std.mem.Allocator, grid: u32) !ConvergenceResultImpl {
             const config = convergenceConfig(grid);
-            const run_result = try simulateCase(allocator_inner, config, .sine_mode, convergence_time);
+            const run_result = try simulateCase(allocator_inner, config, .sine_mode, convergence_time, null);
             return .{
                 .grid = grid,
                 .l2_error = run_result.l2_error,
@@ -171,6 +171,7 @@ fn simulateCase(
     config: ConfigImpl,
     initial_condition: InitialCondition,
     final_time_override: ?f64,
+    progress_writer: ?*std.Io.Writer,
 ) !RunResultImpl {
     std.debug.assert(config.grid > 0);
     std.debug.assert(config.steps > 0);
@@ -214,6 +215,7 @@ fn simulateCase(
             .frames = config.frames,
             .output_dir = config.output_dir,
             .output_base_name = "heat",
+            .progress_writer = progress_writer,
         },
         HeatExactInitializer{ .initial_condition = initial_condition },
         HeatStepper{
