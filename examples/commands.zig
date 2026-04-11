@@ -107,21 +107,11 @@ const usage_diffusion =
 ;
 
 pub fn runMaxwell(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    const topological_dimension = try parseDimensionArg(args, 2);
-    switch (topological_dimension) {
-        2 => try runMaxwell2d(allocator, args),
-        3 => try runMaxwell3d(allocator, args),
-        else => unreachable,
-    }
+    try runByDimension(allocator, args, runMaxwell2d, runMaxwell3d);
 }
 
 pub fn runEuler(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    const topological_dimension = try parseDimensionArg(args, 2);
-    switch (topological_dimension) {
-        2 => try runEuler2d(allocator, args),
-        3 => try runEuler3d(allocator, args),
-        else => unreachable,
-    }
+    try runByDimension(allocator, args, runEuler2d, runEuler3d);
 }
 
 fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -131,10 +121,7 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
     _ = parser.next();
 
     while (parser.next()) |arg| {
-        if (eql(arg, "--dim")) {
-            _ = try parser.requireValue("--dim");
-            continue;
-        }
+        if (try consumeDimensionFlag(&parser, arg)) continue;
         if (eql(arg, "--demo")) {
             const value = try parser.requireValue("--demo");
             if (eql(value, "dipole")) {
@@ -185,7 +172,7 @@ fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
         maxwell.Config(3),
         args,
         printMaxwell3dUsage,
-        applyMaxwell3dShared,
+        applyFixedDtWithFrameInterval,
     ) orelse return;
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
@@ -201,10 +188,7 @@ fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     _ = parser.next();
 
     while (parser.next()) |arg| {
-        if (eql(arg, "--dim")) {
-            _ = try parser.requireValue("--dim");
-            continue;
-        }
+        if (try consumeDimensionFlag(&parser, arg)) continue;
         if (eql(arg, "--demo")) {
             const value = try parser.requireValue("--demo");
             if (eql(value, "gaussian")) {
@@ -258,7 +242,7 @@ fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
         euler.Config(3),
         args,
         printEuler3dUsage,
-        applyEuler3dShared,
+        applyFixedDtWithFrameInterval,
     ) orelse return;
 
     var stderr_buffer: [1024]u8 = undefined;
@@ -315,34 +299,39 @@ pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
         .plane => {
             common.applySharedFields(&plane_config, shared);
             if (shared.dt) |value| plane_config.dt_override = value;
-            try runPlaneDiffusion(allocator, plane_config);
+            var stderr_buffer: [1024]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+            const stderr = &stderr_writer.interface;
+            const result = try diffusion.run(.plane, allocator, plane_config, stderr);
+            try stderr.print(
+                "elapsed={d:.3}s steps={d} snapshots={d} l2_error={e} output={s}\n",
+                .{ result.elapsed_s, result.steps, result.snapshot_count, result.l2_error, plane_config.output_dir },
+            );
         },
         .sphere => {
             common.applySharedFields(&sphere_config, shared);
             if (shared.dt) |dt_value| {
                 sphere_config.final_time = dt_value * @as(f64, @floatFromInt(sphere_config.steps));
             }
-            try runSphereDiffusion(allocator, sphere_config);
+            var stderr_buffer: [1024]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+            const stderr = &stderr_writer.interface;
+            _ = try diffusion.run(.sphere, allocator, sphere_config, stderr);
         },
     }
 }
 
-fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.Config(.plane)) !void {
-    var stderr_buffer: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const stderr = &stderr_writer.interface;
-    const result = try diffusion.run(.plane, allocator, config, stderr);
-    try stderr.print(
-        "elapsed={d:.3}s steps={d} snapshots={d} l2_error={e} output={s}\n",
-        .{ result.elapsed_s, result.steps, result.snapshot_count, result.l2_error, config.output_dir },
-    );
-}
-
-fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.Config(.sphere)) !void {
-    var stderr_buffer: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const stderr = &stderr_writer.interface;
-    _ = try diffusion.run(.sphere, allocator, config, stderr);
+fn runByDimension(
+    allocator: std.mem.Allocator,
+    args: []const [:0]const u8,
+    run2: *const fn (std.mem.Allocator, []const [:0]const u8) anyerror!void,
+    run3: *const fn (std.mem.Allocator, []const [:0]const u8) anyerror!void,
+) !void {
+    return switch (try parseDimensionArg(args, 2)) {
+        2 => try run2(allocator, args),
+        3 => try run3(allocator, args),
+        else => unreachable,
+    };
 }
 
 fn parseDimensionArg(args: []const [:0]const u8, default_dimension: u8) !u8 {
@@ -366,7 +355,7 @@ fn parseBox3Command(
     comptime ConfigType: type,
     args: []const [:0]const u8,
     usage_fn: UsageFn,
-    apply_shared: *const fn (*ConfigType, common.Common) void,
+    comptime apply_shared: anytype,
 ) !?ConfigType {
     var config = ConfigType{};
     var shared = common.Common{};
@@ -374,10 +363,7 @@ fn parseBox3Command(
     _ = parser.next();
 
     while (parser.next()) |arg| {
-        if (eql(arg, "--dim")) {
-            _ = try parser.requireValue("--dim");
-            continue;
-        }
+        if (try consumeDimensionFlag(&parser, arg)) continue;
         if (try common.tryBox3Flag(&parser, arg, &config)) continue;
         if (try parser.tryCommon(arg, &shared)) continue;
         failUnknownFlag(arg, usage_fn);
@@ -393,19 +379,17 @@ fn parseBox3Command(
     return config;
 }
 
+fn consumeDimensionFlag(parser: *common.Parser, arg: []const u8) !bool {
+    if (!eql(arg, "--dim")) return false;
+    _ = try parser.requireValue("--dim");
+    return true;
+}
+
 fn applyFixedDtWithFrameInterval(cfg: anytype, shared: common.Common) void {
     if (shared.dt) |value| cfg.dt = value;
     if (shared.frames) |frames| {
         cfg.output_interval = common.framesToInterval(cfg.steps, frames);
     }
-}
-
-fn applyMaxwell3dShared(cfg: *maxwell.Config(3), shared: common.Common) void {
-    applyFixedDtWithFrameInterval(cfg, shared);
-}
-
-fn applyEuler3dShared(cfg: *euler.Config(3), shared: common.Common) void {
-    applyFixedDtWithFrameInterval(cfg, shared);
 }
 
 fn failUnknownFlag(arg: []const u8, usage_fn: UsageFn) noreturn {
