@@ -154,6 +154,31 @@ parent mesh's storage for a subset of entities.
 
 ---
 
+## Canonical coordinate-system metadata for meshes
+
+**Layer:** architecture
+**Constraint on current work:** Canonical geometry constructors may exist now
+(`uniform_grid`, `sphere`, and future `disk`, `torus`, radial grids), but they
+should not bake ad hoc chart metadata into the base mesh type yet. Keep the
+constructor APIs and internal geometry data compatible with a later layer that
+can attach a natural coordinate interpretation or chart family explicitly.
+
+Examples of future pairings:
+- rectangular grids with Cartesian coordinates
+- radial disk meshes with polar coordinates
+- axial surface/volume meshes with cylindrical coordinates
+- spherical surface meshes with longitude/latitude-style charts or an atlas
+
+The important design constraint now is negative: do not encode coordinates as
+string tags or constructor-specific side channels that would be hard to
+generalize later.
+
+**Enablers:** Canonical geometry constructors in `topology`, and a clearer
+distinction between embedded geometry and coordinate/chart metadata.
+**Source:** Ideation 2026-04-11
+
+---
+
 ## Schwarz-type domain decomposition
 
 **Layer:** architecture

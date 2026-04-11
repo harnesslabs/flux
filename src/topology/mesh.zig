@@ -741,6 +741,34 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return partial;
         }
 
+        /// Construct an embedded triangulated sphere of radius `radius`.
+        ///
+        /// The current implementation refines the boundary of an octahedron and
+        /// projects midpoints back to the sphere. This is available only for
+        /// `Mesh(3, 2)`, which is the honest mesh type for a triangulated
+        /// embedded 2-sphere in the current library.
+        pub fn sphere(
+            allocator: std.mem.Allocator,
+            radius: f64,
+            refinement: u32,
+        ) !Self {
+            comptime {
+                if (embedding_dimension != 3 or topological_dimension != 2) {
+                    @compileError("sphere is only available for Mesh(3, 2)");
+                }
+            }
+            if (!(radius > 0.0)) @panic("sphere radius must be positive");
+
+            var polyhedron = try buildRefinedSphereOctahedron(allocator, radius, refinement);
+            defer polyhedron.deinit(allocator);
+
+            const oriented_faces = try allocator.dupe([3]u32, polyhedron.faces);
+            defer allocator.free(oriented_faces);
+            orientSphereFacesOutward(polyhedron.vertices, oriented_faces);
+
+            return Self.from_triangles(allocator, polyhedron.vertices, oriented_faces);
+        }
+
         /// Construct a 2D simplicial mesh from explicit triangle connectivity.
         ///
         /// This is the topology-facing half of the `.obj` import path:
@@ -1412,6 +1440,133 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return determinant / 6.0;
         }
 
+        const SpherePolyhedron = struct {
+            vertices: [][3]f64,
+            faces: [][3]u32,
+
+            fn deinit(self: *SpherePolyhedron, allocator: std.mem.Allocator) void {
+                allocator.free(self.faces);
+                allocator.free(self.vertices);
+            }
+        };
+
+        fn buildRefinedSphereOctahedron(allocator: std.mem.Allocator, radius: f64, refinement: u32) !SpherePolyhedron {
+            var polyhedron = SpherePolyhedron{
+                .vertices = try allocator.dupe([3]f64, &initial_sphere_octahedron_vertices),
+                .faces = try allocator.dupe([3]u32, &initial_sphere_octahedron_faces),
+            };
+            errdefer polyhedron.deinit(allocator);
+
+            scaleSphereVertices(polyhedron.vertices, radius);
+
+            for (0..refinement) |_| {
+                const next = try refineSpherePolyhedron(allocator, polyhedron, radius);
+                polyhedron.deinit(allocator);
+                polyhedron = next;
+            }
+
+            return polyhedron;
+        }
+
+        fn refineSpherePolyhedron(allocator: std.mem.Allocator, polyhedron: SpherePolyhedron, radius: f64) !SpherePolyhedron {
+            var vertices = try std.ArrayList([3]f64).initCapacity(allocator, polyhedron.vertices.len + polyhedron.faces.len);
+            defer vertices.deinit(allocator);
+            try vertices.appendSlice(allocator, polyhedron.vertices);
+
+            var faces = try std.ArrayList([3]u32).initCapacity(allocator, polyhedron.faces.len * 4);
+            defer faces.deinit(allocator);
+
+            var midpoint_map = std.AutoHashMap([2]u32, u32).init(allocator);
+            defer midpoint_map.deinit();
+
+            for (polyhedron.faces) |face| {
+                const ab = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[0], face[1], radius);
+                const bc = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[1], face[2], radius);
+                const ca = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[2], face[0], radius);
+
+                try faces.append(allocator, .{ face[0], ab, ca });
+                try faces.append(allocator, .{ face[1], bc, ab });
+                try faces.append(allocator, .{ face[2], ca, bc });
+                try faces.append(allocator, .{ ab, bc, ca });
+            }
+
+            return .{
+                .vertices = try vertices.toOwnedSlice(allocator),
+                .faces = try faces.toOwnedSlice(allocator),
+            };
+        }
+
+        fn sphereMidpointIndex(
+            allocator: std.mem.Allocator,
+            vertices: *std.ArrayList([3]f64),
+            midpoint_map: *std.AutoHashMap([2]u32, u32),
+            a: u32,
+            b: u32,
+            radius: f64,
+        ) !u32 {
+            const key = canonical_edge_key(a, b);
+            const gop = try midpoint_map.getOrPut(key);
+            if (gop.found_existing) return gop.value_ptr.*;
+
+            const midpoint = normalizeSpherePoint(scaleSpherePoint(addSpherePoints(vertices.items[a], vertices.items[b]), 0.5), radius);
+            const new_index: u32 = @intCast(vertices.items.len);
+            try vertices.append(allocator, midpoint);
+            gop.value_ptr.* = new_index;
+            return new_index;
+        }
+
+        fn orientSphereFacesOutward(embedded_vertices: []const [3]f64, faces: [][3]u32) void {
+            for (faces) |*face| {
+                const a = embedded_vertices[face.*[0]];
+                const b = embedded_vertices[face.*[1]];
+                const c = embedded_vertices[face.*[2]];
+                const normal = cross3(subSpherePoints(b, a), subSpherePoints(c, a));
+                const centroid = normalizeSpherePoint(scaleSpherePoint(addSpherePoints(addSpherePoints(a, b), c), 1.0 / 3.0), 1.0);
+                if (dot3(normal, centroid) < 0.0) {
+                    std.mem.swap(u32, &face.*[1], &face.*[2]);
+                }
+            }
+        }
+
+        fn scaleSphereVertices(vertices: [][3]f64, radius: f64) void {
+            for (vertices) |*vertex| {
+                vertex.* = scaleSpherePoint(vertex.*, radius);
+            }
+        }
+
+        fn addSpherePoints(a: [3]f64, b: [3]f64) [3]f64 {
+            return .{ a[0] + b[0], a[1] + b[1], a[2] + b[2] };
+        }
+
+        fn subSpherePoints(a: [3]f64, b: [3]f64) [3]f64 {
+            return .{ a[0] - b[0], a[1] - b[1], a[2] - b[2] };
+        }
+
+        fn scaleSpherePoint(a: [3]f64, scale: f64) [3]f64 {
+            return .{ a[0] * scale, a[1] * scale, a[2] * scale };
+        }
+
+        fn dot3(a: [3]f64, b: [3]f64) f64 {
+            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+        }
+
+        fn norm3(a: [3]f64) f64 {
+            return @sqrt(dot3(a, a));
+        }
+
+        fn normalizeSpherePoint(a: [3]f64, radius: f64) [3]f64 {
+            const inv_norm = radius / norm3(a);
+            return scaleSpherePoint(a, inv_norm);
+        }
+
+        fn cross3(a: [3]f64, b: [3]f64) [3]f64 {
+            return .{
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            };
+        }
+
         fn canonical_edge_key(a: u32, b: u32) [2]u32 {
             return if (a < b) .{ a, b } else .{ b, a };
         }
@@ -1486,6 +1641,26 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             .{ 0, 2 },
             .{ 0, 1 },
         };
+
+        const initial_sphere_octahedron_vertices = [_][3]f64{
+            .{ 1.0, 0.0, 0.0 },
+            .{ -1.0, 0.0, 0.0 },
+            .{ 0.0, 1.0, 0.0 },
+            .{ 0.0, -1.0, 0.0 },
+            .{ 0.0, 0.0, 1.0 },
+            .{ 0.0, 0.0, -1.0 },
+        };
+
+        const initial_sphere_octahedron_faces = [_][3]u32{
+            .{ 0, 4, 2 },
+            .{ 2, 4, 1 },
+            .{ 1, 4, 3 },
+            .{ 3, 4, 0 },
+            .{ 2, 5, 0 },
+            .{ 1, 5, 2 },
+            .{ 3, 5, 1 },
+            .{ 0, 5, 3 },
+        };
     };
 }
 
@@ -1501,6 +1676,59 @@ test "uniform grid entity counts" {
     try testing.expectEqual(@as(u32, 20), mesh.num_vertices()); // (3+1)*(4+1)
     try testing.expectEqual(@as(u32, 43), mesh.num_edges()); // 3*5 + 4*4 + 3*4
     try testing.expectEqual(@as(u32, 24), mesh.num_faces()); // 2*3*4
+}
+
+test "sphere constructor produces the expected octahedral counts" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh(3, 2).sphere(allocator, 1.0, 0);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 6), mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 12), mesh.num_edges());
+    try testing.expectEqual(@as(u32, 8), mesh.num_faces());
+}
+
+test "sphere constructor refinement preserves spherical geometry and Euler characteristic" {
+    const allocator = testing.allocator;
+    const refinement: u32 = 2;
+    const radius = 2.5;
+    var mesh = try Mesh(3, 2).sphere(allocator, radius, refinement);
+    defer mesh.deinit(allocator);
+
+    const refinement_factor = std.math.pow(u32, 4, refinement);
+    try testing.expectEqual(@as(u32, 4) * refinement_factor + 2, mesh.num_vertices());
+    try testing.expectEqual(@as(u32, 12) * refinement_factor, mesh.num_edges());
+    try testing.expectEqual(@as(u32, 8) * refinement_factor, mesh.num_faces());
+
+    const euler_characteristic = @as(i64, mesh.num_vertices()) - @as(i64, mesh.num_edges()) + @as(i64, mesh.num_faces());
+    try testing.expectEqual(@as(i64, 2), euler_characteristic);
+
+    const coords = mesh.vertices.slice().items(.coords);
+    for (coords) |coord| {
+        const norm = @sqrt(coord[0] * coord[0] + coord[1] * coord[1] + coord[2] * coord[2]);
+        try testing.expectApproxEqAbs(radius, norm, 1e-12);
+    }
+
+    const faces = mesh.simplices(2).items(.vertices);
+    for (faces) |face| {
+        const a = coords[face[0]];
+        const b = coords[face[1]];
+        const c = coords[face[2]];
+        const ab = [3]f64{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const ac = [3]f64{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+        const normal = [3]f64{
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        };
+        const centroid = [3]f64{
+            (a[0] + b[0] + c[0]) / 3.0,
+            (a[1] + b[1] + c[1]) / 3.0,
+            (a[2] + b[2] + c[2]) / 3.0,
+        };
+        const orientation = normal[0] * centroid[0] + normal[1] * centroid[1] + normal[2] * centroid[2];
+        try testing.expect(orientation > 0.0);
+    }
 }
 
 test "boundary operator ∂₁ has exactly 2 nonzeros per row" {

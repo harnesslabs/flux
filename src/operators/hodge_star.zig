@@ -617,6 +617,7 @@ const DualC0_3D = cochain.Cochain(Mesh3D, 0, cochain.Dual);
 const DualC1_3D = cochain.Cochain(Mesh3D, 1, cochain.Dual);
 const DualC2_3D = cochain.Cochain(Mesh3D, 2, cochain.Dual);
 const DualC3_3D = cochain.Cochain(Mesh3D, 3, cochain.Dual);
+const MeshSurface = topology.Mesh(3, 2);
 
 // ── Compile-time type checks ─────────────────────────────────────────────
 
@@ -864,6 +865,92 @@ test "Metric(.riemannian) preserves ★⁻¹ ∘ ★ = id for 2D primal 1-forms"
         for (omega.values, round_trip.values) |expected, actual| {
             try testing.expectApproxEqRel(expected, actual, 1e-6);
         }
+    }
+}
+
+test "Mesh(3, 2) induced metric matches intrinsic 2D Hodge star on an isometric embedding" {
+    const allocator = testing.allocator;
+    const faces = [_][3]u32{
+        .{ 0, 1, 2 },
+        .{ 0, 2, 3 },
+    };
+    const intrinsic_vertices = [_][2]f64{
+        .{ 0.0, 0.0 },
+        .{ 1.0, 0.0 },
+        .{ 2.0, 1.0 },
+        .{ 1.0, 1.0 },
+    };
+    const embedded_vertices = [_][3]f64{
+        .{ 0.0, 0.0, 0.0 },
+        .{ 0.7071067811865475, 0.7071067811865475, 0.0 },
+        .{ 1.414213562373095, 1.414213562373095, 1.0 },
+        .{ 0.7071067811865475, 0.7071067811865475, 1.0 },
+    };
+
+    var intrinsic_mesh = try Mesh2D.from_triangles(allocator, &intrinsic_vertices, &faces);
+    defer intrinsic_mesh.deinit(allocator);
+
+    var embedded_mesh = try MeshSurface.from_triangles(allocator, &embedded_vertices, &faces);
+    defer embedded_mesh.deinit(allocator);
+
+    {
+        const EmbeddedPrimalC0 = cochain.Cochain(MeshSurface, 0, cochain.Primal);
+        var intrinsic_form = try PrimalC0.init(allocator, &intrinsic_mesh);
+        defer intrinsic_form.deinit(allocator);
+        var embedded_form = try EmbeddedPrimalC0.init(allocator, &embedded_mesh);
+        defer embedded_form.deinit(allocator);
+
+        for (intrinsic_form.values, 0..) |*value, idx| {
+            value.* = @as(f64, @floatFromInt(idx + 1)) * 0.5;
+            embedded_form.values[idx] = value.*;
+        }
+
+        var intrinsic_star = try hodge_star(allocator, intrinsic_form);
+        defer intrinsic_star.deinit(allocator);
+        var embedded_star = try hodge_star(allocator, embedded_form);
+        defer embedded_star.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(intrinsic_star.values, embedded_star.values, 1e-12);
+    }
+
+    {
+        const EmbeddedPrimalC1 = cochain.Cochain(MeshSurface, 1, cochain.Primal);
+        var intrinsic_form = try PrimalC1.init(allocator, &intrinsic_mesh);
+        defer intrinsic_form.deinit(allocator);
+        var embedded_form = try EmbeddedPrimalC1.init(allocator, &embedded_mesh);
+        defer embedded_form.deinit(allocator);
+
+        for (intrinsic_form.values, 0..) |*value, idx| {
+            value.* = @as(f64, @floatFromInt(idx + 2)) * -0.25;
+            embedded_form.values[idx] = value.*;
+        }
+
+        var intrinsic_star = try hodge_star(allocator, intrinsic_form);
+        defer intrinsic_star.deinit(allocator);
+        var embedded_star = try hodge_star(allocator, embedded_form);
+        defer embedded_star.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(intrinsic_star.values, embedded_star.values, 1e-12);
+    }
+
+    {
+        const EmbeddedPrimalC2 = cochain.Cochain(MeshSurface, 2, cochain.Primal);
+        var intrinsic_form = try PrimalC2.init(allocator, &intrinsic_mesh);
+        defer intrinsic_form.deinit(allocator);
+        var embedded_form = try EmbeddedPrimalC2.init(allocator, &embedded_mesh);
+        defer embedded_form.deinit(allocator);
+
+        for (intrinsic_form.values, 0..) |*value, idx| {
+            value.* = @as(f64, @floatFromInt(idx + 3)) * 0.75;
+            embedded_form.values[idx] = value.*;
+        }
+
+        var intrinsic_star = try hodge_star(allocator, intrinsic_form);
+        defer intrinsic_star.deinit(allocator);
+        var embedded_star = try hodge_star(allocator, embedded_form);
+        defer embedded_star.deinit(allocator);
+
+        try expectSlicesApproxEqAbs(intrinsic_star.values, embedded_star.values, 1e-12);
     }
 }
 

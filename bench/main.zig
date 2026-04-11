@@ -14,6 +14,8 @@ const std = @import("std");
 const builtin = @import("builtin");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
+const sparse = flux.math.sparse;
+const cg = flux.math.cg;
 /// Version of the benchmark result file schema.
 const benchmark_suite_version: u32 = 3;
 /// Version for operator and end-to-end rows after switching to calibrated samples.
@@ -24,10 +26,12 @@ const micro_benchmark_method_version: u32 = 3;
 const arithmetic_benchmark_method_version: u32 = 2;
 
 const Mesh2D = flux.topology.Mesh(2, 2);
+const SurfaceMesh = flux.topology.Mesh(3, 2);
 const PrimalC0 = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
 const PrimalC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Primal);
 const PrimalC2 = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 const OperatorContext2D = flux.operators.context.OperatorContext(Mesh2D);
+const SurfaceOperatorContext = flux.operators.context.OperatorContext(SurfaceMesh);
 const MaxwellState2D = maxwell.State(2);
 const ArithmeticMesh = struct {
     pub const embedding_dimension = 2;
@@ -74,6 +78,11 @@ const arithmetic_case_labels = [_][]const u8{ "1k", "16k", "128k" };
 const cavity_grid: u32 = 256;
 const cavity_domain: f64 = 1.0;
 const cavity_courant: f64 = 0.1;
+const surface_patch_nx: u32 = 64;
+const surface_patch_ny: u32 = 64;
+const diffusion_surface_refinement: u32 = 5;
+const diffusion_surface_final_time: f64 = 0.05;
+const diffusion_surface_steps: u32 = 1;
 const small_cochain_repetitions: u32 = 64;
 const incidence_grid_nx: u32 = 1000;
 const incidence_grid_ny: u32 = 1000;
@@ -171,6 +180,7 @@ const BenchmarkContext = struct {
     cavity_mesh: *Mesh2D,
     cavity_state: MaxwellState2D,
     operator_context: *OperatorContext2D,
+    surface_mesh: *SurfaceMesh,
 
     fn init(allocator: std.mem.Allocator, mesh: *Mesh2D) !BenchmarkContext {
         var c0 = try PrimalC0.init(allocator, mesh);
@@ -201,6 +211,10 @@ const BenchmarkContext = struct {
         try maxwell.seedReferenceMode(2, allocator, &cavity_state, cavityDt(), cavity_domain, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
+        const surface_mesh = try allocator.create(SurfaceMesh);
+        errdefer allocator.destroy(surface_mesh);
+        surface_mesh.* = try buildEmbeddedSurfacePatch(allocator, surface_patch_nx, surface_patch_ny);
+        errdefer surface_mesh.deinit(allocator);
         _ = try operator_context.exteriorDerivative(flux.forms.Primal, 0);
         _ = try operator_context.exteriorDerivative(flux.forms.Primal, 1);
         _ = try operator_context.hodgeStar(0);
@@ -229,10 +243,13 @@ const BenchmarkContext = struct {
             .cavity_mesh = cavity_mesh,
             .cavity_state = cavity_state,
             .operator_context = operator_context,
+            .surface_mesh = surface_mesh,
         };
     }
 
     fn deinit(self: *BenchmarkContext) void {
+        self.surface_mesh.deinit(self.allocator);
+        self.allocator.destroy(self.surface_mesh);
         self.operator_context.deinit();
         self.cavity_state.deinit(self.allocator);
         self.cavity_mesh.deinit(self.allocator);
@@ -256,6 +273,134 @@ fn fillRandom(rng: *std.Random.DefaultPrng, values: []f64) void {
 
 fn cavityDt() f64 {
     return cavity_courant * (cavity_domain / @as(f64, @floatFromInt(cavity_grid)));
+}
+
+fn buildEmbeddedSurfacePatch(allocator: std.mem.Allocator, nx: u32, ny: u32) !SurfaceMesh {
+    std.debug.assert(nx > 0);
+    std.debug.assert(ny > 0);
+
+    const vertex_count = (nx + 1) * (ny + 1);
+    const face_count = 2 * nx * ny;
+    const inv_sqrt2 = 0.7071067811865475;
+
+    const vertices = try allocator.alloc([3]f64, vertex_count);
+    defer allocator.free(vertices);
+    const faces = try allocator.alloc([3]u32, face_count);
+    defer allocator.free(faces);
+
+    var vertex_write: usize = 0;
+    for (0..nx + 1) |i_u| {
+        const x = @as(f64, @floatFromInt(i_u)) / @as(f64, @floatFromInt(nx));
+        for (0..ny + 1) |j_u| {
+            const y = @as(f64, @floatFromInt(j_u)) / @as(f64, @floatFromInt(ny));
+            vertices[vertex_write] = .{
+                (x + y) * inv_sqrt2,
+                (x - y) * inv_sqrt2,
+                0.5 * y,
+            };
+            vertex_write += 1;
+        }
+    }
+    std.debug.assert(vertex_write == vertex_count);
+
+    var face_write: usize = 0;
+    for (0..nx) |i_u| {
+        const i: u32 = @intCast(i_u);
+        for (0..ny) |j_u| {
+            const j: u32 = @intCast(j_u);
+            const sw = i * (ny + 1) + j;
+            const se = (i + 1) * (ny + 1) + j;
+            const nw = i * (ny + 1) + (j + 1);
+            const ne = (i + 1) * (ny + 1) + (j + 1);
+            faces[face_write] = .{ sw, se, ne };
+            faces[face_write + 1] = .{ sw, ne, nw };
+            face_write += 2;
+        }
+    }
+    std.debug.assert(face_write == face_count);
+
+    return SurfaceMesh.from_triangles(allocator, vertices, faces);
+}
+
+const BenchmarkSurfaceSystem = struct {
+    operator_context: *SurfaceOperatorContext,
+    system_matrix: sparse.CsrMatrix(f64),
+    masses: []f64,
+    diagonal: []f64,
+    scratch: cg.Scratch,
+
+    fn init(allocator: std.mem.Allocator, mesh: *const SurfaceMesh, dt: f64) !BenchmarkSurfaceSystem {
+        const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
+        errdefer operator_context.deinit();
+        const stiffness = (try operator_context.laplacian(0)).stiffness;
+
+        const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
+        errdefer allocator.free(masses);
+
+        var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
+        defer assembler.deinit(allocator);
+
+        for (masses, 0..) |mass, row_idx| {
+            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(row_idx), mass);
+
+            const row = stiffness.row(@intCast(row_idx));
+            for (row.cols, row.vals) |col_idx, value| {
+                try assembler.addEntry(allocator, @intCast(row_idx), col_idx, dt * value);
+            }
+        }
+
+        var system_matrix = try assembler.build(allocator);
+        errdefer system_matrix.deinit(allocator);
+
+        const diagonal = try allocator.alloc(f64, masses.len);
+        errdefer allocator.free(diagonal);
+        for (0..masses.len) |row_idx| {
+            diagonal[row_idx] = diagonalEntry(system_matrix, @intCast(row_idx));
+            std.debug.assert(diagonal[row_idx] > 0.0);
+        }
+
+        var scratch = try cg.Scratch.init(allocator, mesh.num_vertices());
+        errdefer scratch.deinit(allocator);
+
+        return .{
+            .operator_context = operator_context,
+            .system_matrix = system_matrix,
+            .masses = masses,
+            .diagonal = diagonal,
+            .scratch = scratch,
+        };
+    }
+
+    fn deinit(self: *BenchmarkSurfaceSystem, allocator: std.mem.Allocator) void {
+        self.scratch.deinit(allocator);
+        allocator.free(self.diagonal);
+        allocator.free(self.masses);
+        self.system_matrix.deinit(allocator);
+        self.operator_context.deinit();
+    }
+};
+
+fn assembleLumpedSurfaceMasses(allocator: std.mem.Allocator, mesh: *const SurfaceMesh) ![]f64 {
+    const masses = try allocator.alloc(f64, mesh.num_vertices());
+    @memset(masses, 0.0);
+
+    const face_vertices = mesh.simplices(2).items(.vertices);
+    const face_areas = mesh.simplices(2).items(.volume);
+    for (face_vertices, face_areas) |face, area| {
+        const lumped = area / 3.0;
+        masses[face[0]] += lumped;
+        masses[face[1]] += lumped;
+        masses[face[2]] += lumped;
+    }
+    return masses;
+}
+
+fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
+    const row = matrix.row(row_idx);
+    for (row.cols, row.vals) |col_idx, value| {
+        if (col_idx == row_idx) return value;
+    }
+    unreachable;
 }
 
 fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
@@ -635,6 +780,21 @@ fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
     maxwell.step(2, ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
 }
 
+fn benchSurfaceLaplacianAssemblyDirect(ctx: *BenchmarkContext) void {
+    const operator_context = SurfaceOperatorContext.init(ctx.allocator, ctx.surface_mesh) catch unreachable;
+    defer operator_context.deinit();
+    _ = operator_context.laplacian(0) catch unreachable;
+}
+
+fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
+    const dt = diffusion_surface_final_time / @as(f64, diffusion_surface_steps);
+    var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
+    defer mesh.deinit(ctx.allocator);
+
+    var system = BenchmarkSurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
+    defer system.deinit(ctx.allocator);
+}
+
 fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
     const arithmetic_case = &ctx.arithmetic_cases[case_index];
     addScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values);
@@ -815,6 +975,16 @@ const base_benchmarks = [_]BenchmarkDef{
         .class = .info,
     },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
+    .{
+        .name = "surface_laplacian_0_assembly_direct",
+        .run = benchSurfaceLaplacianAssemblyDirect,
+        .class = .info,
+    },
+    .{
+        .name = "diffusion_surface_system_init",
+        .run = benchDiffusionSurfaceSystemInit,
+        .class = .info,
+    },
 };
 
 const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;

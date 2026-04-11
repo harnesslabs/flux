@@ -4,11 +4,11 @@ const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
-const exterior_derivative = flux.operators.exterior_derivative;
-const hodge_star = flux.operators.hodge_star;
+const operator_context_mod = flux.operators.context;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
+const SurfaceOperatorContext = operator_context_mod.OperatorContext(SurfaceMesh);
 
 pub const ConfigImpl = struct {
     refinement: u32 = 0,
@@ -37,6 +37,7 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const SurfaceSystem = struct {
+    operator_context: *SurfaceOperatorContext,
     system_matrix: sparse.CsrMatrix(f64),
     masses: []f64,
     diagonal: []f64,
@@ -47,8 +48,9 @@ const SurfaceSystem = struct {
         mesh: *const SurfaceMesh,
         dt: f64,
     ) !SurfaceSystem {
-        var stiffness = try assembleSurfaceStiffness(allocator, mesh);
-        defer stiffness.deinit(allocator);
+        const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
+        errdefer operator_context.deinit();
+        const stiffness = (try operator_context.laplacian(0)).stiffness;
 
         const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
         errdefer allocator.free(masses);
@@ -79,6 +81,7 @@ const SurfaceSystem = struct {
         errdefer scratch.deinit(allocator);
 
         return .{
+            .operator_context = operator_context,
             .system_matrix = system_matrix,
             .masses = masses,
             .diagonal = diagonal,
@@ -91,6 +94,7 @@ const SurfaceSystem = struct {
         allocator.free(self.diagonal);
         allocator.free(self.masses);
         self.system_matrix.deinit(allocator);
+        self.operator_context.deinit();
     }
 };
 
@@ -134,7 +138,7 @@ fn simulateCase(
     std.debug.assert(config.dt_scale > 0.0);
     std.debug.assert(config.final_time > 0.0);
 
-    var mesh = try buildSphereMesh(allocator, config.refinement);
+    var mesh = try SurfaceMesh.sphere(allocator, 1.0, config.refinement);
     defer mesh.deinit(allocator);
 
     const dt = config.timeStep();
@@ -198,157 +202,6 @@ fn convergenceConfig(refinement: u32) ConfigImpl {
         .frames = 0,
         .output_dir = "output/diffusion_surface_convergence",
     };
-}
-
-fn buildSphereMesh(
-    allocator: std.mem.Allocator,
-    refinement: u32,
-) !SurfaceMesh {
-    var polyhedron = try buildRefinedOctahedron(allocator, refinement);
-    defer polyhedron.deinit(allocator);
-
-    const oriented_faces = try allocator.dupe([3]u32, polyhedron.faces);
-    defer allocator.free(oriented_faces);
-    orientFacesOutward(polyhedron.vertices, oriented_faces);
-
-    return SurfaceMesh.from_triangles(allocator, polyhedron.vertices, oriented_faces);
-}
-
-const Polyhedron = struct {
-    vertices: [][3]f64,
-    faces: [][3]u32,
-
-    pub fn deinit(self: *Polyhedron, allocator: std.mem.Allocator) void {
-        allocator.free(self.faces);
-        allocator.free(self.vertices);
-    }
-};
-
-fn buildRefinedOctahedron(
-    allocator: std.mem.Allocator,
-    refinement: u32,
-) !Polyhedron {
-    var polyhedron = Polyhedron{
-        .vertices = try allocator.dupe([3]f64, &initial_octahedron_vertices),
-        .faces = try allocator.dupe([3]u32, &initial_octahedron_faces),
-    };
-    errdefer polyhedron.deinit(allocator);
-
-    for (0..refinement) |_| {
-        const next = try refinePolyhedron(allocator, polyhedron);
-        polyhedron.deinit(allocator);
-        polyhedron = next;
-    }
-
-    return polyhedron;
-}
-
-fn refinePolyhedron(
-    allocator: std.mem.Allocator,
-    polyhedron: Polyhedron,
-) !Polyhedron {
-    var vertices = try std.ArrayList([3]f64).initCapacity(allocator, polyhedron.vertices.len + polyhedron.faces.len);
-    defer vertices.deinit(allocator);
-    try vertices.appendSlice(allocator, polyhedron.vertices);
-
-    var faces = try std.ArrayList([3]u32).initCapacity(allocator, polyhedron.faces.len * 4);
-    defer faces.deinit(allocator);
-
-    var midpoint_map = std.AutoHashMap([2]u32, u32).init(allocator);
-    defer midpoint_map.deinit();
-
-    for (polyhedron.faces) |face| {
-        const ab = try midpointIndex(allocator, &vertices, &midpoint_map, face[0], face[1]);
-        const bc = try midpointIndex(allocator, &vertices, &midpoint_map, face[1], face[2]);
-        const ca = try midpointIndex(allocator, &vertices, &midpoint_map, face[2], face[0]);
-
-        try faces.append(allocator, .{ face[0], ab, ca });
-        try faces.append(allocator, .{ face[1], bc, ab });
-        try faces.append(allocator, .{ face[2], ca, bc });
-        try faces.append(allocator, .{ ab, bc, ca });
-    }
-
-    return .{
-        .vertices = try vertices.toOwnedSlice(allocator),
-        .faces = try faces.toOwnedSlice(allocator),
-    };
-}
-
-fn midpointIndex(
-    allocator: std.mem.Allocator,
-    vertices: *std.ArrayList([3]f64),
-    midpoint_map: *std.AutoHashMap([2]u32, u32),
-    a: u32,
-    b: u32,
-) !u32 {
-    const key = canonicalEdge(a, b);
-    const gop = try midpoint_map.getOrPut(key);
-    if (gop.found_existing) return gop.value_ptr.*;
-
-    const midpoint = normalize3(add3(vertices.items[a], vertices.items[b]));
-    const new_index: u32 = @intCast(vertices.items.len);
-    try vertices.append(allocator, midpoint);
-    gop.value_ptr.* = new_index;
-    return new_index;
-}
-
-fn orientFacesOutward(
-    embedded_vertices: []const [3]f64,
-    faces: [][3]u32,
-) void {
-    for (faces) |*face| {
-        const a = embedded_vertices[face.*[0]];
-        const b = embedded_vertices[face.*[1]];
-        const c = embedded_vertices[face.*[2]];
-        const ab = sub3(b, a);
-        const ac = sub3(c, a);
-        const normal = cross3(ab, ac);
-        const centroid = normalize3(.{
-            (a[0] + b[0] + c[0]) / 3.0,
-            (a[1] + b[1] + c[1]) / 3.0,
-            (a[2] + b[2] + c[2]) / 3.0,
-        });
-        if (dot3(normal, centroid) < 0.0) {
-            const tmp = face.*[1];
-            face.*[1] = face.*[2];
-            face.*[2] = tmp;
-        }
-    }
-}
-
-fn assembleSurfaceStiffness(
-    allocator: std.mem.Allocator,
-    mesh: *const SurfaceMesh,
-) !sparse.CsrMatrix(f64) {
-    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
-    defer assembler.deinit(allocator);
-
-    var basis = try VertexField.init(allocator, mesh);
-    defer basis.deinit(allocator);
-
-    const boundary_1 = mesh.boundary(1);
-    const column = try allocator.alloc(f64, mesh.num_vertices());
-    defer allocator.free(column);
-
-    for (0..mesh.num_vertices()) |vertex_idx| {
-        @memset(basis.values, 0.0);
-        basis.values[vertex_idx] = 1.0;
-
-        var gradient = try exterior_derivative.exterior_derivative(allocator, basis);
-        defer gradient.deinit(allocator);
-
-        var starred = try hodge_star.hodge_star(allocator, gradient);
-        defer starred.deinit(allocator);
-
-        @memset(column, 0.0);
-        boundary_1.transpose_multiply(starred.values, column);
-        for (column, 0..) |value, row_idx| {
-            if (@abs(value) < 1e-13) continue;
-            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(vertex_idx), value);
-        }
-    }
-
-    return assembler.build(allocator);
 }
 
 fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
@@ -456,56 +309,3 @@ fn weightedL2Error(mesh: *const SurfaceMesh, approx: []const f64, exact: []const
     }
     return @sqrt(error_sq / measure);
 }
-
-fn canonicalEdge(a: u32, b: u32) [2]u32 {
-    return if (a < b) .{ a, b } else .{ b, a };
-}
-
-fn add3(a: [3]f64, b: [3]f64) [3]f64 {
-    return .{ a[0] + b[0], a[1] + b[1], a[2] + b[2] };
-}
-
-fn sub3(a: [3]f64, b: [3]f64) [3]f64 {
-    return .{ a[0] - b[0], a[1] - b[1], a[2] - b[2] };
-}
-
-fn dot3(a: [3]f64, b: [3]f64) f64 {
-    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-}
-
-fn norm3(a: [3]f64) f64 {
-    return @sqrt(dot3(a, a));
-}
-
-fn normalize3(a: [3]f64) [3]f64 {
-    const inv_norm = 1.0 / norm3(a);
-    return .{ a[0] * inv_norm, a[1] * inv_norm, a[2] * inv_norm };
-}
-
-fn cross3(a: [3]f64, b: [3]f64) [3]f64 {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
-}
-
-const initial_octahedron_vertices = [_][3]f64{
-    .{ 1.0, 0.0, 0.0 },
-    .{ -1.0, 0.0, 0.0 },
-    .{ 0.0, 1.0, 0.0 },
-    .{ 0.0, -1.0, 0.0 },
-    .{ 0.0, 0.0, 1.0 },
-    .{ 0.0, 0.0, -1.0 },
-};
-
-const initial_octahedron_faces = [_][3]u32{
-    .{ 0, 4, 2 },
-    .{ 2, 4, 1 },
-    .{ 1, 4, 3 },
-    .{ 3, 4, 0 },
-    .{ 2, 5, 0 },
-    .{ 1, 5, 2 },
-    .{ 3, 5, 1 },
-    .{ 0, 5, 3 },
-};
