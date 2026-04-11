@@ -55,16 +55,10 @@ pub fn printUsage() void {
     }
     std.debug.print(
         \\
-        \\  shared flags:
-        \\    --steps N         number of timesteps
-        \\    --dt DT           override the physics-derived timestep
-        \\    --output DIR      output directory for VTK snapshots
-        \\    --frames N        number of evenly-spaced snapshots to write
-        \\    --grid N          structured grid cells per side (where applicable)
-        \\    --domain L        domain side length (where applicable)
-        \\    --refinement N    refinement level (where applicable)
-        \\    --final-time T    final simulated time (where applicable)
-        \\    --help, -h        show subcommand-specific help
+        \\  ask a family for its full flag list:
+        \\    flux maxwell --dim 2 --help
+        \\    flux euler --dim 3 --help
+        \\    flux diffusion --help
         \\
         \\  examples:
         \\    zig build run -- diffusion --surface plane --grid 32 --frames 4
