@@ -632,8 +632,7 @@ fn benchCochainInnerProduct(ctx: *BenchmarkContext) void {
 }
 
 fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
-    maxwell.leapfrog_step(ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
-    maxwell.apply_pec_boundary(&ctx.cavity_state);
+    maxwell.step(2, ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
 }
 
 fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {

@@ -216,7 +216,10 @@ pub fn makeMesh(comptime dim: u8, allocator: std.mem.Allocator, config: Config(d
 
 pub fn step(comptime dim: u8, allocator: std.mem.Allocator, state: *State(dim), dt: f64) !void {
     switch (dim) {
-        2 => try runtime.leapfrog_step(allocator, state, dt),
+        2 => {
+            try runtime.leapfrog_step(allocator, state, dt);
+            runtime.apply_pec_boundary(state);
+        },
         3 => try runtime.leapfrog_step_3d(allocator, state, dt),
         else => unreachable,
     }
