@@ -65,11 +65,11 @@ fn buildPlan(config: RunLoopConfig) snapshot.Plan {
     return snapshot.Plan.disabled();
 }
 
-pub fn runEvolutionLoop(
+fn runCapturedLoop(
     allocator: std.mem.Allocator,
     evolution: anytype,
     config: RunLoopConfig,
-    renderer: anytype,
+    capturer: anytype,
 ) !RunLoopResult {
     const EvolutionType = @TypeOf(evolution.*);
     const plan = buildPlan(config);
@@ -84,20 +84,20 @@ pub fn runEvolutionLoop(
 
     const SnapshotListener = struct {
         series_ptr: *snapshot.Series,
-        renderer_value: @TypeOf(renderer),
-        total_steps: u32,
+        inner: @TypeOf(capturer),
         capture_initial: bool,
+        total_steps: u32,
 
         pub fn onRunBegin(self: *@This(), event: EvolutionType.Event) !void {
             if (!self.capture_initial or !self.series_ptr.enabled()) return;
             _ = event;
-            try self.series_ptr.capture(0.0, self.renderer_value);
+            try self.inner.capture(self.series_ptr, 0.0);
         }
 
         pub fn onStep(self: *@This(), event: EvolutionType.Event) !void {
             if (!self.series_ptr.enabled()) return;
             if (!self.series_ptr.dueAt(event.step_index, self.total_steps)) return;
-            try self.series_ptr.capture(event.time, self.renderer_value);
+            try self.inner.capture(self.series_ptr, event.time);
         }
 
         pub fn onRunEnd(self: *@This(), event: EvolutionType.Event) !void {
@@ -108,9 +108,9 @@ pub fn runEvolutionLoop(
 
     var snapshot_listener = SnapshotListener{
         .series_ptr = &series,
-        .renderer_value = renderer,
-        .total_steps = config.steps,
+        .inner = capturer,
         .capture_initial = config.capture_initial,
+        .total_steps = config.steps,
     };
 
     var progress = if (config.progress_writer) |writer|
@@ -161,21 +161,34 @@ pub fn runEvolutionLoop(
     };
 }
 
+pub fn runEvolutionLoop(
+    allocator: std.mem.Allocator,
+    evolution: anytype,
+    config: RunLoopConfig,
+    renderer: anytype,
+) !RunLoopResult {
+    const Capturer = struct {
+        renderer_value: @TypeOf(renderer),
+
+        pub fn capture(self: @This(), series: anytype, time: f64) !void {
+            try series.capture(time, self.renderer_value);
+        }
+    };
+
+    return runCapturedLoop(
+        allocator,
+        evolution,
+        config,
+        Capturer{ .renderer_value = renderer },
+    );
+}
+
 pub fn runStepLoop(
     allocator: std.mem.Allocator,
     config: RunLoopConfig,
     stepper: anytype,
     capturer: anytype,
 ) !RunLoopResult {
-    const plan = buildPlan(config);
-    var series = try snapshot.Series.init(
-        allocator,
-        config.output_dir,
-        config.output_base_name,
-        plan,
-    );
-    defer series.deinit();
-
     const StepperWrapper = struct {
         inner: @TypeOf(stepper),
 
@@ -196,83 +209,7 @@ pub fn runStepLoop(
         .{ .inner = stepper },
         {},
     );
-
-    const SnapshotListener = struct {
-        series_ptr: *snapshot.Series,
-        inner: @TypeOf(capturer),
-        capture_initial: bool,
-        total_steps: u32,
-
-        pub fn onRunBegin(self: *@This(), event: EvolutionType.Event) !void {
-            if (!self.capture_initial or !self.series_ptr.enabled()) return;
-            _ = event;
-            try self.inner.capture(self.series_ptr, 0.0);
-        }
-
-        pub fn onStep(self: *@This(), event: EvolutionType.Event) !void {
-            if (!self.series_ptr.enabled()) return;
-            if (!self.series_ptr.dueAt(event.step_index, self.total_steps)) return;
-            try self.inner.capture(self.series_ptr, event.time);
-        }
-
-        pub fn onRunEnd(self: *@This(), event: EvolutionType.Event) !void {
-            _ = event;
-            try self.series_ptr.finalize();
-        }
-    };
-
-    var snapshot_listener = SnapshotListener{
-        .series_ptr = &series,
-        .inner = capturer,
-        .capture_initial = config.capture_initial,
-        .total_steps = config.steps,
-    };
-    var progress = if (config.progress_writer) |writer|
-        progress_mod.Progress.init(writer, config.steps)
-    else
-        null;
-
-    const ProgressListener = struct {
-        progress_ptr: *progress_mod.Progress,
-
-        pub fn onStep(self: *@This(), event: EvolutionType.Event) !void {
-            self.progress_ptr.update(event.step_index);
-        }
-
-        pub fn onRunEnd(self: *@This(), event: EvolutionType.Event) !void {
-            _ = event;
-            self.progress_ptr.finish();
-        }
-    };
-
-    const run_result = if (progress) |*bar| blk: {
-        var progress_listener = ProgressListener{ .progress_ptr = bar };
-        break :blk try evolution.run(
-            allocator,
-            .{
-                .steps = config.steps,
-                .dt = config.dt,
-                .final_time = config.final_time,
-            },
-            .{
-                &snapshot_listener,
-                &progress_listener,
-            },
-        );
-    } else try evolution.run(
-        allocator,
-        .{
-            .steps = config.steps,
-            .dt = config.dt,
-            .final_time = config.final_time,
-        },
-        .{&snapshot_listener},
-    );
-
-    return .{
-        .elapsed_s = run_result.elapsed_s,
-        .snapshot_count = series.count,
-    };
+    return runCapturedLoop(allocator, &evolution, config, capturer);
 }
 
 pub fn runSimulationLoop(
