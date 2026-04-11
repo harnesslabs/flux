@@ -1,118 +1,12 @@
-//! Shared run-loop helpers for scalar diffusion examples with an exact
-//! solution field. This owns the time loop, snapshot cadence, and exact/error
-//! visualization bookkeeping; mesh assembly and linear solves stay in the
-//! example modules where the real mathematical differences live.
+const runner = @import("runner.zig");
 
-const std = @import("std");
-const flux = @import("flux");
-const snapshot = @import("snapshot.zig");
-const cli = @import("cli.zig");
-
-const flux_io = flux.io;
-
-pub const RunLoopConfig = struct {
-    steps: u32,
-    dt: f64,
-    final_time: f64,
-    frames: u32,
-    output_dir: []const u8,
-    output_base_name: []const u8,
-    capture_initial: bool = true,
-    emit_final: bool = true,
-};
-
-pub const RunLoopResult = struct {
-    elapsed_s: f64,
-    snapshot_count: u32,
-};
-
-pub fn ExactFieldRenderer(comptime MeshType: type) type {
-    return struct {
-        mesh: *const MeshType,
-        state: []const f64,
-        exact: []const f64,
-
-        pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-            const error_values = try allocator.alloc(f64, self.state.len);
-            defer allocator.free(error_values);
-
-            for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
-                error_value.* = approx_value - exact_value;
-            }
-
-            const point_data = [_]flux_io.DataArraySlice{
-                .{ .name = "temperature", .values = self.state },
-                .{ .name = "temperature_exact", .values = self.exact },
-                .{ .name = "temperature_error", .values = error_values },
-            };
-            try flux_io.write(writer, self.mesh.*, &point_data, &.{});
-        }
-    };
-}
-
-pub fn runExactFieldLoop(
-    comptime MeshType: type,
-    allocator: std.mem.Allocator,
-    mesh: *const MeshType,
-    state_values: []const f64,
-    exact_values: []f64,
-    config: RunLoopConfig,
-    exact_initializer: anytype,
-    stepper: anytype,
-) !RunLoopResult {
-    std.debug.assert(config.steps > 0);
-    std.debug.assert(config.dt > 0.0);
-    std.debug.assert(config.final_time > 0.0);
-
-    const plan: snapshot.Plan = if (config.frames > 0) blk: {
-        const interval = cli.framesToInterval(config.steps, config.frames);
-        break :blk snapshot.Plan.fromInterval(config.steps, interval, .{
-            .emit_final = config.emit_final,
-        });
-    } else snapshot.Plan.disabled();
-
-    var series = try snapshot.Series.init(
-        allocator,
-        config.output_dir,
-        config.output_base_name,
-        plan,
-    );
-    defer series.deinit();
-
-    if (config.capture_initial and series.enabled()) {
-        exact_initializer.fill(mesh, exact_values, 0.0);
-        try series.capture(0.0, ExactFieldRenderer(MeshType){
-            .mesh = mesh,
-            .state = state_values,
-            .exact = exact_values,
-        });
-    }
-
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_idx| {
-        const next_time = config.dt * @as(f64, @floatFromInt(step_idx + 1));
-        try stepper.step(allocator);
-
-        if (series.enabled() and series.dueAt(@intCast(step_idx + 1), config.steps)) {
-            exact_initializer.fill(mesh, exact_values, next_time);
-            try series.capture(next_time, ExactFieldRenderer(MeshType){
-                .mesh = mesh,
-                .state = state_values,
-                .exact = exact_values,
-            });
-        }
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
-
-    exact_initializer.fill(mesh, exact_values, config.final_time);
-    try series.finalize();
-
-    return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
-        .snapshot_count = series.count,
-    };
-}
+pub const RunLoopConfig = runner.RunLoopConfig;
+pub const RunLoopResult = runner.RunLoopResult;
+pub const ExactFieldRenderer = runner.ExactFieldRenderer;
+pub const runConvergenceStudy = runner.runConvergenceStudy;
+pub const runExactFieldLoop = runner.runExactFieldLoop;
+pub const runSimulationLoop = runner.runSimulationLoop;
 
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    @import("std").testing.refAllDeclsRecursive(@This());
 }

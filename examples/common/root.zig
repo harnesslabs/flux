@@ -6,20 +6,22 @@
 //! `@import("examples_common")`.
 
 pub const cli = @import("cli.zig");
-pub const diffusion = @import("diffusion.zig");
+pub const runner = @import("runner.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const progress = @import("progress.zig");
 pub const viz = @import("viz.zig");
 
 pub const Common = cli.Common;
-pub const DiffusionRunLoopConfig = diffusion.RunLoopConfig;
-pub const DiffusionRunLoopResult = diffusion.RunLoopResult;
+pub const RunLoopConfig = runner.RunLoopConfig;
+pub const RunLoopResult = runner.RunLoopResult;
 pub const Parser = cli.Parser;
 pub const ParseError = cli.ParseError;
-pub const ExactFieldRenderer = diffusion.ExactFieldRenderer;
+pub const ExactFieldRenderer = runner.ExactFieldRenderer;
 pub const applySharedFields = cli.applySharedFields;
 pub const framesToInterval = cli.framesToInterval;
-pub const runExactFieldLoop = diffusion.runExactFieldLoop;
+pub const runConvergenceStudy = runner.runConvergenceStudy;
+pub const runExactFieldLoop = runner.runExactFieldLoop;
+pub const runSimulationLoop = runner.runSimulationLoop;
 pub const tryBox3Flag = cli.tryBox3Flag;
 pub const Plan = snapshot.Plan;
 pub const PlanOptions = snapshot.PlanOptions;

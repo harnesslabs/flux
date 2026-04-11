@@ -42,7 +42,6 @@ fn createPhysicsModule(
     optimize: std.builtin.OptimizeMode,
     mod: *std.Build.Module,
     examples_common_mod: *std.Build.Module,
-    maxwell_core_mod: *std.Build.Module,
     source: []const u8,
 ) *std.Build.Module {
     return b.createModule(.{
@@ -52,7 +51,6 @@ fn createPhysicsModule(
         .imports = &.{
             .{ .name = "flux", .module = mod },
             .{ .name = "examples_common", .module = examples_common_mod },
-            .{ .name = "maxwell_core", .module = maxwell_core_mod },
         },
     });
 }
@@ -236,14 +234,6 @@ pub fn build(b: *std.Build) void {
     const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
 
     const generated_sources = b.addWriteFiles();
-    const maxwell_core_mod = b.createModule(.{
-        .root_source_file = b.path("examples/maxwell/core.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "flux", .module = mod },
-        },
-    });
 
     var physics_modules: [example_specs.len]*std.Build.Module = undefined;
     inline for (example_specs, 0..) |spec, idx| {
@@ -253,7 +243,6 @@ pub fn build(b: *std.Build) void {
             optimize,
             mod,
             examples_common_mod,
-            maxwell_core_mod,
             spec.physics_source,
         );
     }
@@ -423,7 +412,6 @@ pub fn build(b: *std.Build) void {
                     .imports = &.{
                         .{ .name = "flux", .module = mod },
                         .{ .name = "examples_common", .module = examples_common_mod },
-                        .{ .name = "maxwell_core", .module = maxwell_core_mod },
                     },
                 }) },
             },

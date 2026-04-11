@@ -4,7 +4,6 @@ const maxwell = @import("maxwell");
 const euler = @import("euler");
 const diffusion = @import("diffusion");
 
-const DiffusionSurface = enum { plane, sphere };
 const UsageFn = *const fn () void;
 
 pub const Subcommand = struct {
@@ -229,7 +228,10 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
         config.courant = dt_value / h;
     }
 
-    try maxwell.runDriver(2, allocator, config);
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    _ = try maxwell.run(2, allocator, config, stderr);
 }
 
 fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -239,7 +241,10 @@ fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
         printMaxwell3dUsage,
         applyMaxwell3dShared,
     ) orelse return;
-    try maxwell.runDriver(3, allocator, config);
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
+    _ = try maxwell.run(3, allocator, config, stderr);
 }
 
 fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -325,7 +330,7 @@ fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 }
 
 pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var surface_kind: DiffusionSurface = .plane;
+    var surface_kind: diffusion.SurfaceKind = .plane;
     var plane_config = diffusion.PlaneConfig{};
     var sphere_config = diffusion.SphereConfig{};
     var shared = common.Common{};
@@ -380,7 +385,7 @@ fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.PlaneConfig
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    const result = try diffusion.runPlane(allocator, config, stderr);
+    const result = try diffusion.run(.plane, allocator, config, stderr);
     try stderr.print(
         "elapsed={d:.3}s steps={d} snapshots={d} l2_error={e} output={s}\n",
         .{ result.elapsed_s, result.steps, result.snapshot_count, result.l2_error, config.output_dir },
@@ -391,7 +396,7 @@ fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.SphereConf
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    _ = try diffusion.runSphere(allocator, config, stderr);
+    _ = try diffusion.run(.sphere, allocator, config, stderr);
 }
 
 fn parseDimensionArg(args: []const [:0]const u8, default_dimension: u8) !u8 {
