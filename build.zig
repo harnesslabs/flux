@@ -274,16 +274,15 @@ pub fn build(b: *std.Build) void {
     // -- flux-examples umbrella binary --
     // A single executable exposes every example as a subcommand. The build
     // graph owns the canonical example manifest for build/run/test steps,
-    // while the runtime surface is one dispatcher module imported by
-    // `examples/main.zig`.
+    // while the runtime surface is the shared example app module.
     const examples_exe = b.addExecutable(.{
         .name = "flux-examples",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/main.zig"),
+            .root_source_file = b.path("examples/app.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
-                .{ .name = "example_app", .module = example_app_mod },
+                .{ .name = "example_commands", .module = example_commands_mod },
             },
         }),
     });
