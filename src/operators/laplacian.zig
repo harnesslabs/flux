@@ -238,6 +238,7 @@ pub fn laplacian_composed(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const Mesh2D = topology.Mesh(2, 2);
+const MeshSurface = topology.Mesh(3, 2);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {
@@ -440,6 +441,56 @@ test "assembled Δ₀ apply is stable across repeated applications" {
         for (actual.values, expected.values) |got, want| {
             try testing.expectApproxEqAbs(want, got, 5e-12);
         }
+    }
+}
+
+test "assembled Δ₀ on Mesh(3, 2) matches intrinsic 2D Δ₀ on an isometric embedding" {
+    const allocator = testing.allocator;
+    const faces = [_][3]u32{
+        .{ 0, 1, 2 },
+        .{ 0, 2, 3 },
+    };
+    const intrinsic_vertices = [_][2]f64{
+        .{ 0.0, 0.0 },
+        .{ 1.0, 0.0 },
+        .{ 2.0, 1.0 },
+        .{ 1.0, 1.0 },
+    };
+    const embedded_vertices = [_][3]f64{
+        .{ 0.0, 0.0, 0.0 },
+        .{ 0.7071067811865475, 0.7071067811865475, 0.0 },
+        .{ 1.414213562373095, 1.414213562373095, 1.0 },
+        .{ 0.7071067811865475, 0.7071067811865475, 1.0 },
+    };
+
+    var intrinsic_mesh = try Mesh2D.from_triangles(allocator, &intrinsic_vertices, &faces);
+    defer intrinsic_mesh.deinit(allocator);
+    var embedded_mesh = try MeshSurface.from_triangles(allocator, &embedded_vertices, &faces);
+    defer embedded_mesh.deinit(allocator);
+
+    const intrinsic_context = try context.OperatorContext(Mesh2D).init(allocator, &intrinsic_mesh);
+    defer intrinsic_context.deinit();
+    const embedded_context = try context.OperatorContext(MeshSurface).init(allocator, &embedded_mesh);
+    defer embedded_context.deinit();
+
+    var intrinsic_form = try PrimalC0.init(allocator, &intrinsic_mesh);
+    defer intrinsic_form.deinit(allocator);
+    const EmbeddedPrimalC0 = cochain.Cochain(MeshSurface, 0, cochain.Primal);
+    var embedded_form = try EmbeddedPrimalC0.init(allocator, &embedded_mesh);
+    defer embedded_form.deinit(allocator);
+
+    for (intrinsic_form.values, 0..) |*value, idx| {
+        value.* = @as(f64, @floatFromInt(idx + 1)) * 0.125;
+        embedded_form.values[idx] = value.*;
+    }
+
+    var intrinsic_result = try (try intrinsic_context.laplacian(0)).apply(allocator, intrinsic_form);
+    defer intrinsic_result.deinit(allocator);
+    var embedded_result = try (try embedded_context.laplacian(0)).apply(allocator, embedded_form);
+    defer embedded_result.deinit(allocator);
+
+    for (intrinsic_result.values, embedded_result.values) |expected, actual| {
+        try testing.expectApproxEqAbs(expected, actual, 1e-11);
     }
 }
 
