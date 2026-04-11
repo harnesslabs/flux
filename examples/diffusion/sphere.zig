@@ -129,6 +129,14 @@ pub fn runConvergenceStudyImpl(
     return common.runConvergenceStudy(ConvergenceResultImpl, u32, allocator, refinements, Runner{});
 }
 
+pub fn benchmarkSystemInit(allocator: std.mem.Allocator, refinement: u32, dt: f64) !void {
+    var mesh = try buildSphereMesh(allocator, refinement);
+    defer mesh.deinit(allocator);
+
+    var system = try SurfaceSystem.init(allocator, &mesh, dt);
+    defer system.deinit(allocator);
+}
+
 fn simulateCase(
     allocator: std.mem.Allocator,
     config: ConfigImpl,

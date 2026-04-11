@@ -13,6 +13,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const flux = @import("flux");
+const diffusion = @import("diffusion_example");
 const maxwell = @import("maxwell_example");
 /// Version of the benchmark result file schema.
 const benchmark_suite_version: u32 = 3;
@@ -78,6 +79,9 @@ const cavity_domain: f64 = 1.0;
 const cavity_courant: f64 = 0.1;
 const surface_patch_nx: u32 = 64;
 const surface_patch_ny: u32 = 64;
+const diffusion_surface_refinement: u32 = 5;
+const diffusion_surface_final_time: f64 = 0.05;
+const diffusion_surface_steps: u32 = 1;
 const small_cochain_repetitions: u32 = 64;
 const incidence_grid_nx: u32 = 1000;
 const incidence_grid_ny: u32 = 1000;
@@ -315,42 +319,6 @@ fn buildEmbeddedSurfacePatch(allocator: std.mem.Allocator, nx: u32, ny: u32) !Su
     std.debug.assert(face_write == face_count);
 
     return SurfaceMesh.from_triangles(allocator, vertices, faces);
-}
-
-fn assembleSurfaceStiffnessProbe(
-    allocator: std.mem.Allocator,
-    mesh: *const SurfaceMesh,
-) !flux.math.sparse.CsrMatrix(f64) {
-    var assembler = flux.math.sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
-    defer assembler.deinit(allocator);
-
-    const SurfaceC0 = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
-    var basis = try SurfaceC0.init(allocator, mesh);
-    defer basis.deinit(allocator);
-
-    const boundary_1 = mesh.boundary(1);
-    const column = try allocator.alloc(f64, mesh.num_vertices());
-    defer allocator.free(column);
-
-    for (0..mesh.num_vertices()) |vertex_idx| {
-        @memset(basis.values, 0.0);
-        basis.values[vertex_idx] = 1.0;
-
-        var gradient = try flux.operators.exterior_derivative.exterior_derivative(allocator, basis);
-        defer gradient.deinit(allocator);
-
-        var starred = try flux.operators.hodge_star.hodge_star(allocator, gradient);
-        defer starred.deinit(allocator);
-
-        @memset(column, 0.0);
-        boundary_1.transpose_multiply(starred.values, column);
-        for (column, 0..) |value, row_idx| {
-            if (@abs(value) < 1e-13) continue;
-            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(vertex_idx), value);
-        }
-    }
-
-    return assembler.build(allocator);
 }
 
 fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
@@ -730,15 +698,15 @@ fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
     maxwell.step(2, ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
 }
 
-fn benchSurfaceLaplacianAssemblyProbe(ctx: *BenchmarkContext) void {
-    var stiffness = assembleSurfaceStiffnessProbe(ctx.allocator, ctx.surface_mesh) catch unreachable;
-    stiffness.deinit(ctx.allocator);
-}
-
 fn benchSurfaceLaplacianAssemblyDirect(ctx: *BenchmarkContext) void {
     const operator_context = SurfaceOperatorContext.init(ctx.allocator, ctx.surface_mesh) catch unreachable;
     defer operator_context.deinit();
     _ = operator_context.laplacian(0) catch unreachable;
+}
+
+fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
+    const dt = diffusion_surface_final_time / @as(f64, diffusion_surface_steps);
+    diffusion.benchmarkSystemInit(.sphere, ctx.allocator, diffusion_surface_refinement, dt) catch unreachable;
 }
 
 fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
@@ -922,13 +890,13 @@ const base_benchmarks = [_]BenchmarkDef{
     },
     .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
     .{
-        .name = "surface_laplacian_0_assembly_probe",
-        .run = benchSurfaceLaplacianAssemblyProbe,
+        .name = "surface_laplacian_0_assembly_direct",
+        .run = benchSurfaceLaplacianAssemblyDirect,
         .class = .info,
     },
     .{
-        .name = "surface_laplacian_0_assembly_direct",
-        .run = benchSurfaceLaplacianAssemblyDirect,
+        .name = "diffusion_surface_system_init",
+        .run = benchDiffusionSurfaceSystemInit,
         .class = .info,
     },
 };
