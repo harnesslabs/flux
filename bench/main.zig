@@ -13,8 +13,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const flux = @import("flux");
-const diffusion_sphere = @import("diffusion_sphere_example");
 const maxwell = @import("maxwell_example");
+const sparse = flux.math.sparse;
+const cg = flux.math.cg;
 /// Version of the benchmark result file schema.
 const benchmark_suite_version: u32 = 3;
 /// Version for operator and end-to-end rows after switching to calibrated samples.
@@ -319,6 +320,87 @@ fn buildEmbeddedSurfacePatch(allocator: std.mem.Allocator, nx: u32, ny: u32) !Su
     std.debug.assert(face_write == face_count);
 
     return SurfaceMesh.from_triangles(allocator, vertices, faces);
+}
+
+const BenchmarkSurfaceSystem = struct {
+    operator_context: *SurfaceOperatorContext,
+    system_matrix: sparse.CsrMatrix(f64),
+    masses: []f64,
+    diagonal: []f64,
+    scratch: cg.Scratch,
+
+    fn init(allocator: std.mem.Allocator, mesh: *const SurfaceMesh, dt: f64) !BenchmarkSurfaceSystem {
+        const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
+        errdefer operator_context.deinit();
+        const stiffness = (try operator_context.laplacian(0)).stiffness;
+
+        const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
+        errdefer allocator.free(masses);
+
+        var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
+        defer assembler.deinit(allocator);
+
+        for (masses, 0..) |mass, row_idx| {
+            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(row_idx), mass);
+
+            const row = stiffness.row(@intCast(row_idx));
+            for (row.cols, row.vals) |col_idx, value| {
+                try assembler.addEntry(allocator, @intCast(row_idx), col_idx, dt * value);
+            }
+        }
+
+        var system_matrix = try assembler.build(allocator);
+        errdefer system_matrix.deinit(allocator);
+
+        const diagonal = try allocator.alloc(f64, masses.len);
+        errdefer allocator.free(diagonal);
+        for (0..masses.len) |row_idx| {
+            diagonal[row_idx] = diagonalEntry(system_matrix, @intCast(row_idx));
+            std.debug.assert(diagonal[row_idx] > 0.0);
+        }
+
+        var scratch = try cg.Scratch.init(allocator, mesh.num_vertices());
+        errdefer scratch.deinit(allocator);
+
+        return .{
+            .operator_context = operator_context,
+            .system_matrix = system_matrix,
+            .masses = masses,
+            .diagonal = diagonal,
+            .scratch = scratch,
+        };
+    }
+
+    fn deinit(self: *BenchmarkSurfaceSystem, allocator: std.mem.Allocator) void {
+        self.scratch.deinit(allocator);
+        allocator.free(self.diagonal);
+        allocator.free(self.masses);
+        self.system_matrix.deinit(allocator);
+        self.operator_context.deinit();
+    }
+};
+
+fn assembleLumpedSurfaceMasses(allocator: std.mem.Allocator, mesh: *const SurfaceMesh) ![]f64 {
+    const masses = try allocator.alloc(f64, mesh.num_vertices());
+    @memset(masses, 0.0);
+
+    const face_vertices = mesh.simplices(2).items(.vertices);
+    const face_areas = mesh.simplices(2).items(.volume);
+    for (face_vertices, face_areas) |face, area| {
+        const lumped = area / 3.0;
+        masses[face[0]] += lumped;
+        masses[face[1]] += lumped;
+        masses[face[2]] += lumped;
+    }
+    return masses;
+}
+
+fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
+    const row = matrix.row(row_idx);
+    for (row.cols, row.vals) |col_idx, value| {
+        if (col_idx == row_idx) return value;
+    }
+    unreachable;
 }
 
 fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
@@ -709,7 +791,7 @@ fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
     var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
     defer mesh.deinit(ctx.allocator);
 
-    var system = diffusion_sphere.SurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
+    var system = BenchmarkSurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
     defer system.deinit(ctx.allocator);
 }
 
