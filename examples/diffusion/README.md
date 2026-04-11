@@ -26,6 +26,7 @@ zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --refinement 
 - Plane mode uses backward Euler on the square with homogeneous Dirichlet boundary data.
 - Sphere mode solves on a triangulated unit sphere and compares against a known analytic eigenmode.
 - The family API is surface-selected at comptime: one public module, two internal runtimes.
+- Plane and sphere share a diffusion-specific time-stepped scaffold; mesh construction, exact solutions, and solve details stay local to each runtime.
 
 ## Verification
 
