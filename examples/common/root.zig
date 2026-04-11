@@ -7,7 +7,6 @@
 
 pub const cli = @import("cli.zig");
 pub const runner = @import("runner.zig");
-pub const evolution_runner = @import("evolution_runner.zig");
 pub const snapshot = @import("snapshot.zig");
 pub const progress = @import("progress.zig");
 pub const viz = @import("viz.zig");
@@ -21,8 +20,8 @@ pub const ExactFieldRenderer = runner.ExactFieldRenderer;
 pub const applySharedFields = cli.applySharedFields;
 pub const framesToInterval = cli.framesToInterval;
 pub const runConvergenceStudy = runner.runConvergenceStudy;
-pub const runEvolutionLoop = evolution_runner.runEvolutionLoop;
-pub const runExactEvolutionLoop = evolution_runner.runExactEvolutionLoop;
+pub const runEvolutionLoop = runner.runEvolutionLoop;
+pub const runExactEvolutionLoop = runner.runExactEvolutionLoop;
 pub const runExactFieldLoop = runner.runExactFieldLoop;
 pub const runSimulationLoop = runner.runSimulationLoop;
 pub const tryBox3Flag = cli.tryBox3Flag;

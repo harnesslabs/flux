@@ -120,6 +120,28 @@ pub fn runStepLoop(
     };
 }
 
+pub fn runEvolutionLoop(
+    allocator: std.mem.Allocator,
+    evolution: anytype,
+    config: RunLoopConfig,
+    renderer: anytype,
+) !RunLoopResult {
+    const Capturer = struct {
+        renderer_value: @TypeOf(renderer),
+
+        pub fn capture(self: @This(), series: anytype, time: f64) !void {
+            try series.capture(time, self.renderer_value);
+        }
+    };
+
+    return runStepLoop(
+        allocator,
+        config,
+        evolution,
+        Capturer{ .renderer_value = renderer },
+    );
+}
+
 pub fn runSimulationLoop(
     comptime MeshType: type,
     allocator: std.mem.Allocator,
@@ -163,6 +185,42 @@ pub fn runSimulationLoop(
     if (exact_values) |exact| {
         exact_initializer.fill(mesh, exact, config.final_time);
     }
+    return result;
+}
+
+pub fn runExactEvolutionLoop(
+    comptime MeshType: type,
+    allocator: std.mem.Allocator,
+    mesh: *const MeshType,
+    evolution: anytype,
+    config: RunLoopConfig,
+) !RunLoopResult {
+    const EvolutionType = @TypeOf(evolution.*);
+
+    const Capturer = struct {
+        mesh_ptr: *const MeshType,
+        evolution_ptr: *EvolutionType,
+
+        pub fn capture(self: @This(), series: anytype, time: f64) !void {
+            self.evolution_ptr.fillExact(time);
+            try series.capture(time, ExactFieldRenderer(MeshType){
+                .mesh = self.mesh_ptr,
+                .state = self.evolution_ptr.stateValues(),
+                .exact = self.evolution_ptr.exactValues(),
+            });
+        }
+    };
+
+    const result = try runStepLoop(
+        allocator,
+        config,
+        evolution,
+        Capturer{
+            .mesh_ptr = mesh,
+            .evolution_ptr = evolution,
+        },
+    );
+    evolution.fillExact(config.final_time);
     return result;
 }
 
