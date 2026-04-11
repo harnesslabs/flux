@@ -1,172 +1,94 @@
 # flux
 
-A composable, type-safe PDE solver framework in Zig.
+A type-safe PDE solver framework in Zig, built around discrete operators on
+function spaces.
 
-The central abstraction is the **operator on a function space**: a map between two spaces of discrete fields defined on a mesh. A PDE solver is a directed acyclic graph of such operators. flux provides the nodes (function spaces), the edges (operators), and the composition rules. The user provides the graph.
+The core idea is simple: a solver is assembled by composing operators between
+typed discrete fields on a mesh. flux provides the spaces, operators, and
+composition rules; the user provides the graph.
 
-See [`project/vision.md`](project/vision.md) for the full design philosophy.
+See [project/vision.md](project/vision.md) for the full design philosophy.
 
-| TE₁₀ cavity resonance | Heat diffusion on a sphere |
+| TE10 cavity resonance | Diffusion on a sphere |
 |---|---|
 | ![TE10 cavity animation](assets/cavity-512-grid-10000-steps.png) | ![Surface diffusion animation](assets/diffusion-sphere-r5-800-steps.png) |
 
 ## Status
 
-Early development. See [Projects](https://github.com/harnesslabs/flux/projects) for the current epoch roadmap.
+Early development. The codebase is being shaped around exact structural
+invariants and a small, generic public surface rather than backward-compatible
+transitional APIs.
 
----
+## Build
 
-## Building
-
-Requires Zig 0.15.2+.
-
-```sh
-zig build                       # compile library + examples
-zig build test --summary all    # run all tests (library + example integration)
-zig build ci --summary all      # all CI checks: build + test + fmt
-zig build docs                  # generate API docs to zig-out/docs/
-```
-
----
-
-## Examples
-
-Physics simulations live in `examples/` and are exposed through a single
-umbrella binary, `flux-examples`, with one subcommand per demo. Every
-subcommand accepts the shared `--steps`, `--dt`, `--output`, and `--frames`
-flags on top of its own physics-specific options.
+Requires Zig `0.15.2+`.
 
 ```sh
-zig build examples                       # build the umbrella binary
-./zig-out/bin/flux-examples list         # list all subcommands
-./zig-out/bin/flux-examples maxwell --dim 2 --help
-
-# convenience run steps (forwards `--` arguments to the subcommand)
-zig build run-maxwell -- --dim 2 --demo cavity --steps 2000
-zig build run-diffusion -- --surface plane --grid 32 --frames 4
+zig build
+zig build test --summary all
+zig build ci --summary all
+zig build docs
 ```
 
-### Example families
+## Run examples
 
-The example suite is organized into three physics modules:
-
-- `maxwell` with `--dim 2|3`
-- `euler` with `--dim 2|3`
-- `diffusion` with `--surface plane|sphere`
-
-Use `-Doptimize=ReleaseFast` for any meaningful performance measurement. The default
-`zig build` mode is a debug build and is much slower on large grids.
+The runnable physics surface lives in [examples/](examples/README.md).
 
 ```sh
-zig build -Doptimize=ReleaseFast run-maxwell -- --dim 2 --demo cavity --steps 2000
-zig build -Doptimize=ReleaseFast run-euler -- --dim 3 --steps 1000
-zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --refinement 3 --frames 8
+zig build run -- maxwell --dim 2 --demo cavity
+zig build run -- euler --dim 3 --steps 100
+zig build run -- diffusion --surface sphere --refinement 3
 ```
 
-Each family keeps its convergence and invariant tests inside the module that owns
-the example.
-
-Generate a polished full-color animation with:
+Convenience run steps exist for each family:
 
 ```sh
-uv run tools/visualize.py output --field B_flux --output animation.png
+zig build run-maxwell -- --dim 2 --demo dipole
+zig build run-euler -- --dim 2 --demo dipole
+zig build run-diffusion -- --surface plane --grid 32
 ```
 
----
+Use `-Doptimize=ReleaseFast` for meaningful runs.
 
-## Design
+## Example families
 
-### Abstraction hierarchy
+| Family | Selector | Verification focus |
+|---|---|---|
+| [maxwell](examples/maxwell/README.md) | `--dim 2|3` | `dB = 0`, cavity convergence |
+| [euler](examples/euler/README.md) | `--dim 2|3` | circulation and helicity preservation |
+| [diffusion](examples/diffusion/README.md) | `--surface plane|sphere` | analytic convergence on flat and curved domains |
 
-Function spaces and operators compose into solver graphs. Each level is independently swappable — changing a discretization or time integrator touches one node, nothing else.
+## Design commitments
 
-### Core invariants
+- Geometric invariants are enforced structurally when possible.
+- `comptime` carries mesh/form compatibility into the type system.
+- All allocations are explicit.
+- Tests are proof obligations, not smoke checks.
 
-These hold exactly (to machine precision) and are verified by property-based tests on random inputs:
+The exact invariants currently treated as first-class are:
 
-- **dd = 0** — applying the exterior derivative twice yields zero (cohomological identity)
-- **∇·B = 0** — discrete magnetic divergence is identically zero, enforced by construction
-- **Circulation conservation** — total circulation over macroscopic loops is preserved for incompressible Euler flows
-
-An operator is not implemented until a property-based test for its invariant exists and passes.
-
-### Design principles
-
-- `comptime` type safety: incompatible operator compositions are compile errors, not runtime failures
-- Usability is a correctness property: the type system makes correct code easy, not just incorrect code impossible
-- Struct-of-Arrays layout (`std.MultiArrayList`) for all mesh entities
-- Explicit allocators everywhere — no hidden heap allocations
-- TigerStyle: assert liberally, bound all loops, `const` by default
-
----
+- `dd = 0`
+- `∇·B = 0`
+- circulation conservation for incompressible Euler
 
 ## Development
 
-Development is organized into **epochs** (~1 month), **milestones** (~1–2 weeks), and **issues** (complete capabilities with 3–5 tasks each). Each milestone has an explicit mathematical acceptance criterion — it is not done until that invariant passes in CI.
+The project is organized around epoch roadmaps, milestone acceptance criteria,
+and issue-sized capabilities. The current architecture and process rules live
+in:
 
-### Workflow
+- [project/vision.md](project/vision.md)
+- [project/horizons.md](project/horizons.md)
+- [project/components.md](project/components.md)
 
+## Documentation
+
+```sh
+zig build docs
+zig build serve-docs
 ```
-/ideate         Pressure-test raw ideas against the vision and architecture;
-                produces ideation records and horizon entries
-
-/epoch          Plan a new epoch — back-and-forth conversation producing
-                project/epoch_N/roadmap.md and a GitHub Project
-
-/milestone      Given an epoch, create a GitHub Milestone with 5–10 issues,
-                labels, and acceptance criterion
-
-/tackle         Pick the highest-priority open issue and work it to completion:
-                branch → draft PR → tests → stubs → implement → CI → review
-
-/decide         Log a non-obvious architectural decision to
-                project/epoch_N/decision_log.md (agent-invoked during /tackle)
-
-/review         PR review: agent checks implementation details (math, numerics,
-                memory); user checks API shape and test coverage
-
-/retro          Epoch retrospective — reconstruct decisions, write retrospective,
-                identify process improvements
-
-/status         Live snapshot of current milestone progress — open/closed issues,
-                acceptance criterion status, and recommended next action
-
-/audit          Run all five code quality lenses in parallel (or individually):
-                /audit-safety, /audit-style, /audit-cleanup, /audit-perf, /audit-tests
-```
-
-These skills are available in [Claude Code](https://claude.ai/claude-code). Run any of them from the project root.
-
-### Issue labels
-
-Issues are organized by a five-prefix taxonomy applied automatically on PRs and manually on issues:
-
-| Prefix | Values |
-|--------|--------|
-| `type/` | `bug` `feature` `invariant` `perf` `docs` `refactor` `test` `ci` |
-| `phase/` | `1` `2` `3` `4` `5` |
-| `domain/` | `topology` `forms` `operators` `io` `em` `fluid` `build` |
-| `priority/` | `high` `medium` `low` |
-| `status/` | `blocked` `needs-decision` `good-first-issue` |
-
-### CI
-
-Five jobs run in parallel on every PR:
-
-| Job | Command |
-|-----|---------|
-| build | `zig build` |
-| test | `zig build test` (library + example integration tests) |
-| fmt | `zig fmt --check src/ examples/ build.zig` |
-| docs | `zig build docs` |
-| lint | `zig ast-check` on all source files |
-
-All five must pass before merge. Branch protection is enforced on `main`.
-
-API documentation is deployed to GitHub Pages on every push to `main`.
-
----
 
 ## Contributing
 
-This project is in early development and not yet open to outside contributions. Watch the [Projects](https://github.com/harnesslabs/flux/projects) board for progress.
+The project is still in a heavy design/refactor phase and is not yet open to
+outside contributions.

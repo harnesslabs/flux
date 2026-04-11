@@ -1,6 +1,6 @@
 # Diffusion
 
-Scalar diffusion examples with one CLI surface:
+One family module, one CLI surface:
 
 ```sh
 zig build -Doptimize=ReleaseFast run-diffusion -- --surface plane --help
@@ -9,13 +9,10 @@ zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --help
 
 ## Surfaces
 
-- `--surface plane` solves the implicit heat equation on the unit square with
-  homogeneous Dirichlet boundary data.
-- `--surface sphere` solves diffusion on a triangulated unit sphere using the
-  degree-1 spherical harmonic `u(x, y, z, t) = e^{-2t} z` as the exact mode.
-
-Both paths share the same top-level diffusion command and convergence-test
-surface.
+| Selector | Purpose | Main knobs |
+|---|---|---|
+| `--surface plane` | implicit heat equation on the unit square | `--grid`, `--dt-scale`, `--steps` |
+| `--surface sphere` | diffusion of the spherical harmonic `e^{-2t} z` | `--refinement`, `--final-time`, `--steps` |
 
 ## Run
 
@@ -24,9 +21,14 @@ zig build -Doptimize=ReleaseFast run-diffusion -- --surface plane --grid 32 --fr
 zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --refinement 3 --frames 8
 ```
 
+## Model
+
+- Plane mode uses backward Euler on the square with homogeneous Dirichlet boundary data.
+- Sphere mode solves on a triangulated unit sphere and compares against a known analytic eigenmode.
+- The family API is surface-selected at comptime: one public module, two internal runtimes.
+
 ## Verification
 
-- The plane example verifies zero-data preservation, boundary pinning, and
-  second-order spatial convergence.
-- The sphere example verifies monotone error reduction under refinement and a
-  tight finest-grid analytic error bound.
+- Plane tests cover boundary pinning and second-order spatial convergence.
+- Sphere tests cover monotone refinement improvement and an absolute analytic error bound.
+- Short end-to-end checks live in [`examples/acceptance.zig`](../acceptance.zig).
