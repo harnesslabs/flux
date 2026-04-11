@@ -31,6 +31,26 @@ fn validateStepperType(comptime StepperType: type) void {
     }
 }
 
+fn listenerDeclType(comptime ListenerValueType: type) type {
+    return switch (@typeInfo(ListenerValueType)) {
+        .pointer => |pointer| pointer.child,
+        else => ListenerValueType,
+    };
+}
+
+fn invokeListeners(
+    comptime method_name: []const u8,
+    listeners: anytype,
+    event: anytype,
+) !void {
+    inline for (listeners) |listener| {
+        const ListenerType = comptime listenerDeclType(@TypeOf(listener));
+        if (@hasDecl(ListenerType, method_name)) {
+            try @field(ListenerType, method_name)(listener, event);
+        }
+    }
+}
+
 /// Evolution object for reusable state stepping.
 ///
 /// The caller owns the primary state storage. The evolution object owns the
@@ -46,6 +66,20 @@ pub fn Evolution(
 
     return struct {
         const Self = @This();
+        pub const RunConfig = struct {
+            steps: u32,
+            dt: f64,
+            final_time: f64,
+        };
+        pub const RunResult = struct {
+            elapsed_s: f64,
+        };
+        pub const Event = struct {
+            evolution: *Self,
+            step_index: u32,
+            time: f64,
+            final_time: f64,
+        };
 
         allocator: std.mem.Allocator,
         state: StateType,
@@ -111,6 +145,43 @@ pub fn Evolution(
 
         pub fn stepCount(self: *const Self) u32 {
             return self.step_count;
+        }
+
+        pub fn run(self: *Self, allocator: std.mem.Allocator, config: RunConfig, listeners: anytype) !RunResult {
+            std.debug.assert(config.steps > 0);
+            std.debug.assert(config.dt > 0.0);
+            std.debug.assert(config.final_time > 0.0);
+
+            try invokeListeners("onRunBegin", listeners, Event{
+                .evolution = self,
+                .step_index = 0,
+                .time = 0.0,
+                .final_time = config.final_time,
+            });
+
+            const start_ns = std.time.nanoTimestamp();
+            for (0..config.steps) |step_idx| {
+                try self.step(allocator);
+                const time = config.dt * @as(f64, @floatFromInt(step_idx + 1));
+                try invokeListeners("onStep", listeners, Event{
+                    .evolution = self,
+                    .step_index = @intCast(step_idx + 1),
+                    .time = time,
+                    .final_time = config.final_time,
+                });
+            }
+            const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+
+            try invokeListeners("onRunEnd", listeners, Event{
+                .evolution = self,
+                .step_index = self.step_count,
+                .time = config.final_time,
+                .final_time = config.final_time,
+            });
+
+            return .{
+                .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+            };
         }
     };
 }
@@ -282,4 +353,54 @@ test "Evolution computes error against the current exact field" {
     evolution.fillExact(0.0);
     try testing.expectEqual(@as(u32, 0), evolution.stepCount());
     try testing.expectApproxEqAbs(2.0, evolution.l2Error(), 1e-15);
+}
+
+test "Evolution run notifies listeners at begin, each step, and end" {
+    const TestEvolution = Evolution([]f64, MockStepper, void);
+    const allocator = testing.allocator;
+    var state = [_]f64{ 1.0, 2.0 };
+    const builder = MockBuilder{ .scratch_len = state.len };
+    const stepper = try builder.initStepper(allocator, state[0..]);
+    var evolution = TestEvolution.init(allocator, state[0..], stepper, {});
+    defer evolution.deinit();
+
+    const Listener = struct {
+        begin_count: u32 = 0,
+        step_count: u32 = 0,
+        end_count: u32 = 0,
+        last_step_index: u32 = 0,
+        last_time: f64 = 0.0,
+
+        pub fn onRunBegin(self: *@This(), event: TestEvolution.Event) !void {
+            self.begin_count += 1;
+            try testing.expectEqual(@as(u32, 0), event.step_index);
+            try testing.expectApproxEqAbs(0.0, event.time, 1e-15);
+        }
+
+        pub fn onStep(self: *@This(), event: TestEvolution.Event) !void {
+            self.step_count += 1;
+            self.last_step_index = event.step_index;
+            self.last_time = event.time;
+        }
+
+        pub fn onRunEnd(self: *@This(), event: TestEvolution.Event) !void {
+            self.end_count += 1;
+            try testing.expectEqual(@as(u32, 2), event.step_index);
+            try testing.expectApproxEqAbs(1.0, event.time, 1e-15);
+        }
+    };
+
+    var listener = Listener{};
+    const result = try evolution.run(allocator, .{
+        .steps = 2,
+        .dt = 0.5,
+        .final_time = 1.0,
+    }, .{&listener});
+
+    try testing.expectEqual(@as(u32, 1), listener.begin_count);
+    try testing.expectEqual(@as(u32, 2), listener.step_count);
+    try testing.expectEqual(@as(u32, 1), listener.end_count);
+    try testing.expectEqual(@as(u32, 2), listener.last_step_index);
+    try testing.expectApproxEqAbs(1.0, listener.last_time, 1e-15);
+    try testing.expect(result.elapsed_s >= 0.0);
 }
