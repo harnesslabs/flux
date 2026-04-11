@@ -36,7 +36,7 @@ pub const ConvergenceResultImpl = struct {
     l2_error: f64,
 };
 
-const SurfaceSystem = struct {
+pub const SurfaceSystem = struct {
     operator_context: *SurfaceOperatorContext,
     system_matrix: sparse.CsrMatrix(f64),
     masses: []f64,
