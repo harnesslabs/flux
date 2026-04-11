@@ -218,6 +218,32 @@ operators until the benchmark shows a real SpMV win.
    the packed path proves it helps the hot loop. The issue explicitly allows
    not shipping the optimization if decode overhead erases the cache benefit.
 
+## 2026-04-11: Canonical geometry constructors stay honest about supported mesh types
+
+**Decision:** Add `Mesh(3, 2).sphere(allocator, radius, refinement)` as the
+public sphere constructor, and retarget the spherical diffusion example and
+bench harness to use it. Do not expose fake-generic signatures such as
+`Mesh(2, 2).sphere()` or `Mesh(n+1, n).sphere()` until the implementation is
+actually generic enough to justify them.
+
+**Alternatives considered:**
+1. `Mesh(2, 2).sphere()`: rejected because this mesh type stores Euclidean
+   vertex coordinates in its embedding space. A flat `Mesh(2, 2)` cannot
+   honestly represent an intrinsically spherical geometry without an additional
+   metric layer the library does not have.
+2. Pretend-generic `Mesh(n+1, n).sphere()`: rejected for now because the
+   implementation strategy is only established for the embedded 2-sphere case.
+   Generic-first does not mean exposing mathematically suggestive APIs backed by
+   a hardcoded special case table.
+3. Keep sphere construction private to examples: rejected because examples,
+   benches, tests, and users should share one canonical geometry builder rather
+   than growing benchmark-only or example-only setup hooks.
+
+**Rationale:** This keeps the public constructor layer aligned with the current
+data model and with the project's "one obvious way" rule. The topology layer
+now owns canonical sphere construction, examples and benches reuse it directly,
+and future geometries remain tracked under the broader constructor issue.
+
 **Rationale:** The real question in issue #48 is empirical: does smaller
 incidence storage make boundary-operator application faster on large meshes?
 Separating the storage experiment from mesh/operator integration keeps the API

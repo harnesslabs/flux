@@ -413,8 +413,8 @@ pub fn build(b: *std.Build) void {
                         .{ .name = "examples_common", .module = examples_common_mod },
                     },
                 }) },
-                .{ .name = "diffusion_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/diffusion/root.zig"),
+                .{ .name = "diffusion_sphere_example", .module = b.createModule(.{
+                    .root_source_file = b.path("examples/diffusion/sphere.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
                     .imports = &.{

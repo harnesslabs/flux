@@ -13,7 +13,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const flux = @import("flux");
-const diffusion = @import("diffusion_example");
+const diffusion_sphere = @import("diffusion_sphere_example");
 const maxwell = @import("maxwell_example");
 /// Version of the benchmark result file schema.
 const benchmark_suite_version: u32 = 3;
@@ -706,7 +706,11 @@ fn benchSurfaceLaplacianAssemblyDirect(ctx: *BenchmarkContext) void {
 
 fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
     const dt = diffusion_surface_final_time / @as(f64, diffusion_surface_steps);
-    diffusion.benchmarkSystemInit(.sphere, ctx.allocator, diffusion_surface_refinement, dt) catch unreachable;
+    var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
+    defer mesh.deinit(ctx.allocator);
+
+    var system = diffusion_sphere.SurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
+    defer system.deinit(ctx.allocator);
 }
 
 fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {

@@ -56,13 +56,6 @@ pub fn runConvergenceStudy(comptime surface_kind: SurfaceKind, allocator: std.me
     };
 }
 
-pub fn benchmarkSystemInit(comptime surface_kind: SurfaceKind, allocator: std.mem.Allocator, refinement_or_grid: u32, dt: f64) !void {
-    return switch (surface_kind) {
-        .plane => @compileError("benchmarkSystemInit is only defined for the spherical diffusion path"),
-        .sphere => try sphere.benchmarkSystemInit(allocator, refinement_or_grid, dt),
-    };
-}
-
 test {
     _ = @import("tests.zig");
 }
