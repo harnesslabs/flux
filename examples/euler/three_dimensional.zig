@@ -6,6 +6,7 @@ const poisson = flux.operators.poisson;
 const operator_context_mod = flux.operators.context;
 const observers = flux.operators.observers;
 const wedge_product = flux.operators.wedge_product;
+const evolution_mod = flux.integrators.evolution;
 
 pub const Mesh = flux.topology.Mesh(3, 3);
 pub const Velocity = flux.forms.Cochain(Mesh, 1, flux.forms.Primal);
@@ -97,28 +98,36 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try conservedQuantity(allocator, &state);
-    const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0)
-        common.Plan.fromInterval(config.steps, config.output_interval, .{})
-    else
-        common.Plan.disabled();
+    const Evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void);
+    var evolution = Evolution.init(
+        allocator,
+        &state,
+        .{
+            .state = &state,
+            .dt = config.dt,
+        },
+        {},
+    );
+    defer evolution.deinit();
 
-    var series = try common.Series.init(allocator, config.output_dir orelse "", "euler_3d", plan);
-    defer series.deinit();
-
-    var progress = common.Progress.init(writer, config.steps);
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_index| {
-        try stepImpl(allocator, &state, config.dt);
-
-        if (series.dueAt(@intCast(step_index + 1), config.steps)) {
-            const t = @as(f64, @floatFromInt(step_index + 1)) * config.dt;
-            try series.capture(t, Renderer{ .state = &state });
-        }
-        progress.update(@intCast(step_index + 1));
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
-    progress.finish();
-    try series.finalize();
+    const loop_result = try common.runEvolutionLoop(
+        allocator,
+        &evolution,
+        .{
+            .steps = config.steps,
+            .dt = config.dt,
+            .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
+            .frames = 0,
+            .output_dir = config.output_dir orelse "",
+            .output_base_name = "euler_3d",
+            .plan_override = if (config.output_dir != null and config.output_interval > 0)
+                common.Plan.fromInterval(config.steps, config.output_interval, .{})
+            else
+                common.Plan.disabled(),
+            .progress_writer = writer,
+        },
+        Renderer{ .state = &state },
+    );
 
     const helicity_final = try conservedQuantity(allocator, &state);
     try writer.print(
@@ -127,10 +136,10 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     );
 
     return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .elapsed_s = loop_result.elapsed_s,
         .helicity_initial = helicity_initial,
         .helicity_final = helicity_final,
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
     };
 }
 
@@ -191,6 +200,20 @@ pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const StateImpl) 
     const observer = Helicity{ .name = "helicity" };
     return observer.evaluate(allocator, state, 0);
 }
+
+const Euler3DStepper = struct {
+    state: *StateImpl,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try stepImpl(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 fn selectVelocity(state: *const StateImpl) *const Velocity {
     return &state.velocity;

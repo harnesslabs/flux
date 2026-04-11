@@ -76,6 +76,7 @@ pub const operators = struct {
 pub const topology = @import("topology/mesh.zig");
 pub const time_stepper = @import("time_stepper.zig");
 pub const integrators = struct {
+    pub const evolution = @import("integrators/evolution.zig");
     pub const leapfrog = @import("integrators/leapfrog.zig");
     pub const forward_euler = @import("integrators/forward_euler.zig");
 };

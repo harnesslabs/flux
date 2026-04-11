@@ -5,6 +5,7 @@ const runtime = @import("runtime.zig");
 const reference = @import("reference.zig");
 
 const flux_io = flux.io;
+const evolution_mod = flux.integrators.evolution;
 
 const Demo = enum { dipole, cavity };
 
@@ -49,26 +50,38 @@ const Maxwell2DRenderer = struct {
 
 fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
     const dt = config.dt();
-    var series = try common.Series.init(allocator, config.output_dir, base_name, common.Plan.fromFrames(config.steps, config.frames, .{}));
-    defer series.deinit();
+    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D, void);
+    var evolution = Evolution.init(
+        allocator,
+        state,
+        .{
+            .source = source,
+            .state = state,
+            .dt = dt,
+        },
+        {},
+    );
+    defer evolution.deinit();
 
-    var progress = common.Progress.init(writer, config.steps);
-    for (0..config.steps) |step_idx| {
-        const t = @as(f64, @floatFromInt(step_idx)) * dt;
-        if (source) |dipole| dipole.apply(&state.J, t);
-        try runtime.leapfrog_step(allocator, state, dt);
-        runtime.apply_pec_boundary(state);
-        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
-            try series.capture(t + dt, Maxwell2DRenderer{ .state = state });
-        }
-        progress.update(@intCast(step_idx + 1));
-    }
-    progress.finish();
-    try series.finalize();
+    const loop_result = try common.runEvolutionLoop(
+        allocator,
+        &evolution,
+        .{
+            .steps = config.steps,
+            .dt = dt,
+            .final_time = dt * @as(f64, @floatFromInt(config.steps)),
+            .frames = config.frames,
+            .output_dir = config.output_dir,
+            .output_base_name = base_name,
+            .progress_writer = writer,
+        },
+        Maxwell2DRenderer{ .state = state },
+    );
+
     return .{
-        .elapsed_s = progress.elapsed(),
+        .elapsed_s = loop_result.elapsed_s,
         .energy_final = try runtime.electromagnetic_energy(allocator, state),
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
     };
 }
 
@@ -148,22 +161,39 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
     });
 
-    const plan: common.Plan = if (config.output_dir != null and config.output_interval > 0) common.Plan.fromInterval(config.steps, config.output_interval, .{}) else common.Plan.disabled();
-    var series = try common.Series.init(allocator, config.output_dir orelse "", "maxwell_3d", plan);
-    defer series.deinit();
-    var progress = common.Progress.init(writer, config.steps);
-    for (0..config.steps) |step_idx| {
-        try runtime.leapfrog_step_3d(allocator, &state, config.dt);
-        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
-            const t = @as(f64, @floatFromInt(step_idx + 1)) * config.dt;
-            try series.capture(t, Maxwell3DRenderer{ .state = &state });
-        }
-        progress.update(@intCast(step_idx + 1));
-    }
-    progress.finish();
-    try series.finalize();
+    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState3D, Maxwell3DStepper, void);
+    var evolution = Evolution.init(
+        allocator,
+        &state,
+        .{
+            .state = &state,
+            .dt = config.dt,
+        },
+        {},
+    );
+    defer evolution.deinit();
+
+    const loop_result = try common.runEvolutionLoop(
+        allocator,
+        &evolution,
+        .{
+            .steps = config.steps,
+            .dt = config.dt,
+            .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
+            .frames = 0,
+            .output_dir = config.output_dir orelse "",
+            .output_base_name = "maxwell_3d",
+            .plan_override = if (config.output_dir != null and config.output_interval > 0)
+                common.Plan.fromInterval(config.steps, config.output_interval, .{})
+            else
+                common.Plan.disabled(),
+            .progress_writer = writer,
+        },
+        Maxwell3DRenderer{ .state = &state },
+    );
+
     _ = try reference.divergenceNorm3D(allocator, &state);
-    return .{ .elapsed_s = progress.elapsed(), .snapshot_count = series.count };
+    return .{ .elapsed_s = loop_result.elapsed_s, .snapshot_count = loop_result.snapshot_count };
 }
 
 pub fn Mesh(comptime dim: u8) type {
@@ -197,6 +227,20 @@ pub fn State(comptime dim: u8) type {
         else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
+
+const Maxwell3DStepper = struct {
+    state: *runtime.MaxwellState3D,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try runtime.leapfrog_step_3d(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 pub fn run(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim), writer: anytype) !RunResult(dim) {
     return switch (dim) {

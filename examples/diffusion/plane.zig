@@ -1,11 +1,11 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
-const shared = @import("shared.zig");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const operator_context_mod = flux.operators.context;
+const evolution_mod = flux.integrators.evolution;
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
 pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
@@ -33,7 +33,12 @@ pub const ConfigImpl = struct {
     }
 };
 
-pub const RunResultImpl = shared.RunResult;
+pub const RunResultImpl = struct {
+    elapsed_s: f64,
+    steps: u32,
+    snapshot_count: u32,
+    l2_error: f64,
+};
 
 pub const ConvergenceResultImpl = struct {
     grid: u32,
@@ -189,11 +194,33 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, initial_condition, 0.0);
 
-    return shared.runTimeSteppedDiffusion(
+    const stepper_builder = HeatStepperBuilder{
+        .mesh = &mesh,
+        .heat_system = &heat_system,
+    };
+    const stepper = try stepper_builder.initStepper(allocator, state.values);
+    const aux = try HeatEvolutionAux.init(
+        allocator,
+        &mesh,
+        HeatExactInitializer{ .initial_condition = initial_condition },
+        HeatErrorMeasure{},
+        state.values.len,
+    );
+
+    const Evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatEvolutionAux);
+    var evolution = Evolution.init(
+        allocator,
+        state.values,
+        stepper,
+        aux,
+    );
+    defer evolution.deinit();
+
+    const loop_result = try common.runExactEvolutionLoop(
         Mesh2D,
         allocator,
         &mesh,
-        state.values,
+        &evolution,
         .{
             .steps = config.steps,
             .dt = dt,
@@ -203,13 +230,14 @@ fn simulateCase(
             .output_base_name = "heat",
             .progress_writer = progress_writer,
         },
-        HeatExactInitializer{ .initial_condition = initial_condition },
-        HeatStepperBuilder{
-            .mesh = &mesh,
-            .heat_system = &heat_system,
-        },
-        HeatErrorMeasure{},
     );
+
+    return .{
+        .elapsed_s = loop_result.elapsed_s,
+        .steps = config.steps,
+        .snapshot_count = loop_result.snapshot_count,
+        .l2_error = evolution.l2Error(),
+    };
 }
 
 fn convergenceConfig(grid: u32) ConfigImpl {
@@ -259,25 +287,22 @@ fn seedReducedSolution(
 }
 
 const HeatStepperBuilder = struct {
+    pub const Stepper = HeatStepper;
+
     mesh: *const Mesh2D,
     heat_system: *const HeatSystem,
 
-    pub fn scratchLen(self: @This()) usize {
-        return self.heat_system.interior_vertices.len;
-    }
-
-    pub fn seedSolution(self: @This(), state_values: []const f64, solution: []f64) void {
-        seedReducedSolution(self.heat_system, state_values, solution);
-    }
-
-    pub fn makeStepper(self: @This(), state_values: []f64, rhs: []f64, solution: []f64) HeatStepper {
-        return .{
+    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
+        const len = self.heat_system.interior_vertices.len;
+        const stepper = Stepper{
             .mesh = self.mesh,
             .heat_system = self.heat_system,
             .state_values = state_values,
-            .reduced_rhs = rhs,
-            .reduced_solution = solution,
+            .reduced_rhs = try allocator.alloc(f64, len),
+            .reduced_solution = try allocator.alloc(f64, len),
         };
+        seedReducedSolution(self.heat_system, state_values, stepper.reduced_solution);
+        return stepper;
     }
 };
 
@@ -288,7 +313,7 @@ const HeatStepper = struct {
     reduced_rhs: []f64,
     reduced_solution: []f64,
 
-    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         try stepBackwardEuler(
             allocator,
             self.mesh,
@@ -297,6 +322,11 @@ const HeatStepper = struct {
             self.reduced_rhs,
             self.reduced_solution,
         );
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.reduced_solution);
+        allocator.free(self.reduced_rhs);
     }
 };
 
@@ -311,6 +341,44 @@ const HeatExactInitializer = struct {
 
     pub fn fill(self: @This(), mesh: *const Mesh2D, values: []f64, time: f64) void {
         initializeState(mesh, values, self.initial_condition, time);
+    }
+};
+
+const HeatEvolutionAux = struct {
+    mesh: *const Mesh2D,
+    exact_values: []f64,
+    exact_initializer: HeatExactInitializer,
+    error_measure: HeatErrorMeasure,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const Mesh2D,
+        exact_initializer: HeatExactInitializer,
+        error_measure: HeatErrorMeasure,
+        len: usize,
+    ) !@This() {
+        return .{
+            .mesh = mesh,
+            .exact_values = try allocator.alloc(f64, len),
+            .exact_initializer = exact_initializer,
+            .error_measure = error_measure,
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.exact_values);
+    }
+
+    pub fn fillExact(self: *@This(), time: f64) void {
+        self.exact_initializer.fill(self.mesh, self.exact_values, time);
+    }
+
+    pub fn exactValues(self: *@This()) []f64 {
+        return self.exact_values;
+    }
+
+    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
     }
 };
 

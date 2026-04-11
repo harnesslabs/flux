@@ -5,6 +5,7 @@ const common = @import("examples_common");
 const poisson = flux.operators.poisson;
 const flux_io = flux.io;
 const operator_context_mod = flux.operators.context;
+const evolution_mod = flux.integrators.evolution;
 
 pub const Mesh = flux.topology.Mesh(2, 2);
 pub const VertexVorticity = flux.forms.Cochain(Mesh, 0, flux.forms.Primal);
@@ -112,28 +113,32 @@ pub fn runImpl(
 
     const circulation_initial = totalCirculation(&state);
     const dt = config.dt();
-    var series = try common.Series.init(
+    const Evolution = evolution_mod.Evolution(*StateImpl, Euler2DStepper, void);
+    var evolution = Evolution.init(
         allocator,
-        config.output_dir,
-        baseName(config.demo),
-        common.Plan.fromFrames(config.steps, config.frames, .{}),
+        &state,
+        .{
+            .state = &state,
+            .dt = dt,
+        },
+        {},
     );
-    defer series.deinit();
+    defer evolution.deinit();
 
-    var progress = common.Progress.init(writer, config.steps);
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_idx| {
-        try stepImpl(allocator, &state, dt);
-
-        if (series.dueAt(@intCast(step_idx + 1), config.steps)) {
-            const t = @as(f64, @floatFromInt(step_idx + 1)) * dt;
-            try series.capture(t, Renderer{ .state = &state });
-        }
-        progress.update(@intCast(step_idx + 1));
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
-    progress.finish();
-    try series.finalize();
+    const loop_result = try common.runEvolutionLoop(
+        allocator,
+        &evolution,
+        .{
+            .steps = config.steps,
+            .dt = dt,
+            .final_time = dt * @as(f64, @floatFromInt(config.steps)),
+            .frames = config.frames,
+            .output_dir = config.output_dir,
+            .output_base_name = baseName(config.demo),
+            .progress_writer = writer,
+        },
+        Renderer{ .state = &state },
+    );
 
     const circulation_final = totalCirculation(&state);
     try writer.print(
@@ -142,10 +147,10 @@ pub fn runImpl(
     );
 
     return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .elapsed_s = loop_result.elapsed_s,
         .circulation_initial = circulation_initial,
         .circulation_final = circulation_final,
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
     };
 }
 
@@ -168,6 +173,20 @@ pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *StateImpl) !void 
 pub fn conservedQuantity(state: *const StateImpl) f64 {
     return totalCirculation(state);
 }
+
+const Euler2DStepper = struct {
+    state: *StateImpl,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try stepImpl(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 fn initializeGaussianVortex(state: *StateImpl) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);

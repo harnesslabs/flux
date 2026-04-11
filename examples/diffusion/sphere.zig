@@ -1,11 +1,11 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
-const shared = @import("shared.zig");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const operator_context_mod = flux.operators.context;
+const evolution_mod = flux.integrators.evolution;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
@@ -25,7 +25,12 @@ pub const ConfigImpl = struct {
     }
 };
 
-pub const RunResultImpl = shared.RunResult;
+pub const RunResultImpl = struct {
+    elapsed_s: f64,
+    steps: u32,
+    snapshot_count: u32,
+    l2_error: f64,
+};
 
 pub const ConvergenceResultImpl = struct {
     refinement: u32,
@@ -145,11 +150,30 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    return shared.runTimeSteppedDiffusion(
+    const stepper_builder = SurfaceStepperBuilder{ .system = &system };
+    const stepper = try stepper_builder.initStepper(allocator, state.values);
+    const aux = try SurfaceEvolutionAux.init(
+        allocator,
+        &mesh,
+        ExactInitializer{},
+        SurfaceErrorMeasure{},
+        state.values.len,
+    );
+
+    const Evolution = evolution_mod.Evolution([]f64, SurfaceStepper, SurfaceEvolutionAux);
+    var evolution = Evolution.init(
+        allocator,
+        state.values,
+        stepper,
+        aux,
+    );
+    defer evolution.deinit();
+
+    const loop_result = try common.runExactEvolutionLoop(
         SurfaceMesh,
         allocator,
         &mesh,
-        state.values,
+        &evolution,
         .{
             .steps = config.steps,
             .dt = dt,
@@ -159,10 +183,14 @@ fn simulateCase(
             .output_base_name = "diffusion_surface",
             .progress_writer = progress_writer,
         },
-        ExactInitializer{},
-        SurfaceStepperBuilder{ .system = &system },
-        SurfaceErrorMeasure{},
     );
+
+    return .{
+        .elapsed_s = loop_result.elapsed_s,
+        .steps = config.steps,
+        .snapshot_count = loop_result.snapshot_count,
+        .l2_error = evolution.l2Error(),
+    };
 }
 
 fn convergenceConfig(refinement: u32) ConfigImpl {
@@ -213,36 +241,38 @@ fn stepBackwardEuler(
     @memcpy(state_values, solution);
 }
 
-const Stepper = struct {
+const SurfaceStepper = struct {
     system: *SurfaceSystem,
     state_values: []f64,
     rhs: []f64,
     solution: []f64,
 
-    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         _ = allocator;
         try stepBackwardEuler(self.system, self.state_values, self.rhs, self.solution);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.solution);
+        allocator.free(self.rhs);
     }
 };
 
 const SurfaceStepperBuilder = struct {
+    pub const Stepper = SurfaceStepper;
+
     system: *SurfaceSystem,
 
-    pub fn scratchLen(self: @This()) usize {
-        return self.system.masses.len;
-    }
-
-    pub fn seedSolution(_: @This(), state_values: []const f64, solution: []f64) void {
-        @memcpy(solution, state_values);
-    }
-
-    pub fn makeStepper(self: @This(), state_values: []f64, rhs: []f64, solution: []f64) Stepper {
-        return .{
+    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
+        const len = self.system.masses.len;
+        const stepper = Stepper{
             .system = self.system,
             .state_values = state_values,
-            .rhs = rhs,
-            .solution = solution,
+            .rhs = try allocator.alloc(f64, len),
+            .solution = try allocator.alloc(f64, len),
         };
+        @memcpy(stepper.solution, state_values);
+        return stepper;
     }
 };
 
@@ -255,6 +285,44 @@ const ExactInitializer = struct {
 const SurfaceErrorMeasure = struct {
     pub fn compute(_: @This(), mesh: *const SurfaceMesh, approx: []const f64, exact: []const f64) f64 {
         return weightedL2Error(mesh, approx, exact);
+    }
+};
+
+const SurfaceEvolutionAux = struct {
+    mesh: *const SurfaceMesh,
+    exact_values: []f64,
+    exact_initializer: ExactInitializer,
+    error_measure: SurfaceErrorMeasure,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const SurfaceMesh,
+        exact_initializer: ExactInitializer,
+        error_measure: SurfaceErrorMeasure,
+        len: usize,
+    ) !@This() {
+        return .{
+            .mesh = mesh,
+            .exact_values = try allocator.alloc(f64, len),
+            .exact_initializer = exact_initializer,
+            .error_measure = error_measure,
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.exact_values);
+    }
+
+    pub fn fillExact(self: *@This(), time: f64) void {
+        self.exact_initializer.fill(self.mesh, self.exact_values, time);
+    }
+
+    pub fn exactValues(self: *@This()) []f64 {
+        return self.exact_values;
+    }
+
+    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
     }
 };
 
