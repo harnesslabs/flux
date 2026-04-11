@@ -11,19 +11,19 @@ const wedge_product = flux.operators.wedge_product;
 
 // --- 2D Euler ---
 
-pub const Mesh2D = flux.topology.Mesh(2, 2);
-pub const VertexVorticity = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
-pub const FaceVorticity = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
-pub const FaceTracer = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
+const Mesh2D = flux.topology.Mesh(2, 2);
+const VertexVorticity = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
+const FaceVorticity = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
+const FaceTracer = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 
 const Vec2 = [2]f64;
 
-pub const Demo = enum {
+const Demo = enum {
     gaussian,
     dipole,
 };
 
-pub const Config2D = struct {
+const Config2D = struct {
     demo: Demo = .gaussian,
     grid: u32 = 16,
     steps: u32 = 1000,
@@ -42,14 +42,14 @@ pub const Config2D = struct {
     }
 };
 
-pub const RunResult2D = struct {
+const RunResult2D = struct {
     elapsed_s: f64,
     circulation_initial: f64,
     circulation_final: f64,
     snapshot_count: u32,
 };
 
-pub const State2D = struct {
+const State2D = struct {
     const EdgeAdjacency = struct {
         faces: [2]?u32 = .{ null, null },
     };
@@ -104,7 +104,7 @@ pub const State2D = struct {
     }
 };
 
-pub fn initializeGaussianVortex(state: *State2D) void {
+fn initializeGaussianVortex(state: *State2D) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);
     const sigma = 0.12;
 
@@ -114,7 +114,7 @@ pub fn initializeGaussianVortex(state: *State2D) void {
     }
 }
 
-pub fn initializeVortexDipole(state: *State2D) void {
+fn initializeVortexDipole(state: *State2D) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);
     const sigma = 0.075;
 
@@ -126,7 +126,7 @@ pub fn initializeVortexDipole(state: *State2D) void {
     }
 }
 
-pub fn totalCirculation(state: *const State2D) f64 {
+fn totalCirculation(state: *const State2D) f64 {
     const areas = state.mesh.simplices(2).items(.volume);
     var circulation: f64 = 0.0;
     for (state.vorticity.values, areas) |omega, area| {
@@ -135,7 +135,7 @@ pub fn totalCirculation(state: *const State2D) f64 {
     return circulation;
 }
 
-pub fn step2D(
+fn step2D(
     allocator: std.mem.Allocator,
     state: *State2D,
     dt: f64,
@@ -150,7 +150,7 @@ fn stableDt(config: Config2D) f64 {
     return config.cfl * (config.domain / @as(f64, @floatFromInt(config.grid)));
 }
 
-pub fn run2D(
+fn run2D(
     allocator: std.mem.Allocator,
     config: Config2D,
     writer: anytype,
@@ -477,12 +477,12 @@ test "Euler 2D circulation is conserved over 1000 explicit steps" {
 
 // --- 3D Euler ---
 
-pub const Mesh3D = flux.topology.Mesh(3, 3);
-pub const Velocity = flux.forms.Cochain(Mesh3D, 1, flux.forms.Primal);
-pub const Vorticity = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
-pub const Potential = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
+const Mesh3D = flux.topology.Mesh(3, 3);
+const Velocity = flux.forms.Cochain(Mesh3D, 1, flux.forms.Primal);
+const Vorticity = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
+const Potential = flux.forms.Cochain(Mesh3D, 2, flux.forms.Primal);
 
-pub const Config3D = struct {
+const Config3D = struct {
     steps: u32 = 1000,
     nx: u32 = 2,
     ny: u32 = 2,
@@ -495,14 +495,14 @@ pub const Config3D = struct {
     output_interval: u32 = 0,
 };
 
-pub const RunResult3D = struct {
+const RunResult3D = struct {
     elapsed_s: f64,
     helicity_initial: f64,
     helicity_final: f64,
     snapshot_count: u32,
 };
 
-pub const State3D = struct {
+const State3D = struct {
     mesh: *const Mesh3D,
     operators: *operator_context_mod.OperatorContext(Mesh3D),
     velocity: Velocity,
@@ -555,7 +555,7 @@ fn selectVelocity(state: *const State3D) *const Velocity {
     return &state.velocity;
 }
 
-pub fn seedReferenceMode3D(allocator: std.mem.Allocator, state: *State3D) !void {
+fn seedReferenceMode3D(allocator: std.mem.Allocator, state: *State3D) !void {
     const edge_vertices = state.mesh.simplices(1).items(.vertices);
     const coords = state.mesh.vertices.slice().items(.coords);
     for (state.velocity.values, edge_vertices) |*value, edge| {
@@ -592,7 +592,7 @@ pub fn seedReferenceMode3D(allocator: std.mem.Allocator, state: *State3D) !void 
     @memcpy(state.velocity_forcing, forcing.values);
 }
 
-pub fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *State3D) !void {
+fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *State3D) !void {
     var solve = try poisson.solve_one_form_dirichlet(
         Mesh3D,
         allocator,
@@ -609,7 +609,7 @@ pub fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *State3
     @memcpy(state.velocity.values, solve.solution);
 }
 
-pub fn step3D(allocator: std.mem.Allocator, state: *State3D, dt: f64) !void {
+fn step3D(allocator: std.mem.Allocator, state: *State3D, dt: f64) !void {
     _ = dt;
     try recoverVelocityFromVorticity(allocator, state);
 
@@ -627,7 +627,7 @@ pub fn step3D(allocator: std.mem.Allocator, state: *State3D, dt: f64) !void {
     defer transport.deinit(allocator);
 }
 
-pub fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunResult3D {
+fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunResult3D {
     var mesh = try Mesh3D.uniform_tetrahedral_grid(
         allocator,
         config.nx,
@@ -701,7 +701,7 @@ const Euler3DRenderer = struct {
     }
 };
 
-pub fn computeHelicity3D(allocator: std.mem.Allocator, state: *const State3D) !f64 {
+fn computeHelicity3D(allocator: std.mem.Allocator, state: *const State3D) !f64 {
     const Helicity = observers.HelicityObserver(State3D, Velocity, selectVelocity);
     const observer = Helicity{ .name = "helicity" };
     return observer.evaluate(allocator, state, 0);

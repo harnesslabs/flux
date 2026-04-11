@@ -14,11 +14,11 @@ pub const SurfaceKind = enum {
     sphere,
 };
 
-pub const SurfaceMesh = flux.topology.Mesh(3, 2);
-pub const SphereVertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
-pub const SphereEdgeField = flux.forms.Cochain(SurfaceMesh, 1, flux.forms.Primal);
+const SurfaceMesh = flux.topology.Mesh(3, 2);
+const SphereVertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
+const SphereEdgeField = flux.forms.Cochain(SurfaceMesh, 1, flux.forms.Primal);
 
-pub const SphereConfigImpl = struct {
+const SphereConfigImpl = struct {
     refinement: u32 = 0,
     steps: u32 = 8,
     dt_scale: f64 = 0.1,
@@ -32,14 +32,14 @@ pub const SphereConfigImpl = struct {
     }
 };
 
-pub const SphereRunResultImpl = struct {
+const SphereRunResultImpl = struct {
     elapsed_s: f64,
     steps: u32,
     snapshot_count: u32,
     l2_error: f64,
 };
 
-pub const SphereConvergenceResultImpl = struct {
+const SphereConvergenceResultImpl = struct {
     refinement: u32,
     l2_error: f64,
 };
@@ -105,7 +105,7 @@ const SphereSurfaceSystem = struct {
     }
 };
 
-pub fn runSphereImpl(
+fn runSphereImpl(
     allocator: std.mem.Allocator,
     config: SphereConfigImpl,
     writer: anytype,
@@ -118,7 +118,7 @@ pub fn runSphereImpl(
     return result;
 }
 
-pub fn runSphereConvergenceStudyImpl(
+fn runSphereConvergenceStudyImpl(
     allocator: std.mem.Allocator,
     refinements: []const u32,
 ) ![]SphereConvergenceResultImpl {
@@ -548,8 +548,8 @@ test "surface diffusion example runs as standalone binary configuration" {
     try testing.expect(result.elapsed_s >= 0.0);
 }
 
-pub const Mesh2D = flux.topology.Mesh(2, 2);
-pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
+const Mesh2D = flux.topology.Mesh(2, 2);
+const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
 
 const convergence_time = 0.02;
 
@@ -558,7 +558,7 @@ const InitialCondition = enum {
     sine_mode,
 };
 
-pub const PlaneConfigImpl = struct {
+const PlaneConfigImpl = struct {
     grid: u32 = 8,
     steps: u32 = 8,
     domain: f64 = 1.0,
@@ -577,24 +577,17 @@ pub const PlaneConfigImpl = struct {
     }
 };
 
-pub const PlaneRunResultImpl = struct {
+const PlaneRunResultImpl = struct {
     elapsed_s: f64,
     steps: u32,
     snapshot_count: u32,
     l2_error: f64,
 };
 
-pub const PlaneConvergenceResultImpl = struct {
+const PlaneConvergenceResultImpl = struct {
     grid: u32,
     l2_error: f64,
 };
-
-pub const PlaneConfig = PlaneConfigImpl;
-pub const PlaneRunResult = PlaneRunResultImpl;
-pub const PlaneConvergenceResult = PlaneConvergenceResultImpl;
-pub const SphereConfig = SphereConfigImpl;
-pub const SphereRunResult = SphereRunResultImpl;
-pub const SphereConvergenceResult = SphereConvergenceResultImpl;
 
 const HeatSystem = struct {
     reduced_matrix: sparse.CsrMatrix(f64),
@@ -700,14 +693,6 @@ fn runPlaneImpl(
     return result;
 }
 
-pub fn runPlane(
-    allocator: std.mem.Allocator,
-    config: PlaneConfig,
-    writer: anytype,
-) !PlaneRunResult {
-    return run(.plane, allocator, config, writer);
-}
-
 fn runPlaneConvergenceStudyImpl(
     allocator: std.mem.Allocator,
     grids: []const u32,
@@ -724,28 +709,6 @@ fn runPlaneConvergenceStudyImpl(
     };
 
     return common.runConvergenceStudy(PlaneConvergenceResultImpl, u32, allocator, grids, Runner{});
-}
-
-pub fn runPlaneConvergenceStudy(
-    allocator: std.mem.Allocator,
-    grids: []const u32,
-) ![]PlaneConvergenceResult {
-    return runConvergenceStudy(.plane, allocator, grids);
-}
-
-pub fn runSphere(
-    allocator: std.mem.Allocator,
-    config: SphereConfig,
-    writer: anytype,
-) !SphereRunResult {
-    return runSphereImpl(allocator, config, writer);
-}
-
-pub fn runSphereConvergenceStudy(
-    allocator: std.mem.Allocator,
-    refinements: []const u32,
-) ![]SphereConvergenceResult {
-    return runConvergenceStudy(.sphere, allocator, refinements);
 }
 
 fn simulateCase(

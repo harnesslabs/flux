@@ -146,7 +146,7 @@ fn hooks2d(comptime MeshType: type) type {
     };
 }
 
-pub fn StateForMesh2D(comptime MeshType: type) type {
+fn StateForMesh2D(comptime MeshType: type) type {
     comptime {
         if (!@hasDecl(MeshType, "embedding_dimension")) {
             @compileError("Maxwell StateForMesh requires a Mesh type with an 'embedding_dimension' declaration");
@@ -163,7 +163,7 @@ pub fn StateForMesh2D(comptime MeshType: type) type {
 /// This preserves d₂B = 0 exactly because:
 ///   d₂(B − dt · dE) = d₂B − dt · d₂(dE) = d₂B − 0 = d₂B
 /// The dd = 0 identity is algebraic, not numerical.
-pub fn faraday_step(
+fn faraday_step(
     allocator: std.mem.Allocator,
     state: anytype,
     dt: f64,
@@ -186,7 +186,7 @@ pub fn faraday_step(
 /// Applies ★₁⁻¹ as the diagonal inverse (length / dual_length).
 /// With the barycentric dual, every edge has nonzero dual_length,
 /// so ★₁ is non-singular and no pseudo-inverse workaround is needed.
-pub fn ampere_step(
+fn ampere_step(
     allocator: std.mem.Allocator,
     state: anytype,
     dt: f64,
@@ -202,7 +202,7 @@ pub fn ampere_step(
 /// circulation of E along every boundary edge is zero.
 ///
 /// Must be called after each Ampere step to enforce the constraint.
-pub fn apply_pec_boundary(state: anytype) void {
+fn apply_pec_boundary(state: anytype) void {
     MaxwellCore(@TypeOf(state.mesh.*), hooks2d(@TypeOf(state.mesh.*))).applyPecBoundary(state);
 }
 
@@ -223,7 +223,7 @@ pub fn apply_pec_boundary(state: anytype) void {
 /// guarantees bounded energy oscillation — no secular drift.
 ///
 /// Delegates to the generic `Leapfrog(MaxwellSystem(...))` integrator.
-pub fn leapfrog_step(
+fn leapfrog_step(
     allocator: std.mem.Allocator,
     state: anytype,
     dt: f64,
@@ -237,7 +237,7 @@ pub fn leapfrog_step(
 /// operators, conforming to the interface that `Leapfrog` requires.
 /// The timestep counter is incremented in `second_half_step` because
 /// it is Maxwell-specific state bookkeeping, not integrator logic.
-pub fn MaxwellSystem(comptime MeshType: type) type {
+fn MaxwellSystem(comptime MeshType: type) type {
     const StateType = StateForMesh2D(MeshType);
 
     return struct {
@@ -261,7 +261,7 @@ pub fn MaxwellSystem(comptime MeshType: type) type {
 ///
 /// Satisfies the `TimeStepStrategy` concept so it can be wrapped by
 /// `TimeStepper` and used by simulation runners.
-pub fn MaxwellLeapfrog(comptime MeshType: type) type {
+fn MaxwellLeapfrog(comptime MeshType: type) type {
     return leapfrog_mod.Leapfrog(MaxwellSystem(MeshType));
 }
 
@@ -277,7 +277,7 @@ pub fn MaxwellLeapfrog(comptime MeshType: type) type {
 /// cochain value represents the correctly scaled line integral: the
 /// circulation of J along the edge is amplitude · sin(...) / edge_length,
 /// giving a density-like quantity consistent with the Ampere-Maxwell update.
-pub fn PointDipole(comptime MeshType: type) type {
+fn PointDipole(comptime MeshType: type) type {
     return struct {
         const Self = @This();
 
@@ -355,7 +355,7 @@ pub fn PointDipole(comptime MeshType: type) type {
 /// Whitney mass matrix (exact Galerkin inner product), ★₂ is diagonal.
 /// The leapfrog integrator conserves this quantity (up to O(dt²) oscillation)
 /// for source-free fields.
-pub fn electromagnetic_energy(
+fn electromagnetic_energy(
     allocator: std.mem.Allocator,
     state: anytype,
 ) !f64 {
@@ -387,9 +387,9 @@ pub fn electromagnetic_energy(
 // ═══════════════════════════════════════════════════════════════════════════
 
 const flux_io = flux.io;
-pub const Demo = enum { dipole, cavity };
+const Demo = enum { dipole, cavity };
 
-pub const Config2D = struct {
+const Config2D = struct {
     demo: Demo = .dipole,
     steps: u32 = 1000,
     grid: u32 = 32,
@@ -419,7 +419,7 @@ pub const Config2D = struct {
     }
 };
 
-pub const RunResult2D = struct {
+const RunResult2D = struct {
     elapsed_s: f64,
     energy_final: f64,
     snapshot_count: u32,
@@ -447,14 +447,6 @@ const DriverSimResult = struct {
     energy_final: f64,
     snapshot_count: u32,
 };
-
-pub fn runDriver2D(allocator: std.mem.Allocator, config: Config2D) !void {
-    var stderr_buffer: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const stderr = &stderr_writer.interface;
-
-    _ = try run2D(allocator, config, stderr);
-}
 
 fn run2D(allocator: std.mem.Allocator, config: Config2D, writer: anytype) !RunResult2D {
     return switch (config.demo) {
@@ -1284,7 +1276,7 @@ test "end-to-end: 100 steps, dB = 0 structurally, energy bounded" {
 /// Project the analytical TE₁₀ E field onto mesh edges at time t.
 ///
 /// Each edge value = ∫ E · dl ≈ E(midpoint) · edge_vector.
-pub fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
+fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
     const edge_verts = mesh.simplices(1).items(.vertices);
     const coords = mesh.vertices.slice().items(.coords);
     const k = std.math.pi / domain_length;
@@ -1304,7 +1296,7 @@ pub fn project_te10_e(mesh: *const Mesh2D, values: []f64, t: f64, domain_length:
 /// Project the analytical TE₁₀ B field onto mesh faces at time t.
 ///
 /// Each face value = ∫∫ B_z dA ≈ B_z(centroid) · area.
-pub fn project_te10_b(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
+fn project_te10_b(mesh: *const Mesh2D, values: []f64, t: f64, domain_length: f64) void {
     const simplex_2 = mesh.simplices(2);
     const face_verts = simplex_2.items(.vertices);
     const face_areas = simplex_2.items(.volume);
@@ -1682,7 +1674,7 @@ fn hooks3d(comptime MeshType: type) type {
     };
 }
 
-pub const Config3D = struct {
+const Config3D = struct {
     steps: u32 = 1000,
     nx: u32 = 2,
     ny: u32 = 2,
@@ -1702,11 +1694,11 @@ pub const Config3D = struct {
     }
 };
 
-pub fn StateForMesh3D(comptime MeshType: type) type {
+fn StateForMesh3D(comptime MeshType: type) type {
     return MaxwellCore(MeshType, hooks3d(MeshType)).State;
 }
 
-pub const MaxwellState3D = StateForMesh3D(Mesh3D);
+const MaxwellState3D = StateForMesh3D(Mesh3D);
 
 fn tm110WaveNumbers(width: f64, height: f64) struct { kx: f64, ky: f64 } {
     return .{
@@ -1720,19 +1712,19 @@ fn tm110AngularFrequency(width: f64, height: f64) f64 {
     return std.math.sqrt(wave.kx * wave.kx + wave.ky * wave.ky);
 }
 
-pub fn faradayStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+fn faradayStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
     try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).faradayStep(allocator, state, dt);
 }
 
-pub fn ampereStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+fn ampereStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
     try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).ampereStep(allocator, state, dt);
 }
 
-pub fn applyPecBoundary3D(_: std.mem.Allocator, state: anytype) !void {
+fn applyPecBoundary3D(_: std.mem.Allocator, state: anytype) !void {
     MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).applyPecBoundary(state);
 }
 
-pub fn leapfrogStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+fn leapfrogStep3D(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
     try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).leapfrogStep(allocator, state, dt);
 }
 
@@ -1741,9 +1733,9 @@ const SimResult = struct {
     snapshot_count: u32,
 };
 
-pub const RunResult3D = SimResult;
+const RunResult3D = SimResult;
 
-pub fn runSimulation(
+fn runSimulation(
     allocator: std.mem.Allocator,
     state: *MaxwellState3D,
     config: Config3D,
@@ -1802,7 +1794,7 @@ const Maxwell3DRenderer = struct {
 ///         0 )
 /// with ω² = k_x² + k_y². This mode is uniform in z and still satisfies
 /// PEC because E is normal to the z-walls and vanishes on x/y walls.
-pub fn project_tm110_e(
+fn project_tm110_e(
     mesh: *const Mesh3D,
     values: []f64,
     t: f64,
@@ -1825,7 +1817,7 @@ pub fn project_tm110_e(
     }
 }
 
-pub fn project_tm110_potential(
+fn project_tm110_potential(
     mesh: *const Mesh3D,
     values: []f64,
     t: f64,
@@ -1852,7 +1844,7 @@ pub fn project_tm110_potential(
 ///
 /// Each primal 2-form entry is a flux integral approximated by the face
 /// centroid sample times the oriented face area vector.
-pub fn project_tm110_b(
+fn project_tm110_b(
     mesh: *const Mesh3D,
     values: []f64,
     t: f64,
@@ -1887,7 +1879,7 @@ pub fn project_tm110_b(
     }
 }
 
-pub fn seedTm110Mode(
+fn seedTm110Mode(
     allocator: std.mem.Allocator,
     state: *MaxwellState3D,
     dt: f64,
@@ -1905,7 +1897,7 @@ pub fn seedTm110Mode(
     @memcpy(state.B.values, exact_flux.values);
 }
 
-pub fn writeSnapshot(
+fn writeSnapshot(
     allocator: std.mem.Allocator,
     writer: anytype,
     state: *const MaxwellState3D,
@@ -1920,14 +1912,6 @@ pub fn writeSnapshot(
             .{ .name = "B_flux", .kind = .face_abs_mean, .values = state.B.values },
         },
     );
-}
-
-pub fn runDriver3D(allocator: std.mem.Allocator, config: Config3D) !void {
-    var stderr_buffer: [1024]u8 = undefined;
-    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
-    const writer = &stderr_writer.interface;
-
-    _ = try run3D(allocator, config, writer);
 }
 
 fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunResult3D {
@@ -1983,7 +1967,7 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
     return result;
 }
 
-pub fn makeCavityMesh(allocator: std.mem.Allocator, config: Config3D) !Mesh3D {
+fn makeCavityMesh(allocator: std.mem.Allocator, config: Config3D) !Mesh3D {
     return Mesh3D.uniform_tetrahedral_grid(
         allocator,
         config.nx,
@@ -2010,7 +1994,7 @@ fn seedClosedMagneticField(allocator: std.mem.Allocator, state: *MaxwellState3D)
     @memcpy(state.B.values, exact_flux.values);
 }
 
-pub fn divergenceNorm3D(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
+fn divergenceNorm3D(allocator: std.mem.Allocator, state: *const MaxwellState3D) !f64 {
     var divergence = try (try state.operators.exteriorDerivative(cochain.Primal, 2)).apply(allocator, state.B);
     defer divergence.deinit(allocator);
     return std.math.sqrt(divergence.norm_squared());
@@ -2228,14 +2212,6 @@ pub fn run(comptime topological_dimension: u8, allocator: std.mem.Allocator, con
     };
 }
 
-pub fn runDriver(comptime topological_dimension: u8, allocator: std.mem.Allocator, config: Config(topological_dimension)) !void {
-    switch (topological_dimension) {
-        2 => try runDriver2D(allocator, config),
-        3 => try runDriver3D(allocator, config),
-        else => unreachable,
-    }
-}
-
 pub fn makeMesh(comptime topological_dimension: u8, allocator: std.mem.Allocator, config: Config(topological_dimension)) !Mesh(topological_dimension) {
     return switch (topological_dimension) {
         2 => try Mesh(2).uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain),
@@ -2244,16 +2220,12 @@ pub fn makeMesh(comptime topological_dimension: u8, allocator: std.mem.Allocator
     };
 }
 
-pub fn leapfrogStep(comptime topological_dimension: u8, allocator: std.mem.Allocator, state: *State(topological_dimension), dt: f64) !void {
+pub fn step(comptime topological_dimension: u8, allocator: std.mem.Allocator, state: *State(topological_dimension), dt: f64) !void {
     switch (topological_dimension) {
         2 => try leapfrog_step(allocator, state, dt),
         3 => try leapfrogStep3D(allocator, state, dt),
         else => unreachable,
     }
-}
-
-pub fn step(comptime topological_dimension: u8, allocator: std.mem.Allocator, state: *State(topological_dimension), dt: f64) !void {
-    try leapfrogStep(topological_dimension, allocator, state, dt);
 }
 
 pub fn seedReferenceMode(comptime topological_dimension: u8, allocator: std.mem.Allocator, state: *State(topological_dimension), dt: f64, width: f64, height: f64) !void {
@@ -2266,14 +2238,6 @@ pub fn seedReferenceMode(comptime topological_dimension: u8, allocator: std.mem.
 
 pub fn divergenceNorm(allocator: std.mem.Allocator, state: *const State(3)) !f64 {
     return divergenceNorm3D(allocator, state);
-}
-
-pub fn projectReferenceMagneticField(comptime topological_dimension: u8, mesh: *const Mesh(topological_dimension), values: []f64, t: f64, width: f64, height: f64) void {
-    switch (topological_dimension) {
-        2 => project_te10_b(mesh, values, t, width),
-        3 => project_tm110_b(mesh, values, t, width, height),
-        else => unreachable,
-    }
 }
 
 test {
