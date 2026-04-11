@@ -619,3 +619,34 @@ owns the reusable evolution mechanics underneath them. A single public
 configuration of that center, not separate peer abstractions. This also leaves
 room for `#184`, `#182`, `#185`, and `#183` to extend the same center instead
 of adding more family-local scaffolds.
+
+## 2026-04-11: Evolution listeners are library lifecycle hooks; examples implement IO listeners on top
+
+**Decision:** Attach listener hooks directly to `flux.integrators.evolution.Evolution.run(...)`
+with three lifecycle callbacks:
+- `onRunBegin`
+- `onStep`
+- `onRunEnd`
+
+The library owns dispatch of these lifecycle events, while `examples/common`
+implements snapshot and progress listeners on top of that seam instead of
+keeping a family-independent timestep loop outside the library.
+
+**Alternatives considered:**
+1. Keep the loop in `examples/common` and treat listeners as example-only
+   wiring: rejected because it leaves the library without a first-class
+   observation seam, which is exactly the missing capability `#183` is meant to
+   introduce.
+2. Move snapshot/PVD/progress logic into `src/`: rejected because those remain
+   presentation concerns. The core library should expose lifecycle events, not
+   file formats or CLI display policy.
+3. Use a single per-step callback only: rejected because initial capture and
+   guaranteed finalization become awkward special cases in example code. The
+   begin/step/end split keeps those concerns explicit and bounded.
+
+**Rationale:** The right abstraction is not “the library writes output,” but
+“the library owns evolution lifecycle events.” That lets example-side code
+implement ParaView output, progress bars, and future diagnostics as listeners
+without each family wiring its own timestep loop. It also creates the seam that
+future diagnostics and checkpoints can reuse without hard-coding them into the
+core evolution object.
