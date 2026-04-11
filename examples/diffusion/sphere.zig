@@ -4,11 +4,11 @@ const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
-const exterior_derivative = flux.operators.exterior_derivative;
-const hodge_star = flux.operators.hodge_star;
+const operator_context_mod = flux.operators.context;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
+const SurfaceOperatorContext = operator_context_mod.OperatorContext(SurfaceMesh);
 
 pub const ConfigImpl = struct {
     refinement: u32 = 0,
@@ -37,6 +37,7 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const SurfaceSystem = struct {
+    operator_context: *SurfaceOperatorContext,
     system_matrix: sparse.CsrMatrix(f64),
     masses: []f64,
     diagonal: []f64,
@@ -47,8 +48,9 @@ const SurfaceSystem = struct {
         mesh: *const SurfaceMesh,
         dt: f64,
     ) !SurfaceSystem {
-        var stiffness = try assembleSurfaceStiffness(allocator, mesh);
-        defer stiffness.deinit(allocator);
+        const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
+        errdefer operator_context.deinit();
+        const stiffness = (try operator_context.laplacian(0)).stiffness;
 
         const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
         errdefer allocator.free(masses);
@@ -79,6 +81,7 @@ const SurfaceSystem = struct {
         errdefer scratch.deinit(allocator);
 
         return .{
+            .operator_context = operator_context,
             .system_matrix = system_matrix,
             .masses = masses,
             .diagonal = diagonal,
@@ -91,6 +94,7 @@ const SurfaceSystem = struct {
         allocator.free(self.diagonal);
         allocator.free(self.masses);
         self.system_matrix.deinit(allocator);
+        self.operator_context.deinit();
     }
 };
 
@@ -314,41 +318,6 @@ fn orientFacesOutward(
             face.*[2] = tmp;
         }
     }
-}
-
-fn assembleSurfaceStiffness(
-    allocator: std.mem.Allocator,
-    mesh: *const SurfaceMesh,
-) !sparse.CsrMatrix(f64) {
-    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
-    defer assembler.deinit(allocator);
-
-    var basis = try VertexField.init(allocator, mesh);
-    defer basis.deinit(allocator);
-
-    const boundary_1 = mesh.boundary(1);
-    const column = try allocator.alloc(f64, mesh.num_vertices());
-    defer allocator.free(column);
-
-    for (0..mesh.num_vertices()) |vertex_idx| {
-        @memset(basis.values, 0.0);
-        basis.values[vertex_idx] = 1.0;
-
-        var gradient = try exterior_derivative.exterior_derivative(allocator, basis);
-        defer gradient.deinit(allocator);
-
-        var starred = try hodge_star.hodge_star(allocator, gradient);
-        defer starred.deinit(allocator);
-
-        @memset(column, 0.0);
-        boundary_1.transpose_multiply(starred.values, column);
-        for (column, 0..) |value, row_idx| {
-            if (@abs(value) < 1e-13) continue;
-            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(vertex_idx), value);
-        }
-    }
-
-    return assembler.build(allocator);
 }
 
 fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {

@@ -558,24 +558,3 @@ discoverable (`flux-examples list`, `flux-examples <name> --help`),
 satisfies the issue acceptance criterion that every example accept
 `--dt`/`--steps`/`--output`, and gives us one place to add cross-cutting
 features like profiling hooks or alternate snapshot backends in the future.
-
-## 2026-04-11: Embedded-surface projection requires an explicit chart map
-
-**Decision:** Expose the `Mesh(D, K) -> Mesh(K, K)` escape hatch as
-`project_to_chart(allocator, chart_map)`. The caller supplies the chart map
-from embedded coordinates to intrinsic coordinates; the mesh does not invent
-one by dropping coordinates or storing a preferred flattening internally.
-
-**Alternatives considered:**
-1. Drop the last `D-K` coordinates automatically: rejected because it bakes an
-   arbitrary chart choice into the API and fails immediately for rotated
-   embeddings.
-2. Store a canonical chart on `Mesh(D, K)`: rejected because the default
-   semantics of the mesh are embedded geometry plus induced metric, not
-   "embedded geometry plus one privileged flattening."
-
-**Rationale:** This keeps the embedded path honest while still giving users an
-explicit projection tool when they truly want chart coordinates. It also stays
-compatible with the intrinsic-mesh horizon: future intrinsic representations
-can consume explicit charts without forcing today's embedded mesh type to
-pretend one is canonical.

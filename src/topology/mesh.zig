@@ -364,34 +364,6 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return self.num_cells(3);
         }
 
-        /// Rebuild this mesh in an explicit intrinsic chart chosen by the caller.
-        ///
-        /// `Mesh(D, K)` defaults to embedded geometry with the induced metric.
-        /// When a caller wants a `Mesh(K, K)` in chart coordinates, that chart
-        /// must be named explicitly instead of inferred by dropping axes.
-        pub fn project_to_chart(
-            self: *const Self,
-            allocator: std.mem.Allocator,
-            chart_map: fn ([embedding_dimension]f64) [topological_dimension]f64,
-        ) !Mesh(topological_dimension, topological_dimension) {
-            comptime {
-                if (topological_dimension != 2) {
-                    @compileError("project_to_chart is currently implemented for 2D simplicial surfaces");
-                }
-            }
-
-            const ChartMesh = Mesh(topological_dimension, topological_dimension);
-            const projected_vertices = try allocator.alloc([topological_dimension]f64, self.num_vertices());
-            defer allocator.free(projected_vertices);
-
-            const coords = self.vertices.slice().items(.coords);
-            for (projected_vertices, coords) |*projected, coord| {
-                projected.* = chart_map(coord);
-            }
-
-            return ChartMesh.from_triangles(allocator, projected_vertices, self.simplices(2).items(.vertices));
-        }
-
         fn assembleWhitneyOperators(allocator: std.mem.Allocator, mesh: *const Self) ![topological_dimension - 1]WhitneyMassOperator {
             var operators: [topological_dimension - 1]WhitneyMassOperator = undefined;
             var initialized_count: usize = 0;
@@ -1758,50 +1730,6 @@ test "Mesh(3, 2) compiles — surface in ℝ³" {
     const M = Mesh(3, 2);
     try testing.expect(M.embedding_dimension == 3);
     try testing.expect(M.topological_dimension == 2);
-}
-
-fn explicit_surface_chart(coords: [3]f64) [2]f64 {
-    const inv_sqrt2 = 0.7071067811865475;
-    return .{
-        (coords[0] + coords[1]) * inv_sqrt2,
-        coords[2],
-    };
-}
-
-test "Mesh(3, 2) projects to Mesh(2, 2) through an explicit chart map" {
-    const allocator = testing.allocator;
-    const embedded_vertices = [_][3]f64{
-        .{ 0.0, 0.0, 0.0 },
-        .{ 0.7071067811865475, 0.7071067811865475, 0.0 },
-        .{ 1.414213562373095, 1.414213562373095, 1.0 },
-        .{ 0.7071067811865475, 0.7071067811865475, 1.0 },
-    };
-    const expected_chart_vertices = [_][2]f64{
-        .{ 0.0, 0.0 },
-        .{ 1.0, 0.0 },
-        .{ 2.0, 1.0 },
-        .{ 1.0, 1.0 },
-    };
-    const faces = [_][3]u32{
-        .{ 0, 1, 2 },
-        .{ 0, 2, 3 },
-    };
-
-    var embedded = try Mesh(3, 2).from_triangles(allocator, &embedded_vertices, &faces);
-    defer embedded.deinit(allocator);
-
-    var projected = try embedded.project_to_chart(allocator, explicit_surface_chart);
-    defer projected.deinit(allocator);
-
-    try testing.expectEqual(@as(u32, 4), projected.num_vertices());
-    try testing.expectEqual(@as(u32, 5), projected.num_edges());
-    try testing.expectEqual(@as(u32, 2), projected.num_faces());
-
-    const coords = projected.vertices.slice().items(.coords);
-    for (coords, expected_chart_vertices) |actual, expected| {
-        try testing.expectApproxEqAbs(expected[0], actual[0], 1e-12);
-        try testing.expectApproxEqAbs(expected[1], actual[1], 1e-12);
-    }
 }
 
 test "Mesh(3, 3) compiles — volume in ℝ³" {
