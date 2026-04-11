@@ -50,7 +50,7 @@ const Maxwell2DRenderer = struct {
 
 fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
     const dt = config.dt();
-    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D);
+    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D, void);
     var evolution = Evolution.init(
         allocator,
         state,
@@ -59,6 +59,7 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
             .state = state,
             .dt = dt,
         },
+        {},
     );
     defer evolution.deinit();
 
@@ -160,8 +161,16 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
     });
 
-    const Evolution = evolution_mod.FixedTimeEvolution(*runtime.MaxwellState3D, runtime.leapfrog_step_3d_typed);
-    var evolution = Evolution.init(&state, config.dt);
+    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState3D, Maxwell3DStepper, void);
+    var evolution = Evolution.init(
+        allocator,
+        &state,
+        .{
+            .state = &state,
+            .dt = config.dt,
+        },
+        {},
+    );
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -218,6 +227,20 @@ pub fn State(comptime dim: u8) type {
         else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
+
+const Maxwell3DStepper = struct {
+    state: *runtime.MaxwellState3D,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try runtime.leapfrog_step_3d(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 pub fn run(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim), writer: anytype) !RunResult(dim) {
     return switch (dim) {

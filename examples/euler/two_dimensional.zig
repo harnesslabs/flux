@@ -113,8 +113,16 @@ pub fn runImpl(
 
     const circulation_initial = totalCirculation(&state);
     const dt = config.dt();
-    const Evolution = evolution_mod.FixedTimeEvolution(*StateImpl, stepImpl);
-    var evolution = Evolution.init(&state, dt);
+    const Evolution = evolution_mod.Evolution(*StateImpl, Euler2DStepper, void);
+    var evolution = Evolution.init(
+        allocator,
+        &state,
+        .{
+            .state = &state,
+            .dt = dt,
+        },
+        {},
+    );
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -165,6 +173,20 @@ pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *StateImpl) !void 
 pub fn conservedQuantity(state: *const StateImpl) f64 {
     return totalCirculation(state);
 }
+
+const Euler2DStepper = struct {
+    state: *StateImpl,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try stepImpl(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 fn initializeGaussianVortex(state: *StateImpl) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);

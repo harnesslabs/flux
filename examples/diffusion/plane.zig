@@ -194,23 +194,25 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, initial_condition, 0.0);
 
-    const Evolution = evolution_mod.ExactEvolution(
-        Mesh2D,
-        f64,
-        HeatStepperBuilder,
-        HeatExactInitializer,
-        HeatErrorMeasure,
-    );
-    var evolution = try Evolution.init(
+    const stepper_builder = HeatStepperBuilder{
+        .mesh = &mesh,
+        .heat_system = &heat_system,
+    };
+    const stepper = try stepper_builder.initStepper(allocator, state.values);
+    const aux = try HeatEvolutionAux.init(
         allocator,
         &mesh,
-        state.values,
-        HeatStepperBuilder{
-            .mesh = &mesh,
-            .heat_system = &heat_system,
-        },
         HeatExactInitializer{ .initial_condition = initial_condition },
         HeatErrorMeasure{},
+        state.values.len,
+    );
+
+    const Evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatEvolutionAux);
+    var evolution = Evolution.init(
+        allocator,
+        state.values,
+        stepper,
+        aux,
     );
     defer evolution.deinit();
 
@@ -339,6 +341,44 @@ const HeatExactInitializer = struct {
 
     pub fn fill(self: @This(), mesh: *const Mesh2D, values: []f64, time: f64) void {
         initializeState(mesh, values, self.initial_condition, time);
+    }
+};
+
+const HeatEvolutionAux = struct {
+    mesh: *const Mesh2D,
+    exact_values: []f64,
+    exact_initializer: HeatExactInitializer,
+    error_measure: HeatErrorMeasure,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const Mesh2D,
+        exact_initializer: HeatExactInitializer,
+        error_measure: HeatErrorMeasure,
+        len: usize,
+    ) !@This() {
+        return .{
+            .mesh = mesh,
+            .exact_values = try allocator.alloc(f64, len),
+            .exact_initializer = exact_initializer,
+            .error_measure = error_measure,
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.exact_values);
+    }
+
+    pub fn fillExact(self: *@This(), time: f64) void {
+        self.exact_initializer.fill(self.mesh, self.exact_values, time);
+    }
+
+    pub fn exactValues(self: *@This()) []f64 {
+        return self.exact_values;
+    }
+
+    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
     }
 };
 

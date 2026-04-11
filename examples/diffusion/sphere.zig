@@ -150,20 +150,22 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    const Evolution = evolution_mod.ExactEvolution(
-        SurfaceMesh,
-        f64,
-        SurfaceStepperBuilder,
-        ExactInitializer,
-        SurfaceErrorMeasure,
-    );
-    var evolution = try Evolution.init(
+    const stepper_builder = SurfaceStepperBuilder{ .system = &system };
+    const stepper = try stepper_builder.initStepper(allocator, state.values);
+    const aux = try SurfaceEvolutionAux.init(
         allocator,
         &mesh,
-        state.values,
-        SurfaceStepperBuilder{ .system = &system },
         ExactInitializer{},
         SurfaceErrorMeasure{},
+        state.values.len,
+    );
+
+    const Evolution = evolution_mod.Evolution([]f64, SurfaceStepper, SurfaceEvolutionAux);
+    var evolution = Evolution.init(
+        allocator,
+        state.values,
+        stepper,
+        aux,
     );
     defer evolution.deinit();
 
@@ -283,6 +285,44 @@ const ExactInitializer = struct {
 const SurfaceErrorMeasure = struct {
     pub fn compute(_: @This(), mesh: *const SurfaceMesh, approx: []const f64, exact: []const f64) f64 {
         return weightedL2Error(mesh, approx, exact);
+    }
+};
+
+const SurfaceEvolutionAux = struct {
+    mesh: *const SurfaceMesh,
+    exact_values: []f64,
+    exact_initializer: ExactInitializer,
+    error_measure: SurfaceErrorMeasure,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const SurfaceMesh,
+        exact_initializer: ExactInitializer,
+        error_measure: SurfaceErrorMeasure,
+        len: usize,
+    ) !@This() {
+        return .{
+            .mesh = mesh,
+            .exact_values = try allocator.alloc(f64, len),
+            .exact_initializer = exact_initializer,
+            .error_measure = error_measure,
+        };
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.exact_values);
+    }
+
+    pub fn fillExact(self: *@This(), time: f64) void {
+        self.exact_initializer.fill(self.mesh, self.exact_values, time);
+    }
+
+    pub fn exactValues(self: *@This()) []f64 {
+        return self.exact_values;
+    }
+
+    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
     }
 };
 

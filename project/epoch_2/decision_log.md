@@ -587,15 +587,13 @@ features like profiling hooks or alternate snapshot backends in the future.
 
 ## 2026-04-11: Evolution-time state lives in `src/integrators/`, example runners keep presentation concerns
 
-**Decision:** Introduce reusable evolution mechanics under
-`flux.integrators.evolution`, centered on:
-- `Evolution(...)` for direct stateful steppers,
-- `FixedTimeEvolution(...)` for plain `(state, dt)` strategies, and
-- `ExactEvolution(...)` for exact/reference runs with owned exact buffers.
+**Decision:** Introduce one public evolution type under
+`flux.integrators.evolution`: `Evolution(...)`.
 
-The library owns stepper lifetime, exact/reference storage, and reusable
-evolution-time state, while `examples/common/runner.zig` remains responsible
-for snapshot cadence, progress reporting, and convergence-study bookkeeping.
+The library owns stepper lifetime plus optional auxiliary evolution state
+(such as exact/reference buffers), while `examples/common/runner.zig` remains
+responsible for snapshot cadence, progress reporting, and convergence-study
+bookkeeping.
 
 **Alternatives considered:**
 1. Put the whole abstraction in `examples/common`: rejected because the missing
@@ -616,6 +614,8 @@ exact-field storage, fixed-`dt` stepping, and step orchestration for assembled
 systems. Those belong beside the other time-integration machinery, not in the
 example tree. Keeping presentation in `examples/common` preserves a clean
 boundary: examples declare the mesh/problem and renderer, while the library
-owns the reusable evolution mechanics underneath them. This also leaves room
-for `#184`, `#182`, `#185`, and `#183` to extend the same center instead of
-adding more family-local scaffolds.
+owns the reusable evolution mechanics underneath them. A single public
+`Evolution(...)` keeps the API honest; fixed-step and exact/reference cases are
+configuration of that center, not separate peer abstractions. This also leaves
+room for `#184`, `#182`, `#185`, and `#183` to extend the same center instead
+of adding more family-local scaffolds.

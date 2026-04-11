@@ -189,10 +189,6 @@ pub fn leapfrog_step_3d(allocator: std.mem.Allocator, state: anytype, dt: f64) !
     try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).leapfrogStep(allocator, state, dt);
 }
 
-pub fn leapfrog_step_3d_typed(allocator: std.mem.Allocator, state: *MaxwellState3D, dt: f64) !void {
-    try leapfrog_step_3d(allocator, state, dt);
-}
-
 pub fn electromagnetic_energy(allocator: std.mem.Allocator, state: anytype) !f64 {
     var star_E = try (try state.operators.hodgeStar(1)).apply(allocator, state.E);
     defer star_E.deinit(allocator);

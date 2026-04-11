@@ -98,8 +98,16 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try conservedQuantity(allocator, &state);
-    const Evolution = evolution_mod.FixedTimeEvolution(*StateImpl, stepImpl);
-    var evolution = Evolution.init(&state, config.dt);
+    const Evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void);
+    var evolution = Evolution.init(
+        allocator,
+        &state,
+        .{
+            .state = &state,
+            .dt = config.dt,
+        },
+        {},
+    );
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -192,6 +200,20 @@ pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const StateImpl) 
     const observer = Helicity{ .name = "helicity" };
     return observer.evaluate(allocator, state, 0);
 }
+
+const Euler3DStepper = struct {
+    state: *StateImpl,
+    dt: f64,
+
+    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+        try stepImpl(allocator, self.state, self.dt);
+    }
+
+    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+    }
+};
 
 fn selectVelocity(state: *const StateImpl) *const Velocity {
     return &state.velocity;
