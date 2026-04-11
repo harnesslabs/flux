@@ -18,20 +18,41 @@ const flux_io = flux.io;
 
 /// Plan describing how often to capture snapshots and how many to budget for.
 /// `interval == 0` disables snapshot writing entirely (capacity is then 0).
+pub const PlanOptions = struct {
+    emit_final: bool = false,
+};
+
 pub const Plan = struct {
     interval: u32,
     capacity: u32,
+    emit_final: bool,
+
+    pub fn disabled() Plan {
+        return .{
+            .interval = 0,
+            .capacity = 0,
+            .emit_final = false,
+        };
+    }
 
     /// Compute an evenly-spaced snapshot plan covering `total_steps` with at
-    /// most `frames` frames. Returns a disabled plan when either bound is
-    /// zero. The capacity is `total_steps / interval + 1` to account for the
-    /// optional initial frame; the `+|` saturating add guards the
-    /// pathological case `total_steps == u32_max && interval == 1`.
-    pub fn fromTotal(total_steps: u32, frames: u32) Plan {
-        if (frames == 0 or total_steps == 0) return .{ .interval = 0, .capacity = 0 };
+    /// most `frames` interval-driven frames. Capacity includes the optional
+    /// initial frame and, when requested, one guaranteed final frame.
+    pub fn fromFrames(total_steps: u32, frames: u32, options: PlanOptions) Plan {
+        if (frames == 0 or total_steps == 0) return disabled();
         const interval: u32 = @max(@as(u32, 1), total_steps / frames);
-        const capacity: u32 = (total_steps / interval) +| 1;
-        return .{ .interval = interval, .capacity = capacity };
+        return fromInterval(total_steps, interval, options);
+    }
+
+    pub fn fromInterval(total_steps: u32, interval: u32, options: PlanOptions) Plan {
+        if (interval == 0 or total_steps == 0) return disabled();
+        const final_extra: u32 = if (options.emit_final and total_steps % interval != 0) 1 else 0;
+        const capacity: u32 = (total_steps / interval) +| 1 +| final_extra;
+        return .{
+            .interval = interval,
+            .capacity = capacity,
+            .emit_final = options.emit_final,
+        };
     }
 };
 
@@ -46,6 +67,7 @@ pub const Series = struct {
     pvd_entries: []flux_io.PvdEntry,
     filename_bufs: [][flux_io.max_snapshot_filename_length]u8,
     count: u32,
+    finalized: bool,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -64,6 +86,7 @@ pub const Series = struct {
                 .pvd_entries = &.{},
                 .filename_bufs = &.{},
                 .count = 0,
+                .finalized = false,
             };
         }
         try ensureDir(output_dir);
@@ -81,10 +104,12 @@ pub const Series = struct {
             .pvd_entries = pvd_entries,
             .filename_bufs = filename_bufs,
             .count = 0,
+            .finalized = false,
         };
     }
 
     pub fn deinit(self: *Series) void {
+        std.debug.assert(self.finalized or self.count == 0);
         if (self.plan.capacity == 0) return;
         self.allocator.free(self.pvd_entries);
         self.allocator.free(self.filename_bufs);
@@ -96,10 +121,11 @@ pub const Series = struct {
 
     /// Should a snapshot be captured at this 1-based step index?
     /// Returns false when the plan is disabled or the budget is full.
-    pub fn dueAt(self: Series, step_one_based: u32) bool {
+    pub fn dueAt(self: Series, step_one_based: u32, total_steps: u32) bool {
         if (!self.enabled()) return false;
         if (self.count >= self.plan.capacity) return false;
-        return step_one_based % self.plan.interval == 0;
+        if (step_one_based % self.plan.interval == 0) return true;
+        return self.plan.emit_final and step_one_based == total_steps;
     }
 
     /// Capture a frame at simulation time `time`. The `renderer` is any
@@ -151,6 +177,8 @@ pub const Series = struct {
     /// Write the `.pvd` collection file referencing all captured snapshots.
     /// No-op when nothing was captured.
     pub fn finalize(self: *Series) !void {
+        if (self.finalized) return;
+        self.finalized = true;
         if (self.count == 0) return;
 
         var output: std.ArrayListUnmanaged(u8) = .{};
@@ -185,66 +213,79 @@ pub fn ensureDir(path: []const u8) !void {
 const testing = std.testing;
 
 test "Plan disabled when frames is zero" {
-    const plan = Plan.fromTotal(100, 0);
+    const plan = Plan.fromFrames(100, 0, .{});
     try testing.expectEqual(@as(u32, 0), plan.interval);
     try testing.expectEqual(@as(u32, 0), plan.capacity);
 }
 
 test "Plan disabled when total steps is zero" {
-    const plan = Plan.fromTotal(0, 5);
+    const plan = Plan.fromFrames(0, 5, .{});
     try testing.expectEqual(@as(u32, 0), plan.interval);
     try testing.expectEqual(@as(u32, 0), plan.capacity);
 }
 
 test "Plan even division: 100 steps, 10 frames -> interval 10, capacity 11" {
-    const plan = Plan.fromTotal(100, 10);
+    const plan = Plan.fromFrames(100, 10, .{});
     try testing.expectEqual(@as(u32, 10), plan.interval);
     try testing.expectEqual(@as(u32, 11), plan.capacity);
 }
 
 test "Plan rounds interval down for uneven divisions" {
     // 105 / 10 = 10 (integer division). Capacity = 105 / 10 + 1 = 11.
-    const plan = Plan.fromTotal(105, 10);
+    const plan = Plan.fromFrames(105, 10, .{});
     try testing.expectEqual(@as(u32, 10), plan.interval);
     try testing.expectEqual(@as(u32, 11), plan.capacity);
 }
 
 test "Plan with frames > steps yields interval 1" {
-    const plan = Plan.fromTotal(5, 10);
+    const plan = Plan.fromFrames(5, 10, .{});
     try testing.expectEqual(@as(u32, 1), plan.interval);
     try testing.expectEqual(@as(u32, 6), plan.capacity);
 }
 
 test "Plan saturating capacity does not overflow at u32_max" {
-    const plan = Plan.fromTotal(std.math.maxInt(u32), 1);
+    const plan = Plan.fromFrames(std.math.maxInt(u32), 1, .{});
     try testing.expectEqual(@as(u32, std.math.maxInt(u32)), plan.interval);
     try testing.expect(plan.capacity >= 1);
 }
 
+test "Plan.fromInterval adds final-only slot when requested" {
+    const plan = Plan.fromInterval(10, 4, .{ .emit_final = true });
+    try testing.expectEqual(@as(u32, 4), plan.interval);
+    try testing.expectEqual(@as(u32, 4), plan.capacity);
+    try testing.expect(plan.emit_final);
+}
+
 test "Series.dueAt returns true exactly at multiples of the interval" {
-    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromTotal(10, 5));
-    defer series.deinit();
+    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromFrames(10, 5, .{}));
+    defer {
+        series.finalized = true;
+        series.deinit();
+    }
     // interval = 2, capacity = 6
     try testing.expectEqual(@as(u32, 2), series.plan.interval);
-    try testing.expect(!series.dueAt(1));
-    try testing.expect(series.dueAt(2));
-    try testing.expect(!series.dueAt(3));
-    try testing.expect(series.dueAt(4));
-    try testing.expect(series.dueAt(10));
+    try testing.expect(!series.dueAt(1, 10));
+    try testing.expect(series.dueAt(2, 10));
+    try testing.expect(!series.dueAt(3, 10));
+    try testing.expect(series.dueAt(4, 10));
+    try testing.expect(series.dueAt(10, 10));
 }
 
 test "Series.dueAt returns false when disabled" {
-    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromTotal(10, 0));
+    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromFrames(10, 0, .{}));
     defer series.deinit();
     try testing.expect(!series.enabled());
-    try testing.expect(!series.dueAt(1));
-    try testing.expect(!series.dueAt(10));
+    try testing.expect(!series.dueAt(1, 10));
+    try testing.expect(!series.dueAt(10, 10));
 }
 
 test "Series.dueAt refuses captures past capacity" {
     // interval = 1, capacity = 4 (3 / 1 + 1)
-    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromTotal(3, 10));
-    defer series.deinit();
+    var series = try Series.init(testing.allocator, "/tmp", "fixture", Plan.fromFrames(3, 10, .{}));
+    defer {
+        series.finalized = true;
+        series.deinit();
+    }
     series.count = series.plan.capacity;
-    try testing.expect(!series.dueAt(1));
+    try testing.expect(!series.dueAt(1, 3));
 }

@@ -1,14 +1,13 @@
 const std = @import("std");
-const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
 
-pub const Mesh2D = flux.topology.Mesh(2, 2);
-pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
-const flux_io = flux.io;
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const operator_context_mod = flux.operators.context;
+
+pub const Mesh2D = flux.topology.Mesh(2, 2);
+pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
 
 const convergence_time = 0.02;
 
@@ -17,33 +16,30 @@ const InitialCondition = enum {
     sine_mode,
 };
 
-pub const Config = struct {
+pub const ConfigImpl = struct {
     grid: u32 = 8,
     steps: u32 = 8,
     domain: f64 = 1.0,
     dt_scale: f64 = 0.1,
-    /// Optional explicit timestep override. When set, takes precedence over
-    /// the `dt_scale * h^2` parabolic default. Plumbed through from the
-    /// shared `--dt` CLI flag.
     dt_override: ?f64 = null,
     output_dir: []const u8 = "output/heat",
     frames: u32 = 4,
 
-    pub fn dt(self: Config) f64 {
+    pub fn dt(self: ConfigImpl) f64 {
         if (self.dt_override) |value| return value;
         const h = self.domain / @as(f64, @floatFromInt(self.grid));
         return self.dt_scale * h * h;
     }
 };
 
-pub const RunResult = struct {
+pub const RunResultImpl = struct {
     elapsed_s: f64,
     steps: u32,
     snapshot_count: u32,
     l2_error: f64,
 };
 
-pub const ConvergenceResult = struct {
+pub const ConvergenceResultImpl = struct {
     grid: u32,
     l2_error: f64,
 };
@@ -139,12 +135,12 @@ const HeatSystem = struct {
     }
 };
 
-pub fn run(
+pub fn runImpl(
     allocator: std.mem.Allocator,
-    config: Config,
+    config: ConfigImpl,
     writer: anytype,
-) !RunResult {
-    const result = try simulateCase(allocator, config, .sine_mode, null);
+) !RunResultImpl {
+    const result = try simulateCase(allocator, config, .sine_mode, null, writer);
     try writer.print(
         "heat: grid={d} steps={d} dt={d:.6} l2_error={e}\n",
         .{ config.grid, config.steps, config.dt(), result.l2_error },
@@ -152,31 +148,31 @@ pub fn run(
     return result;
 }
 
-pub fn runConvergenceStudy(
+pub fn runConvergenceStudyImpl(
     allocator: std.mem.Allocator,
     grids: []const u32,
-) ![]ConvergenceResult {
-    const results = try allocator.alloc(ConvergenceResult, grids.len);
-    errdefer allocator.free(results);
+) ![]ConvergenceResultImpl {
+    const Runner = struct {
+        pub fn run(allocator_inner: std.mem.Allocator, grid: u32) !ConvergenceResultImpl {
+            const config = convergenceConfig(grid);
+            const run_result = try simulateCase(allocator_inner, config, .sine_mode, convergence_time, null);
+            return .{
+                .grid = grid,
+                .l2_error = run_result.l2_error,
+            };
+        }
+    };
 
-    for (grids, 0..) |grid, idx| {
-        const config = convergenceConfig(grid);
-        const run_result = try simulateCase(allocator, config, .sine_mode, convergence_time);
-        results[idx] = .{
-            .grid = grid,
-            .l2_error = run_result.l2_error,
-        };
-    }
-
-    return results;
+    return common.runConvergenceStudy(ConvergenceResultImpl, u32, allocator, grids, Runner{});
 }
 
 fn simulateCase(
     allocator: std.mem.Allocator,
-    config: Config,
+    config: ConfigImpl,
     initial_condition: InitialCondition,
     final_time_override: ?f64,
-) !RunResult {
+    progress_writer: ?*std.Io.Writer,
+) !RunResultImpl {
     std.debug.assert(config.grid > 0);
     std.debug.assert(config.steps > 0);
     std.debug.assert(config.domain > 0.0);
@@ -200,80 +196,49 @@ fn simulateCase(
     const exact = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(exact);
 
-    // Snapshot bookkeeping. The series carries an extra slot beyond the
-    // standard `(steps/interval)+1` because heat always emits a frame on
-    // the very last step even when it does not land on an interval boundary.
-    const has_output = config.frames > 0;
-    const interval: u32 = if (has_output) outputInterval(config) else 0;
-    const capacity: u32 = if (has_output) (config.steps / interval) + 2 else 0;
-    var series = try common.Series.init(
-        allocator,
-        config.output_dir,
-        "heat",
-        .{ .interval = interval, .capacity = capacity },
-    );
-    defer series.deinit();
-
-    if (series.enabled()) {
-        initializeState(&mesh, exact, initial_condition, 0.0);
-        try series.capture(0.0, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
-    }
-
     const reduced_rhs = try allocator.alloc(f64, heat_system.interior_vertices.len);
     defer allocator.free(reduced_rhs);
     const reduced_solution = try allocator.alloc(f64, heat_system.interior_vertices.len);
     defer allocator.free(reduced_solution);
     seedReducedSolution(&heat_system, state.values, reduced_solution);
 
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_idx| {
-        const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
-        try stepBackwardEuler(allocator, &mesh, &heat_system, state.values, reduced_rhs, reduced_solution);
-        const last_step = step_idx + 1 == config.steps;
-        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
-            initializeState(&mesh, exact, initial_condition, next_time);
-            try series.capture(next_time, HeatRenderer{ .mesh = &mesh, .state = state.values, .exact = exact });
-        }
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+    const loop_result = try common.runExactFieldLoop(
+        Mesh2D,
+        allocator,
+        &mesh,
+        state.values,
+        exact,
+        .{
+            .steps = config.steps,
+            .dt = dt,
+            .final_time = total_time,
+            .frames = config.frames,
+            .output_dir = config.output_dir,
+            .output_base_name = "heat",
+            .progress_writer = progress_writer,
+        },
+        HeatExactInitializer{ .initial_condition = initial_condition },
+        HeatStepper{
+            .mesh = &mesh,
+            .heat_system = &heat_system,
+            .state_values = state.values,
+            .reduced_rhs = reduced_rhs,
+            .reduced_solution = reduced_solution,
+        },
+    );
 
-    initializeState(&mesh, exact, initial_condition, total_time);
     const l2_error = weightedL2Error(&mesh, state.values, exact);
 
-    try series.finalize();
-
     return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .elapsed_s = loop_result.elapsed_s,
         .steps = config.steps,
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
         .l2_error = l2_error,
     };
 }
 
-/// Renders a single heat snapshot. The struct-with-method pattern is how
-/// callers smuggle context into `Series.capture` since Zig has no closures.
-const HeatRenderer = struct {
-    mesh: *const Mesh2D,
-    state: []const f64,
-    exact: []const f64,
-
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        const error_values = try allocator.alloc(f64, self.state.len);
-        defer allocator.free(error_values);
-        for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
-            error_value.* = approx_value - exact_value;
-        }
-        const point_data = [_]flux_io.DataArraySlice{
-            .{ .name = "temperature", .values = self.state },
-            .{ .name = "temperature_exact", .values = self.exact },
-            .{ .name = "temperature_error", .values = error_values },
-        };
-        try flux_io.write(writer, self.mesh.*, &point_data, &.{});
-    }
-};
-
-fn convergenceConfig(grid: u32) Config {
-    const probe = Config{ .grid = grid };
+fn convergenceConfig(grid: u32) ConfigImpl {
+    const probe = ConfigImpl{ .grid = grid };
     const dt_max = probe.dt();
     const step_count = @max(1, @as(u32, @intFromFloat(@ceil(convergence_time / dt_max))));
     return .{
@@ -284,11 +249,6 @@ fn convergenceConfig(grid: u32) Config {
         .frames = 0,
         .output_dir = "output/heat-convergence",
     };
-}
-
-fn outputInterval(config: Config) u32 {
-    std.debug.assert(config.frames > 0);
-    return @max(1, config.steps / config.frames);
 }
 
 fn boundaryVertexMask(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]bool {
@@ -323,6 +283,33 @@ fn seedReducedSolution(
     }
 }
 
+const HeatStepper = struct {
+    mesh: *const Mesh2D,
+    heat_system: *const HeatSystem,
+    state_values: []f64,
+    reduced_rhs: []f64,
+    reduced_solution: []f64,
+
+    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+        try stepBackwardEuler(
+            allocator,
+            self.mesh,
+            self.heat_system,
+            self.state_values,
+            self.reduced_rhs,
+            self.reduced_solution,
+        );
+    }
+};
+
+const HeatExactInitializer = struct {
+    initial_condition: InitialCondition,
+
+    pub fn fill(self: @This(), mesh: *const Mesh2D, values: []f64, time: f64) void {
+        initializeState(mesh, values, self.initial_condition, time);
+    }
+};
+
 fn stepBackwardEuler(
     allocator: std.mem.Allocator,
     mesh: *const Mesh2D,
@@ -353,9 +340,7 @@ fn stepBackwardEuler(
     if (!solve_result.converged) return error.ConjugateGradientDidNotConverge;
 
     for (heat_system.boundary_mask, 0..) |is_boundary, vertex_idx| {
-        if (is_boundary) {
-            state_values[vertex_idx] = 0.0;
-        }
+        if (is_boundary) state_values[vertex_idx] = 0.0;
     }
     for (heat_system.interior_vertices, 0..) |vertex_idx, interior_idx| {
         state_values[vertex_idx] = reduced_solution[interior_idx];
@@ -396,80 +381,4 @@ fn weightedL2Error(mesh: *const Mesh2D, approx: []const f64, exact: []const f64)
         measure += dual_volume;
     }
     return @sqrt(error_sq / measure);
-}
-
-test "heat zero initial data stays zero under backward Euler" {
-    const allocator = testing.allocator;
-    const config = Config{
-        .grid = 4,
-        .steps = 3,
-        .frames = 0,
-    };
-    const result = try simulateCase(allocator, config, .zero, 0.01);
-
-    try testing.expectApproxEqAbs(@as(f64, 0.0), result.l2_error, 1e-12);
-}
-
-test "heat convergence study reaches second-order spatial rate" {
-    const allocator = testing.allocator;
-    const grids = [_]u32{ 8, 16, 32 };
-    const results = try runConvergenceStudy(allocator, &grids);
-    defer allocator.free(results);
-
-    try testing.expectEqual(grids.len, results.len);
-    for (0..results.len - 1) |idx| {
-        const rate = std.math.log(f64, 2.0, results[idx].l2_error / results[idx + 1].l2_error);
-        try testing.expect(rate > 1.75);
-    }
-}
-
-test "heat example preserves homogeneous Dirichlet boundary values" {
-    const allocator = testing.allocator;
-    const config = Config{
-        .grid = 6,
-        .steps = 4,
-        .frames = 0,
-    };
-
-    var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
-    defer mesh.deinit(allocator);
-    const operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
-    defer operator_context.deinit();
-
-    const dt = config.dt();
-    var heat_system = try HeatSystem.init(allocator, &mesh, operator_context, dt);
-    defer heat_system.deinit(allocator);
-
-    var state = try VertexField.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    initializeState(&mesh, state.values, .sine_mode, 0.0);
-
-    const reduced_rhs = try allocator.alloc(f64, heat_system.interior_vertices.len);
-    defer allocator.free(reduced_rhs);
-    const reduced_solution = try allocator.alloc(f64, heat_system.interior_vertices.len);
-    defer allocator.free(reduced_solution);
-    seedReducedSolution(&heat_system, state.values, reduced_solution);
-
-    try stepBackwardEuler(allocator, &mesh, &heat_system, state.values, reduced_rhs, reduced_solution);
-    for (heat_system.boundary_mask, state.values) |is_boundary, value| {
-        if (is_boundary) {
-            try testing.expectApproxEqAbs(@as(f64, 0.0), value, 1e-12);
-        }
-    }
-}
-
-test "heat example runs as standalone binary configuration" {
-    const allocator = testing.allocator;
-    var log_buffer = std.ArrayListUnmanaged(u8){};
-    defer log_buffer.deinit(allocator);
-
-    const result = try run(allocator, .{
-        .grid = 4,
-        .steps = 2,
-        .frames = 0,
-        .output_dir = "output/heat-test",
-    }, log_buffer.writer(allocator));
-
-    try testing.expectEqual(@as(u32, 2), result.steps);
-    try testing.expect(result.elapsed_s >= 0.0);
 }

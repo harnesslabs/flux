@@ -1,3 +1,5 @@
+pub const obj = @import("obj.zig");
+
 const vtk = @import("vtk.zig");
 const vtk_fields = @import("vtk_fields.zig");
 const vtk_series = @import("vtk_series.zig");

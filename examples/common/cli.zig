@@ -35,6 +35,69 @@ pub const Common = struct {
     help: bool = false,
 };
 
+pub fn applySharedFields(cfg: anytype, common: Common) void {
+    if (common.steps) |value| assignIfPresent(cfg, "steps", value);
+    if (common.output_dir) |value| assignIfPresent(cfg, "output_dir", value);
+    if (common.frames) |value| assignIfPresent(cfg, "frames", value);
+    if (common.grid) |value| assignIfPresent(cfg, "grid", value);
+    if (common.domain) |value| assignIfPresent(cfg, "domain", value);
+    if (common.refinement) |value| assignIfPresent(cfg, "refinement", value);
+    if (common.final_time) |value| assignIfPresent(cfg, "final_time", value);
+}
+
+pub fn framesToInterval(total_steps: u32, frames: u32) u32 {
+    if (frames == 0) return 0;
+    return @max(@as(u32, 1), total_steps / frames);
+}
+
+pub fn tryBox3Flag(parser: *Parser, arg: []const u8, cfg: anytype) ParseError!bool {
+    if (eql(arg, "--nx")) {
+        assignIfPresent(cfg, "nx", try parser.parseU32("--nx"));
+        return true;
+    }
+    if (eql(arg, "--ny")) {
+        assignIfPresent(cfg, "ny", try parser.parseU32("--ny"));
+        return true;
+    }
+    if (eql(arg, "--nz")) {
+        assignIfPresent(cfg, "nz", try parser.parseU32("--nz"));
+        return true;
+    }
+    if (eql(arg, "--width")) {
+        assignIfPresent(cfg, "width", try parser.parseF64("--width"));
+        return true;
+    }
+    if (eql(arg, "--height")) {
+        assignIfPresent(cfg, "height", try parser.parseF64("--height"));
+        return true;
+    }
+    if (eql(arg, "--depth")) {
+        assignIfPresent(cfg, "depth", try parser.parseF64("--depth"));
+        return true;
+    }
+    if (eql(arg, "--output-interval")) {
+        assignIfPresent(cfg, "output_interval", try parser.parseU32("--output-interval"));
+        return true;
+    }
+    return false;
+}
+
+fn assignIfPresent(cfg: anytype, comptime field_name: []const u8, value: anytype) void {
+    const ConfigType = @TypeOf(cfg.*);
+    if (!@hasField(ConfigType, field_name)) return;
+
+    const FieldType = @FieldType(ConfigType, field_name);
+    const ValueType = @TypeOf(value);
+    if (FieldType == ValueType) {
+        @field(cfg, field_name) = value;
+        return;
+    }
+    if (FieldType == ?ValueType) {
+        @field(cfg, field_name) = value;
+        return;
+    }
+}
+
 /// Stateful argument cursor. Holds a slice of argv-style strings and an
 /// index. The parser does not own the storage — the caller (typically
 /// `std.process.argsAlloc`) is responsible for lifetime.
@@ -235,6 +298,39 @@ test "tryCommon returns false on unknown flag" {
     var parser = Parser.init(args);
     var common = Common{};
     try testing.expect(!try parser.tryCommon(parser.next().?, &common));
+}
+
+test "tryBox3Flag recognizes 3D box geometry flags" {
+    const args = makeArgs(&.{
+        "--nx",              "2",
+        "--ny",              "3",
+        "--nz",              "4",
+        "--width",           "1.5",
+        "--height",          "2.5",
+        "--depth",           "3.5",
+        "--output-interval", "7",
+    });
+    const Config = struct {
+        nx: u32 = 0,
+        ny: u32 = 0,
+        nz: u32 = 0,
+        width: f64 = 0.0,
+        height: f64 = 0.0,
+        depth: f64 = 0.0,
+        output_interval: u32 = 0,
+    };
+    var parser = Parser.init(args);
+    var config = Config{};
+    while (parser.next()) |arg| {
+        try testing.expect(try tryBox3Flag(&parser, arg, &config));
+    }
+    try testing.expectEqual(@as(u32, 2), config.nx);
+    try testing.expectEqual(@as(u32, 3), config.ny);
+    try testing.expectEqual(@as(u32, 4), config.nz);
+    try testing.expectEqual(@as(f64, 1.5), config.width);
+    try testing.expectEqual(@as(f64, 2.5), config.height);
+    try testing.expectEqual(@as(f64, 3.5), config.depth);
+    try testing.expectEqual(@as(u32, 7), config.output_interval);
 }
 
 test "tryCommon leaves untouched fields null" {

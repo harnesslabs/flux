@@ -60,13 +60,13 @@ algebra utilities. Foundation layer with no upward dependencies.
 **Description:** VTK export for visualization. Reads mesh and cochain data,
 writes `.vtu` files.
 
-### examples/maxwell_2d
+### examples
 **Domain label:** `domain/em`
-**Owns:** `examples/maxwell_2d/`
+**Owns:** `examples/maxwell/`, `examples/euler/`, `examples/diffusion/`, `examples/common/`, `examples/commands.zig`, `examples/app.zig`, `examples/acceptance.zig`
 **Dependencies:** flux library (via package import)
-**Description:** 2D electromagnetic simulation — Maxwell leapfrog integrator,
-cavity resonance and dipole radiation demos, convergence tests. Consumes flux
-as a Zig package dependency, proving the library API end-to-end.
+**Description:** End-to-end physics examples and their shared CLI/output
+infrastructure. Maxwell and Euler are dimension-dispatched from one module per
+physics family; diffusion dispatches plane versus sphere from one module.
 
 ### cli
 **Domain label:** `domain/build`
@@ -118,10 +118,10 @@ flowchart TD
     end
 
     subgraph "examples/"
-        maxwell_2d
+        examples_suite["maxwell / euler / diffusion"]
     end
 
-    flux_library["flux (package)"] --> maxwell_2d
+    flux_library["flux (package)"] --> examples_suite
 ```
 
 ## Usage

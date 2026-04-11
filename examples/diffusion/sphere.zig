@@ -1,9 +1,7 @@
 const std = @import("std");
-const testing = std.testing;
 const flux = @import("flux");
 const common = @import("examples_common");
 
-const flux_io = flux.io;
 const sparse = flux.math.sparse;
 const cg = flux.math.cg;
 const exterior_derivative = flux.operators.exterior_derivative;
@@ -11,9 +9,8 @@ const hodge_star = flux.operators.hodge_star;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
-pub const EdgeField = flux.forms.Cochain(SurfaceMesh, 1, flux.forms.Primal);
 
-pub const Config = struct {
+pub const ConfigImpl = struct {
     refinement: u32 = 0,
     steps: u32 = 8,
     dt_scale: f64 = 0.1,
@@ -21,20 +18,20 @@ pub const Config = struct {
     output_dir: []const u8 = "output/diffusion_surface",
     frames: u32 = 4,
 
-    pub fn timeStep(self: Config) f64 {
+    pub fn timeStep(self: ConfigImpl) f64 {
         std.debug.assert(self.steps > 0);
         return self.final_time / @as(f64, @floatFromInt(self.steps));
     }
 };
 
-pub const RunResult = struct {
+pub const RunResultImpl = struct {
     elapsed_s: f64,
     steps: u32,
     snapshot_count: u32,
     l2_error: f64,
 };
 
-pub const ConvergenceResult = struct {
+pub const ConvergenceResultImpl = struct {
     refinement: u32,
     l2_error: f64,
 };
@@ -56,10 +53,7 @@ const SurfaceSystem = struct {
         const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
         errdefer allocator.free(masses);
 
-        var assembler = sparse.TripletAssembler(f64).init(
-            mesh.num_vertices(),
-            mesh.num_vertices(),
-        );
+        var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
         defer assembler.deinit(allocator);
 
         for (masses, 0..) |mass, row_idx| {
@@ -100,12 +94,12 @@ const SurfaceSystem = struct {
     }
 };
 
-pub fn run(
+pub fn runImpl(
     allocator: std.mem.Allocator,
-    config: Config,
+    config: ConfigImpl,
     writer: anytype,
-) !RunResult {
-    const result = try simulateCase(allocator, config);
+) !RunResultImpl {
+    const result = try simulateCase(allocator, config, writer);
     try writer.print(
         "diffusion_surface: refinement={d} steps={d} dt={d:.6} l2_error={e}\n",
         .{ config.refinement, result.steps, config.timeStep(), result.l2_error },
@@ -113,29 +107,29 @@ pub fn run(
     return result;
 }
 
-pub fn runConvergenceStudy(
+pub fn runConvergenceStudyImpl(
     allocator: std.mem.Allocator,
     refinements: []const u32,
-) ![]ConvergenceResult {
-    const results = try allocator.alloc(ConvergenceResult, refinements.len);
-    errdefer allocator.free(results);
+) ![]ConvergenceResultImpl {
+    const Runner = struct {
+        pub fn run(allocator_inner: std.mem.Allocator, refinement: u32) !ConvergenceResultImpl {
+            const config = convergenceConfig(refinement);
+            const run_result = try simulateCase(allocator_inner, config, null);
+            return .{
+                .refinement = refinement,
+                .l2_error = run_result.l2_error,
+            };
+        }
+    };
 
-    for (refinements, 0..) |refinement, idx| {
-        const config = convergenceConfig(refinement);
-        const run_result = try simulateCase(allocator, config);
-        results[idx] = .{
-            .refinement = refinement,
-            .l2_error = run_result.l2_error,
-        };
-    }
-
-    return results;
+    return common.runConvergenceStudy(ConvergenceResultImpl, u32, allocator, refinements, Runner{});
 }
 
 fn simulateCase(
     allocator: std.mem.Allocator,
-    config: Config,
-) !RunResult {
+    config: ConfigImpl,
+    progress_writer: ?*std.Io.Writer,
+) !RunResultImpl {
     std.debug.assert(config.steps > 0);
     std.debug.assert(config.dt_scale > 0.0);
     std.debug.assert(config.final_time > 0.0);
@@ -154,88 +148,47 @@ fn simulateCase(
     const exact = try allocator.alloc(f64, mesh.num_vertices());
     defer allocator.free(exact);
 
-    const has_output = config.frames > 0;
-    const plan: common.Plan = if (has_output) blk: {
-        const interval = outputInterval(config);
-        // +2 capacity: one for the t=0 frame and one to guarantee a final
-        // frame even when the last step is not on an interval boundary.
-        break :blk .{ .interval = interval, .capacity = (config.steps / interval) + 2 };
-    } else .{ .interval = 0, .capacity = 0 };
-
-    var series = try common.Series.init(
-        allocator,
-        config.output_dir,
-        "diffusion_surface",
-        plan,
-    );
-    defer series.deinit();
-
-    if (series.enabled()) {
-        initializeState(&mesh, exact, 0.0);
-        try series.capture(0.0, SurfaceRenderer{
-            .mesh = &mesh,
-            .state = state.values,
-            .exact = exact,
-        });
-    }
-
     const rhs = try allocator.alloc(f64, state.values.len);
     defer allocator.free(rhs);
     const solution = try allocator.alloc(f64, state.values.len);
     defer allocator.free(solution);
     @memcpy(solution, state.values);
 
-    const start_ns = std.time.nanoTimestamp();
-    for (0..config.steps) |step_idx| {
-        const next_time = dt * @as(f64, @floatFromInt(step_idx + 1));
-        try stepBackwardEuler(&system, state.values, rhs, solution);
-        const last_step = step_idx + 1 == config.steps;
-        if (series.enabled() and (series.dueAt(@intCast(step_idx + 1)) or last_step)) {
-            initializeState(&mesh, exact, next_time);
-            try series.capture(next_time, SurfaceRenderer{
-                .mesh = &mesh,
-                .state = state.values,
-                .exact = exact,
-            });
-        }
-    }
-    const elapsed_ns = std.time.nanoTimestamp() - start_ns;
+    const loop_result = try common.runExactFieldLoop(
+        SurfaceMesh,
+        allocator,
+        &mesh,
+        state.values,
+        exact,
+        .{
+            .steps = config.steps,
+            .dt = dt,
+            .final_time = config.final_time,
+            .frames = config.frames,
+            .output_dir = config.output_dir,
+            .output_base_name = "diffusion_surface",
+            .progress_writer = progress_writer,
+        },
+        ExactInitializer{},
+        Stepper{
+            .system = &system,
+            .state_values = state.values,
+            .rhs = rhs,
+            .solution = solution,
+        },
+    );
 
-    initializeState(&mesh, exact, config.final_time);
     const l2_error = weightedL2Error(&mesh, state.values, exact);
 
-    try series.finalize();
-
     return .{
-        .elapsed_s = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000_000.0,
+        .elapsed_s = loop_result.elapsed_s,
         .steps = config.steps,
-        .snapshot_count = series.count,
+        .snapshot_count = loop_result.snapshot_count,
         .l2_error = l2_error,
     };
 }
 
-const SurfaceRenderer = struct {
-    mesh: *const SurfaceMesh,
-    state: []const f64,
-    exact: []const f64,
-
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        const error_values = try allocator.alloc(f64, self.state.len);
-        defer allocator.free(error_values);
-        for (self.state, self.exact, error_values) |approx_value, exact_value, *error_value| {
-            error_value.* = approx_value - exact_value;
-        }
-
-        const point_data = [_]flux_io.DataArraySlice{
-            .{ .name = "temperature", .values = self.state },
-            .{ .name = "temperature_exact", .values = self.exact },
-            .{ .name = "temperature_error", .values = error_values },
-        };
-        try flux_io.write(writer, self.mesh.*, &point_data, &.{});
-    }
-};
-
-fn convergenceConfig(refinement: u32) Config {
+fn convergenceConfig(refinement: u32) ConfigImpl {
     const steps = 24 * std.math.pow(u32, 4, refinement);
     return .{
         .refinement = refinement,
@@ -245,11 +198,6 @@ fn convergenceConfig(refinement: u32) Config {
         .frames = 0,
         .output_dir = "output/diffusion_surface_convergence",
     };
-}
-
-fn outputInterval(config: Config) u32 {
-    std.debug.assert(config.frames > 0);
-    return @max(1, config.steps / config.frames);
 }
 
 fn buildSphereMesh(
@@ -439,6 +387,24 @@ fn stepBackwardEuler(
     @memcpy(state_values, solution);
 }
 
+const Stepper = struct {
+    system: *SurfaceSystem,
+    state_values: []f64,
+    rhs: []f64,
+    solution: []f64,
+
+    pub fn step(self: @This(), allocator: std.mem.Allocator) !void {
+        _ = allocator;
+        try stepBackwardEuler(self.system, self.state_values, self.rhs, self.solution);
+    }
+};
+
+const ExactInitializer = struct {
+    pub fn fill(_: @This(), mesh: *const SurfaceMesh, values: []f64, time: f64) void {
+        initializeState(mesh, values, time);
+    }
+};
+
 fn assembleLumpedSurfaceMasses(
     allocator: std.mem.Allocator,
     mesh: *const SurfaceMesh,
@@ -543,32 +509,3 @@ const initial_octahedron_faces = [_][3]u32{
     .{ 3, 5, 1 },
     .{ 0, 5, 3 },
 };
-
-test "surface diffusion error decreases under sphere refinement" {
-    const allocator = testing.allocator;
-    const refinements = [_]u32{ 1, 2, 3 };
-
-    const results = try runConvergenceStudy(allocator, &refinements);
-    defer allocator.free(results);
-
-    try testing.expectEqual(refinements.len, results.len);
-    try testing.expect(results[1].l2_error < results[0].l2_error);
-    try testing.expect(results[2].l2_error < results[1].l2_error);
-    try testing.expect(results[2].l2_error < 1e-3);
-}
-
-test "surface diffusion example runs as standalone binary configuration" {
-    const allocator = testing.allocator;
-    var log_buffer = std.ArrayListUnmanaged(u8){};
-    defer log_buffer.deinit(allocator);
-
-    const result = try run(allocator, .{
-        .refinement = 0,
-        .steps = 2,
-        .frames = 0,
-        .output_dir = "output/diffusion-surface-test",
-    }, log_buffer.writer(allocator));
-
-    try testing.expectEqual(@as(u32, 2), result.steps);
-    try testing.expect(result.elapsed_s >= 0.0);
-}

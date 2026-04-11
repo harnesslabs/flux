@@ -523,9 +523,10 @@ without freezing that policy into `Mesh` now.
 
 **Decision:** Every example is exposed as a subcommand of one binary,
 `flux-examples`, instead of one executable per physics demo. The umbrella's
-root file (`examples/main.zig`) imports each `examples/<name>/cli.zig`
-relatively, dispatching by subcommand name. A shared `examples_common`
-module (`examples/common/{cli,snapshot,progress}.zig`) provides:
+root file (`examples/main.zig`) imports one dispatcher module
+(`examples/commands.zig`), which in turn imports the physics modules by name
+and dispatches by subcommand name. A shared `examples_common` module
+(`examples/common/{cli,snapshot,progress}.zig`) provides:
 - a `Common` parser recognizing `--steps`, `--dt`, `--output`, `--frames`,
   `--grid`, `--domain`, `--refinement`, `--final-time`, `--help`;
 - a `Series` snapshot writer that owns PVD bookkeeping and accepts a
