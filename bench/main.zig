@@ -5,25 +5,27 @@
 //! and machine-readable JSON formats.
 //!
 //! Usage:
-//!   zig build bench                    — run benchmarks, print results
-//!   zig build bench -- --check         — compare against baselines, exit 1 on regression
-//!   zig build bench -- --update        — run benchmarks and overwrite baselines.json
+//!   zig build bench                    — run default benchmarks, print results
+//!   zig build bench -- --check         — compare default suite against baselines, exit 1 on regression
+//!   zig build bench -- --update        — run default suite and overwrite baselines.json
 //!   zig build bench -- --json          — print JSON to stdout (default: table to stderr)
+//!   zig build bench -- --compare       — run same-run implementation comparisons
 
 const std = @import("std");
 const builtin = @import("builtin");
 const flux = @import("flux");
 const maxwell = @import("maxwell_example");
-const sparse = flux.math.sparse;
-const cg = flux.math.cg;
+const diffusion_sphere = @import("diffusion_sphere_example");
 /// Version of the benchmark result file schema.
-const benchmark_suite_version: u32 = 3;
+const benchmark_suite_version: u32 = 4;
 /// Version for operator and end-to-end rows after switching to calibrated samples.
 const stable_benchmark_method_version: u32 = 2;
 /// Version for tiny cochain microbenchmarks after switching to calibrated samples.
 const micro_benchmark_method_version: u32 = 3;
-/// Version for arithmetic scalar-vs-default comparisons after switching to calibrated samples.
-const arithmetic_benchmark_method_version: u32 = 2;
+/// Version for arithmetic scalar-vs-default comparisons after switching to interleaved same-run samples.
+const arithmetic_benchmark_method_version: u32 = 3;
+/// Version for incidence compare rows after switching to interleaved same-run samples.
+const incidence_compare_method_version: u32 = 2;
 
 const Mesh2D = flux.topology.Mesh(2, 2);
 const SurfaceMesh = flux.topology.Mesh(3, 2);
@@ -102,12 +104,24 @@ const BenchmarkClass = enum {
     info,
 };
 
+const BenchmarkScope = enum {
+    public_library,
+    shipped_example,
+    compare_experiment,
+};
+
+const BenchmarkMode = enum {
+    default,
+    compare,
+};
+
 const BenchmarkDef = struct {
     name: []const u8,
     run: BenchmarkFn,
     minimum_repetitions: u32 = 1,
     version: u32 = stable_benchmark_method_version,
     class: BenchmarkClass = .gate,
+    scope: BenchmarkScope,
 };
 
 const BenchmarkResult = struct {
@@ -121,8 +135,33 @@ const BenchmarkResult = struct {
     iterations: u32,
 };
 
+const ArithmeticOperation = enum {
+    add,
+    scale,
+    negate,
+    inner_product,
+};
+
+const ArithmeticCompareDef = struct {
+    name: []const u8,
+    operation: ArithmeticOperation,
+    case_index: usize,
+    version: u32 = arithmetic_benchmark_method_version,
+    scope: BenchmarkScope = .compare_experiment,
+};
+
+const ArithmeticComparisonResult = struct {
+    name: []const u8,
+    operation: ArithmeticOperation,
+    case_label: []const u8,
+    version: u32,
+    scalar_median_ns: u64,
+    default_median_ns: u64,
+};
+
 const IncidenceComparisonResult = struct {
     name: []const u8,
+    version: u32 = incidence_compare_method_version,
     nnz: u32,
     dense_value_bytes: usize,
     generic_packed_value_bytes: usize,
@@ -130,6 +169,13 @@ const IncidenceComparisonResult = struct {
     dense_median_ns: u64,
     generic_packed_median_ns: u64,
     specialized_median_ns: u64,
+};
+
+const BenchmarkArgs = struct {
+    mode: BenchmarkMode = .default,
+    check_mode: bool = false,
+    update_mode: bool = false,
+    json_mode: bool = false,
 };
 
 const ArithmeticCase = struct {
@@ -322,87 +368,6 @@ fn buildEmbeddedSurfacePatch(allocator: std.mem.Allocator, nx: u32, ny: u32) !Su
     return SurfaceMesh.from_triangles(allocator, vertices, faces);
 }
 
-const BenchmarkSurfaceSystem = struct {
-    operator_context: *SurfaceOperatorContext,
-    system_matrix: sparse.CsrMatrix(f64),
-    masses: []f64,
-    diagonal: []f64,
-    scratch: cg.Scratch,
-
-    fn init(allocator: std.mem.Allocator, mesh: *const SurfaceMesh, dt: f64) !BenchmarkSurfaceSystem {
-        const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
-        errdefer operator_context.deinit();
-        const stiffness = (try operator_context.laplacian(0)).stiffness;
-
-        const masses = try assembleLumpedSurfaceMasses(allocator, mesh);
-        errdefer allocator.free(masses);
-
-        var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
-        defer assembler.deinit(allocator);
-
-        for (masses, 0..) |mass, row_idx| {
-            try assembler.addEntry(allocator, @intCast(row_idx), @intCast(row_idx), mass);
-
-            const row = stiffness.row(@intCast(row_idx));
-            for (row.cols, row.vals) |col_idx, value| {
-                try assembler.addEntry(allocator, @intCast(row_idx), col_idx, dt * value);
-            }
-        }
-
-        var system_matrix = try assembler.build(allocator);
-        errdefer system_matrix.deinit(allocator);
-
-        const diagonal = try allocator.alloc(f64, masses.len);
-        errdefer allocator.free(diagonal);
-        for (0..masses.len) |row_idx| {
-            diagonal[row_idx] = diagonalEntry(system_matrix, @intCast(row_idx));
-            std.debug.assert(diagonal[row_idx] > 0.0);
-        }
-
-        var scratch = try cg.Scratch.init(allocator, mesh.num_vertices());
-        errdefer scratch.deinit(allocator);
-
-        return .{
-            .operator_context = operator_context,
-            .system_matrix = system_matrix,
-            .masses = masses,
-            .diagonal = diagonal,
-            .scratch = scratch,
-        };
-    }
-
-    fn deinit(self: *BenchmarkSurfaceSystem, allocator: std.mem.Allocator) void {
-        self.scratch.deinit(allocator);
-        allocator.free(self.diagonal);
-        allocator.free(self.masses);
-        self.system_matrix.deinit(allocator);
-        self.operator_context.deinit();
-    }
-};
-
-fn assembleLumpedSurfaceMasses(allocator: std.mem.Allocator, mesh: *const SurfaceMesh) ![]f64 {
-    const masses = try allocator.alloc(f64, mesh.num_vertices());
-    @memset(masses, 0.0);
-
-    const face_vertices = mesh.simplices(2).items(.vertices);
-    const face_areas = mesh.simplices(2).items(.volume);
-    for (face_vertices, face_areas) |face, area| {
-        const lumped = area / 3.0;
-        masses[face[0]] += lumped;
-        masses[face[1]] += lumped;
-        masses[face[2]] += lumped;
-    }
-    return masses;
-}
-
-fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
-    const row = matrix.row(row_idx);
-    for (row.cols, row.vals) |col_idx, value| {
-        if (col_idx == row_idx) return value;
-    }
-    unreachable;
-}
-
 fn addScalarLoop(lhs: []f64, rhs: []const f64) void {
     for (lhs, rhs) |*left, right| {
         left.* += right;
@@ -568,34 +533,6 @@ fn buildBoundary3LikeMatrix(allocator: std.mem.Allocator, row_count: u32) !flux.
     return boundary;
 }
 
-fn timeDenseTransposeMultiply(
-    matrix: flux.math.sparse.CsrMatrix(i8),
-    input: []const f64,
-    output: []f64,
-) !u64 {
-    var timings: [incidence_measured_iterations]u64 = undefined;
-    for (&timings) |*timing| {
-        @memset(output, 0.0);
-        var timer = try std.time.Timer.start();
-        matrix.transpose_multiply(input, output);
-        timing.* = timer.read();
-    }
-    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
-    return timings[incidence_measured_iterations / 2];
-}
-
-fn timeSpecializedTransposeMultiply(matrix: anytype, input: []const f64, output: []f64) !u64 {
-    var timings: [incidence_measured_iterations]u64 = undefined;
-    for (&timings) |*timing| {
-        @memset(output, 0.0);
-        var timer = try std.time.Timer.start();
-        matrix.transpose_multiply(input, output);
-        timing.* = timer.read();
-    }
-    std.mem.sortUnstable(u64, &timings, {}, std.sort.asc(u64));
-    return timings[incidence_measured_iterations / 2];
-}
-
 fn compareIncidenceTransposeMultiply(
     allocator: std.mem.Allocator,
     name: []const u8,
@@ -626,9 +563,47 @@ fn compareIncidenceTransposeMultiply(
         specialized_matrix.transpose_multiply(input, specialized_output);
     }
 
-    const dense_median_ns = try timeDenseTransposeMultiply(matrix, input, dense_output);
-    const generic_packed_median_ns = try timeSpecializedTransposeMultiply(generic_matrix, input, generic_output);
-    const specialized_median_ns = try timeSpecializedTransposeMultiply(specialized_matrix, input, specialized_output);
+    var dense_timings: [incidence_measured_iterations]u64 = undefined;
+    var generic_timings: [incidence_measured_iterations]u64 = undefined;
+    var specialized_timings: [incidence_measured_iterations]u64 = undefined;
+    for (0..incidence_measured_iterations) |sample_idx| {
+        const order = switch (sample_idx % 3) {
+            0 => [_]u2{ 0, 1, 2 },
+            1 => [_]u2{ 1, 2, 0 },
+            else => [_]u2{ 2, 0, 1 },
+        };
+        for (order) |variant_idx| {
+            switch (variant_idx) {
+                0 => {
+                    @memset(dense_output, 0.0);
+                    var timer = try std.time.Timer.start();
+                    matrix.transpose_multiply(input, dense_output);
+                    dense_timings[sample_idx] = timer.read();
+                },
+                1 => {
+                    @memset(generic_output, 0.0);
+                    var timer = try std.time.Timer.start();
+                    generic_matrix.transpose_multiply(input, generic_output);
+                    generic_timings[sample_idx] = timer.read();
+                },
+                2 => {
+                    @memset(specialized_output, 0.0);
+                    var timer = try std.time.Timer.start();
+                    specialized_matrix.transpose_multiply(input, specialized_output);
+                    specialized_timings[sample_idx] = timer.read();
+                },
+                else => unreachable,
+            }
+        }
+    }
+
+    std.mem.sortUnstable(u64, &dense_timings, {}, std.sort.asc(u64));
+    std.mem.sortUnstable(u64, &generic_timings, {}, std.sort.asc(u64));
+    std.mem.sortUnstable(u64, &specialized_timings, {}, std.sort.asc(u64));
+
+    const dense_median_ns = dense_timings[incidence_measured_iterations / 2];
+    const generic_packed_median_ns = generic_timings[incidence_measured_iterations / 2];
+    const specialized_median_ns = specialized_timings[incidence_measured_iterations / 2];
 
     for (dense_output, generic_output) |expected, actual| {
         try std.testing.expectApproxEqAbs(expected, actual, 1e-12);
@@ -787,147 +762,41 @@ fn benchSurfaceLaplacianAssemblyDirect(ctx: *BenchmarkContext) void {
 }
 
 fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
-    const dt = diffusion_surface_final_time / @as(f64, diffusion_surface_steps);
+    const dt = diffusion_surface_final_time / @as(f64, @floatFromInt(diffusion_surface_steps));
     var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
     defer mesh.deinit(ctx.allocator);
 
-    var system = BenchmarkSurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
+    var system = diffusion_sphere.SurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
     defer system.deinit(ctx.allocator);
 }
 
-fn benchArithmeticAddScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    addScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values);
-}
-
-fn benchArithmeticAdd(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    arithmetic_case.lhs.add(arithmetic_case.rhs);
-}
-
-fn benchArithmeticScaleScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    scaleScalarLoop(arithmetic_case.lhs.values, arithmetic_scale_factor);
-}
-
-fn benchArithmeticScale(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    arithmetic_case.lhs.scale(arithmetic_scale_factor);
-}
-
-fn benchArithmeticNegateScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    negateScalarLoop(arithmetic_case.lhs.values);
-}
-
-fn benchArithmeticNegate(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    arithmetic_case.lhs.negate();
-}
-
-fn benchArithmeticInnerProductScalar(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    const result = innerProductScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values);
-    std.mem.doNotOptimizeAway(result);
-}
-
-fn benchArithmeticInnerProduct(comptime case_index: usize, ctx: *BenchmarkContext) void {
-    const arithmetic_case = &ctx.arithmetic_cases[case_index];
-    const result = arithmetic_case.lhs.inner_product(arithmetic_case.rhs);
-    std.mem.doNotOptimizeAway(result);
-}
-
-fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
-    var defs: [arithmetic_case_lengths.len * 8]BenchmarkDef = undefined;
+fn arithmeticCompareDefs() [arithmetic_case_lengths.len * 4]ArithmeticCompareDef {
+    var defs: [arithmetic_case_lengths.len * 4]ArithmeticCompareDef = undefined;
     var i = 0;
 
     inline for (arithmetic_case_labels, 0..) |label, case_index| {
         defs[i] = .{
-            .name = std.fmt.comptimePrint("cochain_add_scalar_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticAddScalar(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
-        };
-        i += 1;
-        defs[i] = .{
             .name = std.fmt.comptimePrint("cochain_add_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticAdd(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
-        };
-        i += 1;
-        defs[i] = .{
-            .name = std.fmt.comptimePrint("cochain_scale_scalar_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticScaleScalar(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
+            .operation = .add,
+            .case_index = case_index,
         };
         i += 1;
         defs[i] = .{
             .name = std.fmt.comptimePrint("cochain_scale_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticScale(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
-        };
-        i += 1;
-        defs[i] = .{
-            .name = std.fmt.comptimePrint("cochain_negate_scalar_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticNegateScalar(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
+            .operation = .scale,
+            .case_index = case_index,
         };
         i += 1;
         defs[i] = .{
             .name = std.fmt.comptimePrint("cochain_negate_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticNegate(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
-        };
-        i += 1;
-        defs[i] = .{
-            .name = std.fmt.comptimePrint("cochain_inner_product_scalar_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticInnerProductScalar(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
+            .operation = .negate,
+            .case_index = case_index,
         };
         i += 1;
         defs[i] = .{
             .name = std.fmt.comptimePrint("cochain_inner_product_{s}", .{label}),
-            .run = struct {
-                fn call(ctx: *BenchmarkContext) void {
-                    benchArithmeticInnerProduct(case_index, ctx);
-                }
-            }.call,
-            .version = arithmetic_benchmark_method_version,
-            .class = .info,
+            .operation = .inner_product,
+            .case_index = case_index,
         };
         i += 1;
     }
@@ -935,23 +804,24 @@ fn arithmeticBenchmarks() [arithmetic_case_lengths.len * 8]BenchmarkDef {
     return defs;
 }
 
-const arithmetic_benchmarks = arithmeticBenchmarks();
+const arithmetic_compare_defs = arithmeticCompareDefs();
 
-const base_benchmarks = [_]BenchmarkDef{
-    .{ .name = "exterior_derivative_d0", .run = benchExteriorDerivativeD0 },
-    .{ .name = "exterior_derivative_d1", .run = benchExteriorDerivativeD1 },
-    .{ .name = "hodge_star_0", .run = benchHodgeStar0 },
-    .{ .name = "hodge_star_1_whitney", .run = benchHodgeStar1 },
-    .{ .name = "hodge_star_2", .run = benchHodgeStar2 },
-    .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1 },
-    .{ .name = "laplacian_0", .run = benchLaplacian0 },
-    .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed },
+const default_benchmarks = [_]BenchmarkDef{
+    .{ .name = "exterior_derivative_d0", .run = benchExteriorDerivativeD0, .scope = .public_library },
+    .{ .name = "exterior_derivative_d1", .run = benchExteriorDerivativeD1, .scope = .public_library },
+    .{ .name = "hodge_star_0", .run = benchHodgeStar0, .scope = .public_library },
+    .{ .name = "hodge_star_1_whitney", .run = benchHodgeStar1, .scope = .public_library },
+    .{ .name = "hodge_star_2", .run = benchHodgeStar2, .scope = .public_library },
+    .{ .name = "hodge_star_inverse_1_cg", .run = benchHodgeStarInverse1, .scope = .public_library },
+    .{ .name = "laplacian_0", .run = benchLaplacian0, .scope = .public_library },
+    .{ .name = "laplacian_0_composed", .run = benchLaplacian0Composed, .scope = .public_library },
     .{
         .name = "cochain_add",
         .run = benchCochainAdd,
         .minimum_repetitions = small_cochain_repetitions,
         .version = micro_benchmark_method_version,
         .class = .info,
+        .scope = .public_library,
     },
     .{
         .name = "cochain_scale",
@@ -959,6 +829,7 @@ const base_benchmarks = [_]BenchmarkDef{
         .minimum_repetitions = small_cochain_repetitions,
         .version = micro_benchmark_method_version,
         .class = .info,
+        .scope = .public_library,
     },
     .{
         .name = "cochain_negate",
@@ -966,6 +837,7 @@ const base_benchmarks = [_]BenchmarkDef{
         .minimum_repetitions = small_cochain_repetitions,
         .version = micro_benchmark_method_version,
         .class = .info,
+        .scope = .public_library,
     },
     .{
         .name = "cochain_inner_product",
@@ -973,21 +845,22 @@ const base_benchmarks = [_]BenchmarkDef{
         .minimum_repetitions = small_cochain_repetitions,
         .version = micro_benchmark_method_version,
         .class = .info,
+        .scope = .public_library,
     },
-    .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256 },
+    .{ .name = "maxwell_cavity_step_256", .run = benchMaxwellCavityStep256, .scope = .shipped_example },
     .{
         .name = "surface_laplacian_0_assembly_direct",
         .run = benchSurfaceLaplacianAssemblyDirect,
         .class = .info,
+        .scope = .public_library,
     },
     .{
         .name = "diffusion_surface_system_init",
         .run = benchDiffusionSurfaceSystemInit,
         .class = .info,
+        .scope = .shipped_example,
     },
 };
-
-const all_benchmarks = base_benchmarks ++ arithmetic_benchmarks;
 
 // ── Runner ──────────────────────────────────────────────────────────────
 
@@ -1040,6 +913,111 @@ fn calibrateRepetitions(def: BenchmarkDef, ctx: *BenchmarkContext) u32 {
         const doubled = @as(u64, repetitions) * 2;
         repetitions = @intCast(@min(doubled, max_sample_repetitions));
     }
+}
+
+fn operationLabel(operation: ArithmeticOperation) []const u8 {
+    return switch (operation) {
+        .add => "add",
+        .scale => "scale",
+        .negate => "negate",
+        .inner_product => "inner_product",
+    };
+}
+
+const ArithmeticVariant = enum {
+    scalar,
+    default_impl,
+};
+
+fn resetArithmeticCase(arithmetic_case: *ArithmeticCase, lhs_seed: []const f64, rhs_seed: []const f64) void {
+    @memcpy(arithmetic_case.lhs.values, lhs_seed);
+    @memcpy(arithmetic_case.rhs.values, rhs_seed);
+}
+
+fn runArithmeticVariant(
+    arithmetic_case: *ArithmeticCase,
+    operation: ArithmeticOperation,
+    variant: ArithmeticVariant,
+) void {
+    switch (operation) {
+        .add => switch (variant) {
+            .scalar => addScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values),
+            .default_impl => arithmetic_case.lhs.add(arithmetic_case.rhs),
+        },
+        .scale => switch (variant) {
+            .scalar => scaleScalarLoop(arithmetic_case.lhs.values, arithmetic_scale_factor),
+            .default_impl => arithmetic_case.lhs.scale(arithmetic_scale_factor),
+        },
+        .negate => switch (variant) {
+            .scalar => negateScalarLoop(arithmetic_case.lhs.values),
+            .default_impl => arithmetic_case.lhs.negate(),
+        },
+        .inner_product => {
+            const result = switch (variant) {
+                .scalar => innerProductScalarLoop(arithmetic_case.lhs.values, arithmetic_case.rhs.values),
+                .default_impl => arithmetic_case.lhs.inner_product(arithmetic_case.rhs),
+            };
+            std.mem.doNotOptimizeAway(result);
+        },
+    }
+}
+
+fn measureArithmeticComparison(def: ArithmeticCompareDef, ctx: *BenchmarkContext) !ArithmeticComparisonResult {
+    const arithmetic_case = &ctx.arithmetic_cases[def.case_index];
+    const lhs_seed = try ctx.allocator.dupe(f64, arithmetic_case.lhs.values);
+    defer ctx.allocator.free(lhs_seed);
+    const rhs_seed = try ctx.allocator.dupe(f64, arithmetic_case.rhs.values);
+    defer ctx.allocator.free(rhs_seed);
+
+    for (0..warmup_iterations) |warmup_idx| {
+        const variants = if (warmup_idx % 2 == 0)
+            [_]ArithmeticVariant{ .scalar, .default_impl }
+        else
+            [_]ArithmeticVariant{ .default_impl, .scalar };
+        for (variants) |variant| {
+            resetArithmeticCase(arithmetic_case, lhs_seed, rhs_seed);
+            runArithmeticVariant(arithmetic_case, def.operation, variant);
+        }
+    }
+
+    var scalar_timings: [measured_iterations]u64 = undefined;
+    var default_timings: [measured_iterations]u64 = undefined;
+    for (0..measured_iterations) |sample_idx| {
+        const variants = if (sample_idx % 2 == 0)
+            [_]ArithmeticVariant{ .scalar, .default_impl }
+        else
+            [_]ArithmeticVariant{ .default_impl, .scalar };
+        for (variants) |variant| {
+            resetArithmeticCase(arithmetic_case, lhs_seed, rhs_seed);
+            var timer = try std.time.Timer.start();
+            runArithmeticVariant(arithmetic_case, def.operation, variant);
+            const elapsed_ns = timer.read();
+            switch (variant) {
+                .scalar => scalar_timings[sample_idx] = elapsed_ns,
+                .default_impl => default_timings[sample_idx] = elapsed_ns,
+            }
+        }
+    }
+
+    std.mem.sortUnstable(u64, &scalar_timings, {}, std.sort.asc(u64));
+    std.mem.sortUnstable(u64, &default_timings, {}, std.sort.asc(u64));
+
+    return .{
+        .name = def.name,
+        .operation = def.operation,
+        .case_label = arithmetic_case_labels[def.case_index],
+        .version = def.version,
+        .scalar_median_ns = scalar_timings[measured_iterations / 2],
+        .default_median_ns = default_timings[measured_iterations / 2],
+    };
+}
+
+fn runArithmeticCompareBenchmarks(ctx: *BenchmarkContext) ![arithmetic_compare_defs.len]ArithmeticComparisonResult {
+    var results: [arithmetic_compare_defs.len]ArithmeticComparisonResult = undefined;
+    for (arithmetic_compare_defs, 0..) |def, i| {
+        results[i] = try measureArithmeticComparison(def, ctx);
+    }
+    return results;
 }
 
 // ── Baseline I/O ────────────────────────────────────────────────────────
@@ -1162,39 +1140,32 @@ fn printTable(
     try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
 }
 
-fn findResult(results: []const BenchmarkResult, name: []const u8) ?BenchmarkResult {
+fn printArithmeticComparisons(writer: anytype, results: []const ArithmeticComparisonResult) !void {
+    try writer.writeAll("  Arithmetic same-run comparisons (default cochain path vs scalar loop)\n");
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────────────\n");
+    try writer.print("  {s:<16} {s:<8} {s:>12} {s:>12} {s:>10}\n", .{
+        "operation",
+        "case",
+        "scalar",
+        "default",
+        "speedup",
+    });
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────────────\n");
+
     for (results) |result| {
-        if (std.mem.eql(u8, result.name, name)) return result;
-    }
-    return null;
-}
-
-fn printArithmeticSpeedups(writer: anytype, results: []const BenchmarkResult) !void {
-    const arithmetic_ops = [_][]const u8{ "add", "scale", "negate", "inner_product" };
-
-    try writer.writeAll("  Arithmetic speedups (default cochain path vs scalar loop)\n");
-    try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n");
-
-    for (arithmetic_case_labels) |label| {
-        for (arithmetic_ops) |op| {
-            var scalar_name_buffer: [64]u8 = undefined;
-            const scalar_name = try std.fmt.bufPrint(&scalar_name_buffer, "cochain_{s}_scalar_{s}", .{ op, label });
-            var simd_name_buffer: [64]u8 = undefined;
-            const simd_name = try std.fmt.bufPrint(&simd_name_buffer, "cochain_{s}_{s}", .{ op, label });
-            const scalar_result = findResult(results, scalar_name) orelse continue;
-            const simd_result = findResult(results, simd_name) orelse continue;
-            const speedup = @as(f64, @floatFromInt(scalar_result.median_ns)) /
-                @as(f64, @floatFromInt(simd_result.median_ns));
-
-            try writer.print("  {s:<22} {s:>6}  {d:>5.2}x faster\n", .{
-                op,
-                label,
-                speedup,
-            });
-        }
+        const speedup = @as(f64, @floatFromInt(result.scalar_median_ns)) /
+            @as(f64, @floatFromInt(result.default_median_ns));
+        try writer.print("  {s:<16} {s:<8} ", .{
+            operationLabel(result.operation),
+            result.case_label,
+        });
+        try printDuration(writer, result.scalar_median_ns);
+        try writer.writeAll("  ");
+        try printDuration(writer, result.default_median_ns);
+        try writer.print("  {d:>7.2}x\n", .{speedup});
     }
 
-    try writer.writeAll("  ─────────────────────────────────────────────────────────────────\n\n");
+    try writer.writeAll("  ───────────────────────────────────────────────────────────────────────────────────────\n\n");
 }
 
 fn printIncidenceComparisons(writer: anytype, results: []const IncidenceComparisonResult) !void {
@@ -1262,6 +1233,7 @@ fn printDuration(writer: anytype, ns: u64) !void {
 fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
     try writer.writeAll("{\n");
     try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
+    try writer.writeAll("  \"mode\": \"default\",\n");
     try writer.print("  \"mesh_size\": \"{d}x{d}\",\n", .{ grid_nx, grid_ny });
     try writer.print("  \"iterations\": {d},\n", .{measured_iterations});
     try writer.writeAll("  \"context\": {\n");
@@ -1284,6 +1256,66 @@ fn printJson(writer: anytype, results: []const BenchmarkResult) !void {
         }
     }
 
+    try writer.writeAll("  ]\n");
+    try writer.writeAll("}\n");
+}
+
+fn printCompareJson(
+    writer: anytype,
+    arithmetic_results: []const ArithmeticComparisonResult,
+    incidence_results: []const IncidenceComparisonResult,
+) !void {
+    try writer.writeAll("{\n");
+    try writer.print("  \"suite_version\": {d},\n", .{benchmark_suite_version});
+    try writer.writeAll("  \"mode\": \"compare\",\n");
+    try writer.writeAll("  \"context\": {\n");
+    try writer.print("    \"zig_version\": \"{s}\",\n", .{builtin.zig_version_string});
+    try writer.print("    \"arch\": \"{s}\",\n", .{@tagName(builtin.target.cpu.arch)});
+    try writer.print("    \"os\": \"{s}\",\n", .{@tagName(builtin.target.os.tag)});
+    try writer.print("    \"measured_iterations\": {d}\n", .{measured_iterations});
+    try writer.writeAll("  },\n");
+    try writer.writeAll("  \"arithmetic_comparisons\": [\n");
+    for (arithmetic_results, 0..) |result, i| {
+        try writer.print(
+            "    {{\"name\": \"{s}\", \"operation\": \"{s}\", \"case\": \"{s}\", \"version\": {d}, \"scalar_median_ns\": {d}, \"default_median_ns\": {d}}}",
+            .{
+                result.name,
+                operationLabel(result.operation),
+                result.case_label,
+                result.version,
+                result.scalar_median_ns,
+                result.default_median_ns,
+            },
+        );
+        if (i < arithmetic_results.len - 1) {
+            try writer.writeAll(",\n");
+        } else {
+            try writer.writeAll("\n");
+        }
+    }
+    try writer.writeAll("  ],\n");
+    try writer.writeAll("  \"incidence_comparisons\": [\n");
+    for (incidence_results, 0..) |result, i| {
+        try writer.print(
+            "    {{\"name\": \"{s}\", \"version\": {d}, \"nnz\": {d}, \"dense_median_ns\": {d}, \"generic_packed_median_ns\": {d}, \"specialized_median_ns\": {d}, \"dense_value_bytes\": {d}, \"generic_packed_value_bytes\": {d}, \"specialized_value_bytes\": {d}}}",
+            .{
+                result.name,
+                result.version,
+                result.nnz,
+                result.dense_median_ns,
+                result.generic_packed_median_ns,
+                result.specialized_median_ns,
+                result.dense_value_bytes,
+                result.generic_packed_value_bytes,
+                result.specialized_value_bytes,
+            },
+        );
+        if (i < incidence_results.len - 1) {
+            try writer.writeAll(",\n");
+        } else {
+            try writer.writeAll("\n");
+        }
+    }
     try writer.writeAll("  ]\n");
     try writer.writeAll("}\n");
 }
@@ -1320,6 +1352,52 @@ fn checkRegressions(results: []const BenchmarkResult, baselines: []const Baselin
     return any_regression;
 }
 
+fn parseBenchmarkArgs(args: []const []const u8) !BenchmarkArgs {
+    var parsed: BenchmarkArgs = .{};
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--check")) {
+            parsed.check_mode = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--update")) {
+            parsed.update_mode = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--json")) {
+            parsed.json_mode = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--compare")) {
+            parsed.mode = .compare;
+            continue;
+        }
+        return error.InvalidArguments;
+    }
+
+    if (parsed.mode == .compare and (parsed.check_mode or parsed.update_mode)) {
+        return error.InvalidArguments;
+    }
+
+    return parsed;
+}
+
+test "default benchmark suite excludes compare experiments" {
+    for (default_benchmarks) |def| {
+        try std.testing.expect(def.scope != .compare_experiment);
+    }
+}
+
+test "compare definitions stay out of the default suite" {
+    for (arithmetic_compare_defs) |def| {
+        try std.testing.expect(def.scope == .compare_experiment);
+    }
+}
+
+test "compare mode rejects baseline operations" {
+    try std.testing.expectError(error.InvalidArguments, parseBenchmarkArgs(&.{ "--compare", "--check" }));
+    try std.testing.expectError(error.InvalidArguments, parseBenchmarkArgs(&.{ "--compare", "--update" }));
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 pub fn main() !void {
@@ -1327,18 +1405,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Parse CLI flags.
-    var check_mode = false;
-    var update_mode = false;
-    var json_mode = false;
-
     const args = try std.process.argsAlloc(allocator);
     defer std.process.argsFree(allocator, args);
-    for (args[1..]) |arg| {
-        if (std.mem.eql(u8, arg, "--check")) check_mode = true;
-        if (std.mem.eql(u8, arg, "--update")) update_mode = true;
-        if (std.mem.eql(u8, arg, "--json")) json_mode = true;
-    }
+    const benchmark_args = parseBenchmarkArgs(args[1..]) catch {
+        try stderrWriter().writeAll(
+            "  usage: zig build bench -- [--check] [--update] [--json] [--compare]\n" ++
+                "  note: --compare cannot be combined with --check or --update\n",
+        );
+        return error.InvalidArguments;
+    };
 
     // Build mesh.
     const stderr = stderrWriter();
@@ -1355,50 +1430,59 @@ pub fn main() !void {
     var ctx = try BenchmarkContext.init(allocator, &mesh);
     defer ctx.deinit();
 
-    // Run all benchmarks.
-    var results: [all_benchmarks.len]BenchmarkResult = undefined;
-    for (all_benchmarks, 0..) |def, i| {
-        try stderr.print("  Running {s}...\n", .{def.name});
-        results[i] = runBenchmark(def, &ctx);
-    }
-
-    // Load baselines if they exist.
-    var parsed_baselines = try readBaselines(allocator);
-    defer if (parsed_baselines) |*p| p.deinit();
-
-    const baseline_list: ?[]const Baseline = if (parsed_baselines) |p| p.value.benchmarks else null;
-
-    // Output results.
-    if (json_mode) {
-        try printJson(stdoutWriter(), &results);
-    }
-    try printTable(stderr, &results, baseline_list);
-    try printArithmeticSpeedups(stderr, &results);
-
-    try stderr.print("  Building incidence comparison cases on a {d}x{d} grid...\n", .{
-        incidence_grid_nx,
-        incidence_grid_ny,
-    });
-    const incidence_results = try runIncidenceComparisonBenchmarks(allocator);
-    try printIncidenceComparisons(stderr, &incidence_results);
-
-    // Update baselines if requested.
-    if (update_mode) {
-        try writeBaselines(&results);
-        try stderr.writeAll("  Baselines updated in bench/baselines.json\n\n");
-    }
-
-    // Check for regressions if requested.
-    if (check_mode) {
-        if (baseline_list) |bl| {
-            if (checkRegressions(&results, bl)) {
-                try stderr.print("  FAIL: one or more benchmarks regressed >{d:.0}%\n\n", .{regression_threshold * 100.0});
-                std.process.exit(1);
-            } else {
-                try stderr.writeAll("  PASS: no regressions detected\n\n");
+    switch (benchmark_args.mode) {
+        .default => {
+            var results: [default_benchmarks.len]BenchmarkResult = undefined;
+            for (default_benchmarks, 0..) |def, i| {
+                try stderr.print("  Running {s}...\n", .{def.name});
+                results[i] = runBenchmark(def, &ctx);
             }
-        } else {
-            try stderr.writeAll("  SKIP: no baselines.json found, nothing to compare against\n\n");
-        }
+
+            var parsed_baselines = try readBaselines(allocator);
+            defer if (parsed_baselines) |*p| p.deinit();
+
+            const baseline_list: ?[]const Baseline = if (parsed_baselines) |p| p.value.benchmarks else null;
+
+            if (benchmark_args.json_mode) {
+                try printJson(stdoutWriter(), &results);
+            }
+            try printTable(stderr, &results, baseline_list);
+
+            if (benchmark_args.update_mode) {
+                try writeBaselines(&results);
+                try stderr.writeAll("  Baselines updated in bench/baselines.json\n\n");
+            }
+
+            if (benchmark_args.check_mode) {
+                if (baseline_list) |bl| {
+                    if (checkRegressions(&results, bl)) {
+                        try stderr.print("  FAIL: one or more benchmarks regressed >{d:.0}%\n\n", .{regression_threshold * 100.0});
+                        std.process.exit(1);
+                    } else {
+                        try stderr.writeAll("  PASS: no regressions detected\n\n");
+                    }
+                } else {
+                    try stderr.writeAll("  SKIP: no baselines.json found, nothing to compare against\n\n");
+                }
+            }
+        },
+        .compare => {
+            for (arithmetic_compare_defs) |def| {
+                try stderr.print("  Running {s} compare...\n", .{def.name});
+            }
+            const arithmetic_results = try runArithmeticCompareBenchmarks(&ctx);
+
+            try stderr.print("  Building incidence comparison cases on a {d}x{d} grid...\n", .{
+                incidence_grid_nx,
+                incidence_grid_ny,
+            });
+            const incidence_results = try runIncidenceComparisonBenchmarks(allocator);
+
+            if (benchmark_args.json_mode) {
+                try printCompareJson(stdoutWriter(), &arithmetic_results, &incidence_results);
+            }
+            try printArithmeticComparisons(stderr, &arithmetic_results);
+            try printIncidenceComparisons(stderr, &incidence_results);
+        },
     }
 }
