@@ -11,4 +11,5 @@ pub const conservedQuantity = impl.conservedQuantity;
 
 test {
     _ = impl;
+    @import("std").testing.refAllDeclsRecursive(impl);
 }

@@ -12,4 +12,5 @@ pub const runConvergenceStudy = impl.runConvergenceStudy;
 
 test {
     _ = impl;
+    _ = @import("tests.zig");
 }

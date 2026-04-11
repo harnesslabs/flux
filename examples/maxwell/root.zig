@@ -12,4 +12,5 @@ pub const divergenceNorm = impl.divergenceNorm;
 
 test {
     _ = impl;
+    _ = @import("tests.zig");
 }
