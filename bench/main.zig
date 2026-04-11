@@ -198,7 +198,7 @@ const BenchmarkContext = struct {
         errdefer cavity_mesh.deinit(allocator);
         var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
         errdefer cavity_state.deinit(allocator);
-        maxwell.projectReferenceMagneticField(2, cavity_mesh, cavity_state.B.values, -cavityDt() / 2.0, cavity_domain, cavity_domain);
+        try maxwell.seedReferenceMode(2, allocator, &cavity_state, cavityDt(), cavity_domain, cavity_domain);
         const operator_context = try OperatorContext2D.init(allocator, mesh);
         errdefer operator_context.deinit();
         _ = try operator_context.exteriorDerivative(flux.forms.Primal, 0);

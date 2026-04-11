@@ -52,7 +52,7 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
     // step that *temporarily* introduces ∇·B is already a failure.
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try maxwell.leapfrogStep(3, allocator, &state, config.dt);
+        try maxwell.step(3, allocator, &state, config.dt);
 
         const divergence = try maxwell.divergenceNorm(allocator, &state);
         try testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
@@ -109,7 +109,7 @@ test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     // Two-grid pair is the smallest configuration that exhibits a measurable
     // rate. The deeper {8,16,32} sweep lives in the per-example test.
     const grids = [_]u32{ 8, 16 };
-    const results = try diffusion.runPlaneConvergenceStudy(allocator, &grids);
+    const results = try diffusion.runConvergenceStudy(.plane, allocator, &grids);
     defer allocator.free(results);
 
     try testing.expectEqual(grids.len, results.len);
@@ -127,7 +127,7 @@ test "M3 acceptance: diffusion-surface solution matches the analytic eigenmode u
     // strictly decreasing on the sphere; refinement 0 is too coarse for the
     // analytic eigenmode comparison.
     const refinements = [_]u32{ 1, 2 };
-    const results = try diffusion.runSphereConvergenceStudy(allocator, &refinements);
+    const results = try diffusion.runConvergenceStudy(.sphere, allocator, &refinements);
     defer allocator.free(results);
 
     try testing.expectEqual(refinements.len, results.len);

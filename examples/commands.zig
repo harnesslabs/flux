@@ -331,8 +331,8 @@ fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
 
 pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     var surface_kind: diffusion.SurfaceKind = .plane;
-    var plane_config = diffusion.PlaneConfig{};
-    var sphere_config = diffusion.SphereConfig{};
+    var plane_config = diffusion.Config(.plane){};
+    var sphere_config = diffusion.Config(.sphere){};
     var shared = common.Common{};
     var parser = common.Parser.init(args);
     _ = parser.next();
@@ -381,7 +381,7 @@ pub fn runDiffusion(allocator: std.mem.Allocator, args: []const [:0]const u8) !v
     }
 }
 
-fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.PlaneConfig) !void {
+fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.Config(.plane)) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
@@ -392,7 +392,7 @@ fn runPlaneDiffusion(allocator: std.mem.Allocator, config: diffusion.PlaneConfig
     );
 }
 
-fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.SphereConfig) !void {
+fn runSphereDiffusion(allocator: std.mem.Allocator, config: diffusion.Config(.sphere)) !void {
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
