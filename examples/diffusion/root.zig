@@ -1,16 +1,61 @@
-const impl = @import("impl.zig");
+const std = @import("std");
+const plane = @import("plane.zig");
+const sphere = @import("sphere.zig");
 
-pub const SurfaceKind = impl.SurfaceKind;
+pub const SurfaceKind = enum {
+    plane,
+    sphere,
+};
 
-pub const Mesh = impl.Mesh;
-pub const State = impl.State;
-pub const Config = impl.Config;
-pub const RunResult = impl.RunResult;
-pub const ConvergenceResult = impl.ConvergenceResult;
-pub const run = impl.run;
-pub const runConvergenceStudy = impl.runConvergenceStudy;
+pub fn Mesh(comptime surface_kind: SurfaceKind) type {
+    return switch (surface_kind) {
+        .plane => plane.Mesh2D,
+        .sphere => sphere.SurfaceMesh,
+    };
+}
+
+pub fn State(comptime surface_kind: SurfaceKind) type {
+    return switch (surface_kind) {
+        .plane => plane.VertexField,
+        .sphere => sphere.VertexField,
+    };
+}
+
+pub fn Config(comptime surface_kind: SurfaceKind) type {
+    return switch (surface_kind) {
+        .plane => plane.ConfigImpl,
+        .sphere => sphere.ConfigImpl,
+    };
+}
+
+pub fn RunResult(comptime surface_kind: SurfaceKind) type {
+    return switch (surface_kind) {
+        .plane => plane.RunResultImpl,
+        .sphere => sphere.RunResultImpl,
+    };
+}
+
+pub fn ConvergenceResult(comptime surface_kind: SurfaceKind) type {
+    return switch (surface_kind) {
+        .plane => plane.ConvergenceResultImpl,
+        .sphere => sphere.ConvergenceResultImpl,
+    };
+}
+
+pub fn run(comptime surface_kind: SurfaceKind, allocator: std.mem.Allocator, config: Config(surface_kind), writer: anytype) !RunResult(surface_kind) {
+    return switch (surface_kind) {
+        .plane => try plane.runImpl(allocator, config, writer),
+        .sphere => try sphere.runImpl(allocator, config, writer),
+    };
+}
+
+pub fn runConvergenceStudy(comptime surface_kind: SurfaceKind, allocator: std.mem.Allocator, params: []const u32) ![]ConvergenceResult(surface_kind) {
+    return switch (surface_kind) {
+        .plane => try plane.runConvergenceStudyImpl(allocator, params),
+        .sphere => try sphere.runConvergenceStudyImpl(allocator, params),
+    };
+}
 
 test {
-    _ = impl;
     _ = @import("tests.zig");
 }

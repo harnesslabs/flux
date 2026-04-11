@@ -1,7 +1,6 @@
 const std = @import("std");
 const testing = std.testing;
 const diffusion = @import("root.zig");
-const impl = @import("impl.zig");
 
 test "surface diffusion error decreases under sphere refinement" {
     const allocator = testing.allocator;
@@ -30,5 +29,5 @@ test "heat convergence study reaches second-order spatial rate" {
 }
 
 test {
-    testing.refAllDeclsRecursive(impl);
+    testing.refAllDeclsRecursive(diffusion);
 }
