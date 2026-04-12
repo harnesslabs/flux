@@ -10,6 +10,7 @@ const testing = std.testing;
 const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 const whitney = @import("../operators/whitney_mass.zig");
+pub const geometries = @import("geometries.zig");
 
 pub const WhitneyMassOperator = struct {
     mass: sparse.CsrMatrix(f64),
@@ -767,6 +768,25 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             orientSphereFacesOutward(polyhedron.vertices, oriented_faces);
 
             return Self.from_triangles(allocator, polyhedron.vertices, oriented_faces);
+        }
+
+        pub fn disk(
+            allocator: std.mem.Allocator,
+            radius: f64,
+            radial_segments: u32,
+            angular_segments: u32,
+        ) !Self {
+            return geometries.disk(Self, allocator, radius, radial_segments, angular_segments);
+        }
+
+        pub fn torus(
+            allocator: std.mem.Allocator,
+            major_radius: f64,
+            minor_radius: f64,
+            major_segments: u32,
+            minor_segments: u32,
+        ) !Self {
+            return geometries.torus(Self, allocator, major_radius, minor_radius, major_segments, minor_segments);
         }
 
         /// Construct a 2D simplicial mesh from explicit triangle connectivity.
