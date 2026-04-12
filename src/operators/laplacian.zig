@@ -55,9 +55,9 @@ pub fn AssembledLaplacian(comptime InputType: type) type {
         const MeshType = InputType.MeshT;
         const k = InputType.degree;
 
-    mesh: *const MeshType,
-    stiffness: sparse.CsrMatrix(f64),
-    left_scaling: []f64,
+        mesh: *const MeshType,
+        stiffness: sparse.CsrMatrix(f64),
+        left_scaling: []f64,
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.left_scaling);
@@ -121,15 +121,72 @@ fn assemble_zero_form_stiffness(
     const d0 = mesh.boundary(1);
     const m1 = mesh.whitney_mass(1);
 
-    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
+    return assemble_incidence_sparse_mass_stiffness(
+        allocator,
+        d0,
+        m1,
+        mesh.num_vertices(),
+    );
+}
+
+fn assemble_one_form_stiffness(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    const MeshType = @TypeOf(mesh.*);
+    comptime std.debug.assert(MeshType.topological_dimension >= 2);
+
+    var assembler = sparse.TripletAssembler(f64).init(mesh.num_edges(), mesh.num_edges());
     defer assembler.deinit(allocator);
 
-    for (0..m1.n_rows) |edge_i| {
-        const incidence_i = d0.row(@intCast(edge_i));
-        const mass_row = m1.row(@intCast(edge_i));
+    if (MeshType.topological_dimension == 2) {
+        try add_incidence_diagonal_stiffness(
+            allocator,
+            &assembler,
+            mesh.boundary(2),
+            mesh.simplices(2).items(.volume),
+            .inverse_primal_volume,
+        );
+    } else {
+        try add_incidence_sparse_mass_stiffness_into(
+            allocator,
+            &assembler,
+            mesh.boundary(2),
+            mesh.whitney_mass(2),
+        );
+    }
+
+    try add_one_form_grad_div_stiffness(allocator, &assembler, mesh);
+    return assembler.build(allocator);
+}
+
+fn assemble_incidence_sparse_mass_stiffness(
+    allocator: std.mem.Allocator,
+    boundary: anytype,
+    mass: sparse.CsrMatrix(f64),
+    output_count: u32,
+) !sparse.CsrMatrix(f64) {
+    var assembler = sparse.TripletAssembler(f64).init(output_count, output_count);
+    defer assembler.deinit(allocator);
+    try add_incidence_sparse_mass_stiffness_into(allocator, &assembler, boundary, mass);
+    return assembler.build(allocator);
+}
+
+fn add_incidence_sparse_mass_stiffness_into(
+    allocator: std.mem.Allocator,
+    assembler: *sparse.TripletAssembler(f64),
+    boundary: anytype,
+    mass: sparse.CsrMatrix(f64),
+) !void {
+    std.debug.assert(boundary.n_rows == mass.n_rows);
+    std.debug.assert(boundary.n_rows == mass.n_cols);
+
+    for (0..mass.n_rows) |row_i| {
+        const incidence_i = boundary.row(@intCast(row_i));
+        const mass_row = mass.row(@intCast(row_i));
 
         for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
-            const incidence_j = d0.row(edge_j);
+            const incidence_j = boundary.row(edge_j);
 
             for (incidence_i.cols, 0..) |vertex_i, entry_i| {
                 const sign_i = incidence_i.sign(entry_i);
@@ -142,17 +199,139 @@ fn assemble_zero_form_stiffness(
             }
         }
     }
-
-    return assembler.build(allocator);
 }
 
-fn assemble_one_form_stiffness(
+const DiagonalAssemblyMode = enum {
+    primal_volume,
+    inverse_primal_volume,
+};
+
+fn add_incidence_diagonal_stiffness(
     allocator: std.mem.Allocator,
+    assembler: *sparse.TripletAssembler(f64),
+    boundary: anytype,
+    diagonal_source: []const f64,
+    comptime mode: DiagonalAssemblyMode,
+) !void {
+    std.debug.assert(boundary.n_rows == diagonal_source.len);
+
+    for (0..boundary.n_rows) |row_idx| {
+        const row = boundary.row(@intCast(row_idx));
+        const diagonal = switch (mode) {
+            .primal_volume => diagonal_source[row_idx],
+            .inverse_primal_volume => blk: {
+                std.debug.assert(diagonal_source[row_idx] != 0.0);
+                break :blk 1.0 / diagonal_source[row_idx];
+            },
+        };
+
+        for (row.cols, 0..) |col_i, entry_i| {
+            const sign_i = row.sign(entry_i);
+            const left = diagonal * @as(f64, @floatFromInt(sign_i));
+            for (row.cols, 0..) |col_j, entry_j| {
+                const sign_j = row.sign(entry_j);
+                try assembler.addEntry(
+                    allocator,
+                    col_i,
+                    col_j,
+                    left * @as(f64, @floatFromInt(sign_j)),
+                );
+            }
+        }
+    }
+}
+
+fn add_one_form_grad_div_stiffness(
+    allocator: std.mem.Allocator,
+    assembler: *sparse.TripletAssembler(f64),
     mesh: anytype,
-) !sparse.CsrMatrix(f64) {
-    _ = allocator;
-    _ = mesh;
-    @panic("assemble_one_form_stiffness not yet implemented");
+) !void {
+    const vertex_count = mesh.num_vertices();
+    const edge_count = mesh.num_edges();
+    const d0 = mesh.boundary(1);
+    const m1 = mesh.whitney_mass(1);
+    const star0_inv = try assemble_zero_form_star_inverse_diag(allocator, mesh);
+    defer allocator.free(star0_inv);
+
+    const incident_count = try allocator.alloc(u32, vertex_count);
+    defer allocator.free(incident_count);
+    @memset(incident_count, 0);
+
+    for (0..d0.n_rows) |edge_idx| {
+        const row = d0.row(@intCast(edge_idx));
+        for (row.cols) |vertex_idx| {
+            incident_count[vertex_idx] += 1;
+        }
+    }
+
+    const offsets = try allocator.alloc(u32, vertex_count + 1);
+    defer allocator.free(offsets);
+    offsets[0] = 0;
+    for (0..vertex_count) |vertex_idx| {
+        offsets[vertex_idx + 1] = offsets[vertex_idx] + incident_count[vertex_idx];
+    }
+
+    const total_incidence = offsets[vertex_count];
+    const incident_edges = try allocator.alloc(u32, total_incidence);
+    defer allocator.free(incident_edges);
+    const incident_signs = try allocator.alloc(i8, total_incidence);
+    defer allocator.free(incident_signs);
+
+    const write_offsets = try allocator.dupe(u32, offsets[0..vertex_count]);
+    defer allocator.free(write_offsets);
+
+    for (0..d0.n_rows) |edge_idx| {
+        const row = d0.row(@intCast(edge_idx));
+        for (row.cols, 0..) |vertex_idx, entry_idx| {
+            const write_idx = write_offsets[vertex_idx];
+            incident_edges[write_idx] = @intCast(edge_idx);
+            incident_signs[write_idx] = row.sign(entry_idx);
+            write_offsets[vertex_idx] += 1;
+        }
+    }
+
+    const accumulated = try allocator.alloc(f64, edge_count);
+    defer allocator.free(accumulated);
+    @memset(accumulated, 0.0);
+
+    const touched = try allocator.alloc(u32, edge_count);
+    defer allocator.free(touched);
+    const touched_flags = try allocator.alloc(bool, edge_count);
+    defer allocator.free(touched_flags);
+    @memset(touched_flags, false);
+
+    for (0..vertex_count) |vertex_idx| {
+        var touched_count: usize = 0;
+        const weight = star0_inv[vertex_idx];
+
+        for (offsets[vertex_idx]..offsets[vertex_idx + 1]) |incident_idx| {
+            const edge_i = incident_edges[incident_idx];
+            const sign_i = incident_signs[incident_idx];
+            const mass_row = m1.row(edge_i);
+
+            for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
+                if (!touched_flags[edge_j]) {
+                    touched_flags[edge_j] = true;
+                    touched[touched_count] = edge_j;
+                    touched_count += 1;
+                }
+                accumulated[edge_j] += @as(f64, @floatFromInt(sign_i)) * mass_ij;
+            }
+        }
+
+        for (touched[0..touched_count]) |edge_i| {
+            const value_i = accumulated[edge_i];
+            const left = weight * value_i;
+            for (touched[0..touched_count]) |edge_j| {
+                try assembler.addEntry(allocator, edge_i, edge_j, left * accumulated[edge_j]);
+            }
+        }
+
+        for (touched[0..touched_count]) |edge_idx| {
+            touched_flags[edge_idx] = false;
+            accumulated[edge_idx] = 0.0;
+        }
+    }
 }
 
 fn assemble_zero_form_star_inverse_diag(
