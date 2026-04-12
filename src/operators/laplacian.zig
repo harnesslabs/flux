@@ -239,7 +239,9 @@ pub fn laplacian_composed(
 
 const Mesh2D = topology.Mesh(2, 2);
 const MeshSurface = topology.Mesh(3, 2);
+const Mesh3D = topology.Mesh(3, 3);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
+const PrimalC3D1 = cochain.Cochain(Mesh3D, 1, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {
     const allocator = testing.allocator;
@@ -604,6 +606,54 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
         // CG solve introduces ~1e-10 relative residual per solve, and the
         // Laplacian does two solves. Loosen tolerance accordingly.
         try testing.expectApproxEqRel(inner_lap_f_g, inner_f_lap_g, 1e-6);
+    }
+}
+
+test "assembled Δ₁ stiffness is populated on tetrahedral meshes" {
+    const allocator = testing.allocator;
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    const laplacian = try operator_context.laplacian(1);
+    try testing.expectEqual(mesh.num_edges(), laplacian.stiffness.n_rows);
+    try testing.expectEqual(mesh.num_edges(), laplacian.stiffness.n_cols);
+    try testing.expect(laplacian.stiffness.nnz() > 0);
+}
+
+test "assembled Δ₁ stiffness matches Whitney-weighted strong Laplacian on tetrahedral meshes" {
+    const allocator = testing.allocator;
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    const laplacian = try operator_context.laplacian(1);
+
+    var omega = try PrimalC3D1.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+    for (omega.values, 0..) |*value, edge_idx| {
+        value.* = @as(f64, @floatFromInt(edge_idx + 1)) / 17.0;
+    }
+
+    var strong = try laplacian.apply(allocator, omega);
+    defer strong.deinit(allocator);
+
+    const weighted_strong = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(weighted_strong);
+    sparse.spmv(mesh.whitney_mass(1), strong.values, weighted_strong);
+
+    const assembled = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(assembled);
+    sparse.spmv(laplacian.stiffness, omega.values, assembled);
+
+    for (assembled, weighted_strong) |actual, expected| {
+        try testing.expectApproxEqRel(expected, actual, 1e-9);
     }
 }
 
