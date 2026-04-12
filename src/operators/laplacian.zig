@@ -39,9 +39,14 @@ fn validatePrimalCochainInput(comptime InputType: type) void {
 
 /// Stored Laplacian operator specialized to a primal k-cochain type.
 ///
-/// For k=0, the assembled form keeps the sparse stiffness matrix
-/// S = D₀ᵀ M₁ D₀ and the diagonal ★₀⁻¹ scaling separate so application is
-/// one SpMV plus pointwise scaling.
+/// `stiffness` is the weak-form sparse matrix assembled directly from DEC/FEEC
+/// building blocks. For k=0 this is `S = D₀ᵀ M₁ D₀`; for interior degrees it is
+/// the sparse matrix satisfying `S_k ω = M_k (Δ_k ω)`.
+///
+/// `apply` remains the strong operator action. For k=0, the assembled form
+/// keeps the diagonal `★₀⁻¹` scaling separate so application is one SpMV plus
+/// pointwise scaling. Other degrees may still apply through composition even
+/// when a sparse weak-form stiffness has been assembled.
 pub fn AssembledLaplacian(comptime InputType: type) type {
     comptime validatePrimalCochainInput(InputType);
 
@@ -50,9 +55,9 @@ pub fn AssembledLaplacian(comptime InputType: type) type {
         const MeshType = InputType.MeshT;
         const k = InputType.degree;
 
-        mesh: *const MeshType,
-        stiffness: sparse.CsrMatrix(f64),
-        left_scaling: []f64,
+    mesh: *const MeshType,
+    stiffness: sparse.CsrMatrix(f64),
+    left_scaling: []f64,
 
         pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
             allocator.free(self.left_scaling);
@@ -91,6 +96,7 @@ pub fn assemble_for_degree(
 ) !AssembledLaplacian(cochain.Cochain(MeshType, k, cochain.Primal)) {
     var stiffness = switch (k) {
         0 => try assemble_zero_form_stiffness(allocator, mesh),
+        1 => try assemble_one_form_stiffness(allocator, mesh),
         else => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
     };
     errdefer stiffness.deinit(allocator);
@@ -138,6 +144,15 @@ fn assemble_zero_form_stiffness(
     }
 
     return assembler.build(allocator);
+}
+
+fn assemble_one_form_stiffness(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    _ = allocator;
+    _ = mesh;
+    @panic("assemble_one_form_stiffness not yet implemented");
 }
 
 fn assemble_zero_form_star_inverse_diag(

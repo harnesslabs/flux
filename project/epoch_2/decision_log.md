@@ -797,3 +797,29 @@ collection of wrappers around today's examples. Structural abstractions should
 describe the underlying mathematical/computational role so they still make
 sense for other PDEs, dimensions, and solver families. `LinearSystem` plus an
 `EliminationMap` is such a split. `DirichletConstrainedSystem` was not.
+
+## 2026-04-12: Assembled Laplacian owns weak stiffness; strong apply remains separate
+
+**Decision:** Keep `AssembledLaplacian(InputType)` as the single public noun,
+but interpret its assembled sparse payload as the weak-form stiffness matrix
+`S_k` rather than claiming the strong operator matrix `Δ_k` itself is sparse
+for every degree. The object's `apply` method continues to represent the strong
+operator action `Δ_k`, using direct assembled data where that is honest and
+composed or factorized paths where necessary.
+
+**Alternatives considered:**
+1. Treat the strong operator matrix as the thing to assemble for every degree:
+   rejected because for interior degrees the factor `M_k^{-1}` generally
+   destroys sparsity, so "direct sparse assembly" would be mathematically
+   false.
+2. Introduce a second public type just for stiffness matrices: rejected
+   because the project is pre-release and this would create parallel nouns for
+   one structural operator family before the broader system-builder shape is
+   clear.
+
+**Rationale:** The weak stiffness is the sparse object we can honestly assemble
+and reuse across supported degrees, including the current 1-form solve path
+that previously probed the strong operator column-by-column. Keeping one public
+`AssembledLaplacian` value preserves the operator-level API while separating
+the mathematically sparse assembled state from the potentially dense strong
+action.
