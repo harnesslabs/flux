@@ -1123,133 +1123,6 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return determinant / 6.0;
         }
 
-        const SpherePolyhedron = struct {
-            vertices: [][3]f64,
-            faces: [][3]u32,
-
-            fn deinit(self: *SpherePolyhedron, allocator: std.mem.Allocator) void {
-                allocator.free(self.faces);
-                allocator.free(self.vertices);
-            }
-        };
-
-        fn buildRefinedSphereOctahedron(allocator: std.mem.Allocator, radius: f64, refinement: u32) !SpherePolyhedron {
-            var polyhedron = SpherePolyhedron{
-                .vertices = try allocator.dupe([3]f64, &initial_sphere_octahedron_vertices),
-                .faces = try allocator.dupe([3]u32, &initial_sphere_octahedron_faces),
-            };
-            errdefer polyhedron.deinit(allocator);
-
-            scaleSphereVertices(polyhedron.vertices, radius);
-
-            for (0..refinement) |_| {
-                const next = try refineSpherePolyhedron(allocator, polyhedron, radius);
-                polyhedron.deinit(allocator);
-                polyhedron = next;
-            }
-
-            return polyhedron;
-        }
-
-        fn refineSpherePolyhedron(allocator: std.mem.Allocator, polyhedron: SpherePolyhedron, radius: f64) !SpherePolyhedron {
-            var vertices = try std.ArrayList([3]f64).initCapacity(allocator, polyhedron.vertices.len + polyhedron.faces.len);
-            defer vertices.deinit(allocator);
-            try vertices.appendSlice(allocator, polyhedron.vertices);
-
-            var faces = try std.ArrayList([3]u32).initCapacity(allocator, polyhedron.faces.len * 4);
-            defer faces.deinit(allocator);
-
-            var midpoint_map = std.AutoHashMap([2]u32, u32).init(allocator);
-            defer midpoint_map.deinit();
-
-            for (polyhedron.faces) |face| {
-                const ab = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[0], face[1], radius);
-                const bc = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[1], face[2], radius);
-                const ca = try sphereMidpointIndex(allocator, &vertices, &midpoint_map, face[2], face[0], radius);
-
-                try faces.append(allocator, .{ face[0], ab, ca });
-                try faces.append(allocator, .{ face[1], bc, ab });
-                try faces.append(allocator, .{ face[2], ca, bc });
-                try faces.append(allocator, .{ ab, bc, ca });
-            }
-
-            return .{
-                .vertices = try vertices.toOwnedSlice(allocator),
-                .faces = try faces.toOwnedSlice(allocator),
-            };
-        }
-
-        fn sphereMidpointIndex(
-            allocator: std.mem.Allocator,
-            vertices: *std.ArrayList([3]f64),
-            midpoint_map: *std.AutoHashMap([2]u32, u32),
-            a: u32,
-            b: u32,
-            radius: f64,
-        ) !u32 {
-            const key = canonical_edge_key(a, b);
-            const gop = try midpoint_map.getOrPut(key);
-            if (gop.found_existing) return gop.value_ptr.*;
-
-            const midpoint = normalizeSpherePoint(scaleSpherePoint(addSpherePoints(vertices.items[a], vertices.items[b]), 0.5), radius);
-            const new_index: u32 = @intCast(vertices.items.len);
-            try vertices.append(allocator, midpoint);
-            gop.value_ptr.* = new_index;
-            return new_index;
-        }
-
-        fn orientSphereFacesOutward(embedded_vertices: []const [3]f64, faces: [][3]u32) void {
-            for (faces) |*face| {
-                const a = embedded_vertices[face.*[0]];
-                const b = embedded_vertices[face.*[1]];
-                const c = embedded_vertices[face.*[2]];
-                const normal = cross3(subSpherePoints(b, a), subSpherePoints(c, a));
-                const centroid = normalizeSpherePoint(scaleSpherePoint(addSpherePoints(addSpherePoints(a, b), c), 1.0 / 3.0), 1.0);
-                if (dot3(normal, centroid) < 0.0) {
-                    std.mem.swap(u32, &face.*[1], &face.*[2]);
-                }
-            }
-        }
-
-        fn scaleSphereVertices(vertices: [][3]f64, radius: f64) void {
-            for (vertices) |*vertex| {
-                vertex.* = scaleSpherePoint(vertex.*, radius);
-            }
-        }
-
-        fn addSpherePoints(a: [3]f64, b: [3]f64) [3]f64 {
-            return .{ a[0] + b[0], a[1] + b[1], a[2] + b[2] };
-        }
-
-        fn subSpherePoints(a: [3]f64, b: [3]f64) [3]f64 {
-            return .{ a[0] - b[0], a[1] - b[1], a[2] - b[2] };
-        }
-
-        fn scaleSpherePoint(a: [3]f64, scale: f64) [3]f64 {
-            return .{ a[0] * scale, a[1] * scale, a[2] * scale };
-        }
-
-        fn dot3(a: [3]f64, b: [3]f64) f64 {
-            return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-        }
-
-        fn norm3(a: [3]f64) f64 {
-            return @sqrt(dot3(a, a));
-        }
-
-        fn normalizeSpherePoint(a: [3]f64, radius: f64) [3]f64 {
-            const inv_norm = radius / norm3(a);
-            return scaleSpherePoint(a, inv_norm);
-        }
-
-        fn cross3(a: [3]f64, b: [3]f64) [3]f64 {
-            return .{
-                a[1] * b[2] - a[2] * b[1],
-                a[2] * b[0] - a[0] * b[2],
-                a[0] * b[1] - a[1] * b[0],
-            };
-        }
-
         fn canonical_edge_key(a: u32, b: u32) [2]u32 {
             return if (a < b) .{ a, b } else .{ b, a };
         }
@@ -1323,26 +1196,6 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             .{ 0, 3 },
             .{ 0, 2 },
             .{ 0, 1 },
-        };
-
-        const initial_sphere_octahedron_vertices = [_][3]f64{
-            .{ 1.0, 0.0, 0.0 },
-            .{ -1.0, 0.0, 0.0 },
-            .{ 0.0, 1.0, 0.0 },
-            .{ 0.0, -1.0, 0.0 },
-            .{ 0.0, 0.0, 1.0 },
-            .{ 0.0, 0.0, -1.0 },
-        };
-
-        const initial_sphere_octahedron_faces = [_][3]u32{
-            .{ 0, 4, 2 },
-            .{ 2, 4, 1 },
-            .{ 1, 4, 3 },
-            .{ 3, 4, 0 },
-            .{ 2, 5, 0 },
-            .{ 1, 5, 2 },
-            .{ 3, 5, 1 },
-            .{ 0, 5, 3 },
         };
     };
 }
@@ -2293,7 +2146,7 @@ test "∂₂∂₃ = 0 on single tetrahedron" {
     }
 }
 
-test "uniform_grid 1×1 is the smallest valid grid" {
+test "plane 1×1 is the smallest valid grid" {
     // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
     // This test verifies the smallest valid grid constructs successfully.
     const allocator = testing.allocator;
