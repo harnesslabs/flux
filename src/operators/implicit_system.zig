@@ -86,6 +86,58 @@ pub const AssembledImplicitSystem = struct {
     }
 };
 
+pub const DirichletConstrainedSystem = struct {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        full_matrix: sparse.CsrMatrix(f64),
+        constrained_mask: []const bool,
+        config: SolveConfig,
+    ) !DirichletConstrainedSystem {
+        _ = allocator;
+        _ = full_matrix;
+        _ = constrained_mask;
+        _ = config;
+        @panic("not yet implemented");
+    }
+
+    pub fn deinit(self: *DirichletConstrainedSystem, allocator: std.mem.Allocator) void {
+        _ = self;
+        _ = allocator;
+        @panic("not yet implemented");
+    }
+
+    pub fn fullRhsValues(self: *DirichletConstrainedSystem) []f64 {
+        _ = self;
+        @panic("not yet implemented");
+    }
+
+    pub fn seedSolutionFromFull(self: *DirichletConstrainedSystem, full_values: []const f64) void {
+        _ = self;
+        _ = full_values;
+        @panic("not yet implemented");
+    }
+
+    pub fn solveDirichlet(
+        self: *DirichletConstrainedSystem,
+        boundary_values: []const f64,
+        full_solution: []f64,
+    ) !cg.SolveResult {
+        _ = self;
+        _ = boundary_values;
+        _ = full_solution;
+        @panic("not yet implemented");
+    }
+
+    pub fn solveHomogeneousDirichlet(
+        self: *DirichletConstrainedSystem,
+        full_solution: []f64,
+    ) !cg.SolveResult {
+        _ = self;
+        _ = full_solution;
+        @panic("not yet implemented");
+    }
+};
+
 fn diagonalOf(allocator: std.mem.Allocator, matrix: sparse.CsrMatrix(f64)) ![]f64 {
     const diagonal = try allocator.alloc(f64, matrix.n_rows);
     errdefer allocator.free(diagonal);
@@ -142,6 +194,89 @@ test "assembled implicit system computes matrix diagonal and reuses owned buffer
     try testing.expect(second_result.converged);
     try testing.expectApproxEqAbs(@as(f64, 1.0), system.solutionValues()[0], 1e-12);
     try testing.expectApproxEqAbs(@as(f64, 1.0), system.solutionValues()[1], 1e-12);
+}
+
+test "Dirichlet constrained system scatters boundary values and corrects reduced rhs" {
+    const allocator = testing.allocator;
+
+    var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 7);
+    matrix.row_ptr[0] = 0;
+    matrix.row_ptr[1] = 2;
+    matrix.row_ptr[2] = 5;
+    matrix.row_ptr[3] = 7;
+    matrix.col_idx[0] = 0;
+    matrix.col_idx[1] = 1;
+    matrix.col_idx[2] = 0;
+    matrix.col_idx[3] = 1;
+    matrix.col_idx[4] = 2;
+    matrix.col_idx[5] = 1;
+    matrix.col_idx[6] = 2;
+    matrix.values[0] = 2.0;
+    matrix.values[1] = -1.0;
+    matrix.values[2] = -1.0;
+    matrix.values[3] = 2.0;
+    matrix.values[4] = -1.0;
+    matrix.values[5] = -1.0;
+    matrix.values[6] = 2.0;
+
+    var system = try DirichletConstrainedSystem.init(
+        allocator,
+        matrix,
+        &[_]bool{ true, false, true },
+        .{},
+    );
+    defer system.deinit(allocator);
+
+    system.fullRhsValues()[0] = 0.0;
+    system.fullRhsValues()[1] = 0.0;
+    system.fullRhsValues()[2] = 0.0;
+
+    const boundary_values = [_]f64{ 10.0, 0.0, 20.0 };
+    var solution = [_]f64{ 0.0, 0.0, 0.0 };
+
+    const result = try system.solveDirichlet(&boundary_values, &solution);
+    try testing.expect(result.converged);
+    try testing.expectApproxEqAbs(@as(f64, 10.0), solution[0], 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 15.0), solution[1], 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 20.0), solution[2], 1e-12);
+}
+
+test "Dirichlet constrained system reuses full rhs buffer and seeds from full state" {
+    const allocator = testing.allocator;
+
+    var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 3);
+    matrix.row_ptr[0] = 0;
+    matrix.row_ptr[1] = 1;
+    matrix.row_ptr[2] = 2;
+    matrix.row_ptr[3] = 3;
+    matrix.col_idx[0] = 0;
+    matrix.col_idx[1] = 1;
+    matrix.col_idx[2] = 2;
+    matrix.values[0] = 4.0;
+    matrix.values[1] = 5.0;
+    matrix.values[2] = 6.0;
+
+    var system = try DirichletConstrainedSystem.init(
+        allocator,
+        matrix,
+        &[_]bool{ true, false, false },
+        .{},
+    );
+    defer system.deinit(allocator);
+
+    const rhs_ptr = system.fullRhsValues().ptr;
+    system.seedSolutionFromFull(&[_]f64{ 100.0, 10.0, 18.0 });
+    system.fullRhsValues()[0] = 0.0;
+    system.fullRhsValues()[1] = 10.0;
+    system.fullRhsValues()[2] = 18.0;
+
+    var solution = [_]f64{ 0.0, 0.0, 0.0 };
+    const result = try system.solveHomogeneousDirichlet(&solution);
+    try testing.expect(result.converged);
+    try testing.expect(rhs_ptr == system.fullRhsValues().ptr);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), solution[0], 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 2.0), solution[1], 1e-12);
+    try testing.expectApproxEqAbs(@as(f64, 3.0), solution[2], 1e-12);
 }
 
 test {
