@@ -355,6 +355,37 @@ test "Evolution computes error against the current exact field" {
     try testing.expectApproxEqAbs(2.0, evolution.l2Error(), 1e-15);
 }
 
+test "ReferenceAux owns exact buffer and computes error generically" {
+    const allocator = testing.allocator;
+    var mesh = MockMesh{};
+    var state = [_]f64{ 1.0, 2.0 };
+
+    const Aux = ReferenceAux(MockMesh, MockExactInitializer, MockErrorMeasure);
+    var aux = try Aux.init(
+        allocator,
+        &mesh,
+        state.len,
+        MockExactInitializer{},
+        MockErrorMeasure{},
+    );
+    defer aux.deinit(allocator);
+
+    aux.fillExact(0.0);
+    try testing.expectEqual(state.len, aux.exactValues().len);
+    try testing.expectApproxEqAbs(2.0, aux.l2Error(state[0..]), 1e-15);
+}
+
+test "empiricalRates returns pairwise convergence rates" {
+    const allocator = testing.allocator;
+    const errors = [_]f64{ 4.0, 1.0, 0.25 };
+    const rates = try empiricalRates(allocator, &errors, 2.0);
+    defer allocator.free(rates);
+
+    try testing.expectEqual(@as(usize, 2), rates.len);
+    try testing.expectApproxEqAbs(2.0, rates[0], 1e-12);
+    try testing.expectApproxEqAbs(2.0, rates[1], 1e-12);
+}
+
 test "Evolution run notifies listeners at begin, each step, and end" {
     const TestEvolution = Evolution([]f64, MockStepper, void);
     const allocator = testing.allocator;
