@@ -111,21 +111,16 @@ fn solve_dirichlet_reduced_system(
     std.debug.assert(boundary_values.len == full_matrix.n_rows);
 
     const elimination_map = try linear_system.EliminationMap.init(allocator, boundary_mask);
-    var constrained_system = try linear_system.EliminatedLinearSystem.init(
-        allocator,
-        full_matrix,
-        elimination_map,
-        .{
-            .tolerance_relative = config.tolerance_relative,
-            .iteration_limit = config.iteration_limit,
-        },
-    );
-    defer constrained_system.deinit(allocator);
+    var reduced_system = try linear_system.LinearSystem.eliminate(allocator, full_matrix, elimination_map, .{
+        .tolerance_relative = config.tolerance_relative,
+        .iteration_limit = config.iteration_limit,
+    });
+    defer reduced_system.deinit(allocator);
 
     const solution = try allocator.alloc(f64, full_matrix.n_rows);
     errdefer allocator.free(solution);
-    @memcpy(constrained_system.fullRhsValues(), full_rhs);
-    const cg_result = try constrained_system.solveWithConstrainedValues(boundary_values, solution);
+    @memcpy(reduced_system.fullRhsValues(), full_rhs);
+    const cg_result = try reduced_system.solveWithConstrainedValues(boundary_values, solution);
 
     return .{
         .solution = solution,

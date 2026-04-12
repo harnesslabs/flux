@@ -17,6 +17,9 @@ pub const LinearSystem = struct {
     solution: []f64,
     scratch: cg.Scratch,
     config: SolveConfig,
+    elimination_map: ?EliminationMap = null,
+    boundary_coupling: ?sparse.CsrMatrix(f64) = null,
+    full_rhs: ?[]f64 = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -49,12 +52,70 @@ pub const LinearSystem = struct {
         };
     }
 
+    pub fn eliminate(
+        allocator: std.mem.Allocator,
+        full_matrix: sparse.CsrMatrix(f64),
+        elimination_map: EliminationMap,
+        config: SolveConfig,
+    ) !LinearSystem {
+        std.debug.assert(full_matrix.n_rows == full_matrix.n_cols);
+        std.debug.assert(full_matrix.n_rows == elimination_map.fullCount());
+
+        const full_rhs = try allocator.alloc(f64, full_matrix.n_rows);
+        errdefer allocator.free(full_rhs);
+        @memset(full_rhs, 0.0);
+
+        var reduced_parts = try buildReducedParts(
+            allocator,
+            full_matrix,
+            elimination_map,
+            config,
+        );
+        errdefer {
+            reduced_parts.boundary_coupling.deinit(allocator);
+            if (reduced_parts.reduced_system) |*system| system.deinit(allocator);
+        }
+
+        if (reduced_parts.reduced_system) |system| {
+            return .{
+                .matrix = system.matrix,
+                .diagonal = system.diagonal,
+                .rhs = system.rhs,
+                .solution = system.solution,
+                .scratch = system.scratch,
+                .config = system.config,
+                .elimination_map = elimination_map,
+                .boundary_coupling = reduced_parts.boundary_coupling,
+                .full_rhs = full_rhs,
+            };
+        }
+
+        var scratch = try cg.Scratch.init(allocator, 0);
+        errdefer scratch.deinit(allocator);
+        var empty_matrix = try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0);
+        errdefer empty_matrix.deinit(allocator);
+        const diagonal = try allocator.alloc(f64, 0);
+        errdefer allocator.free(diagonal);
+        const rhs = try allocator.alloc(f64, 0);
+        errdefer allocator.free(rhs);
+        const solution = try allocator.alloc(f64, 0);
+        errdefer allocator.free(solution);
+
+        return .{
+            .matrix = empty_matrix,
+            .diagonal = diagonal,
+            .rhs = rhs,
+            .solution = solution,
+            .scratch = scratch,
+            .config = config,
+            .elimination_map = elimination_map,
+            .boundary_coupling = reduced_parts.boundary_coupling,
+            .full_rhs = full_rhs,
+        };
+    }
+
     pub fn deinit(self: *LinearSystem, allocator: std.mem.Allocator) void {
-        self.scratch.deinit(allocator);
-        allocator.free(self.solution);
-        allocator.free(self.rhs);
-        allocator.free(self.diagonal);
-        self.matrix.deinit(allocator);
+        self.deinitCore(allocator, true);
     }
 
     pub fn rhsValues(self: *LinearSystem) []f64 {
@@ -70,6 +131,16 @@ pub const LinearSystem = struct {
         @memcpy(self.solution, values);
     }
 
+    pub fn seedSolutionFromFull(self: *LinearSystem, full_values: []const f64) void {
+        const elimination_map = self.eliminationMap();
+        std.debug.assert(full_values.len == elimination_map.fullCount());
+        elimination_map.projectFree(full_values, self.solutionValues());
+    }
+
+    pub fn fullRhsValues(self: *LinearSystem) []f64 {
+        return self.full_rhs orelse @panic("fullRhsValues requires an eliminated linear system");
+    }
+
     pub fn solve(self: *LinearSystem) !cg.SolveResult {
         var preconditioner = cg.DiagonalPreconditioner{ .diagonal = self.diagonal };
         const result = cg.solve(
@@ -83,6 +154,76 @@ pub const LinearSystem = struct {
         );
         if (!result.converged) return error.ConjugateGradientDidNotConverge;
         return result;
+    }
+
+    pub fn solveWithConstrainedValues(
+        self: *LinearSystem,
+        constrained_values: []const f64,
+        full_solution: []f64,
+    ) !cg.SolveResult {
+        const elimination_map = self.eliminationMap();
+        const boundary_coupling = self.boundaryCoupling();
+        const full_rhs = self.fullRhsValues();
+        std.debug.assert(constrained_values.len == elimination_map.fullCount());
+        std.debug.assert(full_solution.len == elimination_map.fullCount());
+
+        if (elimination_map.freeCount() == 0) {
+            @memcpy(full_solution, constrained_values);
+            return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
+        }
+
+        const reduced_rhs = self.rhsValues();
+        for (elimination_map.free_indices, 0..) |full_row_idx, reduced_row_idx| {
+            var rhs_value = full_rhs[full_row_idx];
+            const row = boundary_coupling.row(@intCast(reduced_row_idx));
+            for (row.cols, row.vals) |col_idx, value| {
+                rhs_value -= value * constrained_values[col_idx];
+            }
+            reduced_rhs[reduced_row_idx] = rhs_value;
+        }
+
+        const result = try self.solve();
+        elimination_map.liftFree(self.solutionValues(), constrained_values, full_solution);
+        return result;
+    }
+
+    pub fn solveHomogeneous(self: *LinearSystem, full_solution: []f64) !cg.SolveResult {
+        const elimination_map = self.eliminationMap();
+        std.debug.assert(full_solution.len == elimination_map.fullCount());
+
+        if (elimination_map.freeCount() == 0) {
+            @memset(full_solution, 0.0);
+            return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
+        }
+
+        elimination_map.projectFree(self.fullRhsValues(), self.rhsValues());
+        const result = try self.solve();
+        for (elimination_map.constrained_mask, 0..) |is_constrained, idx| {
+            full_solution[idx] = if (is_constrained)
+                0.0
+            else
+                self.solutionValues()[elimination_map.reduced_index[idx]];
+        }
+        return result;
+    }
+
+    fn eliminationMap(self: *LinearSystem) EliminationMap {
+        return self.elimination_map orelse @panic("operation requires an eliminated linear system");
+    }
+
+    fn boundaryCoupling(self: *LinearSystem) sparse.CsrMatrix(f64) {
+        return self.boundary_coupling orelse @panic("operation requires an eliminated linear system");
+    }
+
+    fn deinitCore(self: *LinearSystem, allocator: std.mem.Allocator, deinit_matrix: bool) void {
+        self.scratch.deinit(allocator);
+        allocator.free(self.solution);
+        allocator.free(self.rhs);
+        allocator.free(self.diagonal);
+        if (deinit_matrix) self.matrix.deinit(allocator);
+        if (self.full_rhs) |full_rhs| allocator.free(full_rhs);
+        if (self.boundary_coupling) |*boundary_coupling| boundary_coupling.deinit(allocator);
+        if (self.elimination_map) |*elimination_map| elimination_map.deinit(allocator);
     }
 };
 
@@ -172,113 +313,6 @@ pub const EliminationMap = struct {
             else
                 reduced_values[self.reduced_index[idx]];
         }
-    }
-};
-
-pub const EliminatedLinearSystem = struct {
-    elimination_map: EliminationMap,
-    boundary_coupling: sparse.CsrMatrix(f64),
-    full_rhs: []f64,
-    reduced_system: ?LinearSystem,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        full_matrix: sparse.CsrMatrix(f64),
-        elimination_map: EliminationMap,
-        config: SolveConfig,
-    ) !EliminatedLinearSystem {
-        std.debug.assert(full_matrix.n_rows == full_matrix.n_cols);
-        std.debug.assert(full_matrix.n_rows == elimination_map.fullCount());
-
-        const full_rhs = try allocator.alloc(f64, full_matrix.n_rows);
-        errdefer allocator.free(full_rhs);
-        @memset(full_rhs, 0.0);
-
-        const reduced_parts = try buildReducedParts(
-            allocator,
-            full_matrix,
-            elimination_map,
-            config,
-        );
-        errdefer {
-            reduced_parts.boundary_coupling.deinit(allocator);
-            if (reduced_parts.reduced_system) |*system| system.deinit(allocator);
-        }
-
-        return .{
-            .elimination_map = elimination_map,
-            .boundary_coupling = reduced_parts.boundary_coupling,
-            .full_rhs = full_rhs,
-            .reduced_system = reduced_parts.reduced_system,
-        };
-    }
-
-    pub fn deinit(self: *EliminatedLinearSystem, allocator: std.mem.Allocator) void {
-        if (self.reduced_system) |*system| system.deinit(allocator);
-        allocator.free(self.full_rhs);
-        self.boundary_coupling.deinit(allocator);
-        self.elimination_map.deinit(allocator);
-    }
-
-    pub fn fullRhsValues(self: *EliminatedLinearSystem) []f64 {
-        return self.full_rhs;
-    }
-
-    pub fn seedSolutionFromFull(self: *EliminatedLinearSystem, full_values: []const f64) void {
-        std.debug.assert(full_values.len == self.elimination_map.fullCount());
-        if (self.reduced_system) |*system| {
-            self.elimination_map.projectFree(full_values, system.solutionValues());
-        }
-    }
-
-    pub fn solveWithConstrainedValues(
-        self: *EliminatedLinearSystem,
-        constrained_values: []const f64,
-        full_solution: []f64,
-    ) !cg.SolveResult {
-        std.debug.assert(constrained_values.len == self.elimination_map.fullCount());
-        std.debug.assert(full_solution.len == self.elimination_map.fullCount());
-
-        if (self.reduced_system) |*system| {
-            const reduced_rhs = system.rhsValues();
-            for (self.elimination_map.free_indices, 0..) |full_row_idx, reduced_row_idx| {
-                var rhs_value = self.full_rhs[full_row_idx];
-                const row = self.boundary_coupling.row(@intCast(reduced_row_idx));
-                for (row.cols, row.vals) |col_idx, value| {
-                    rhs_value -= value * constrained_values[col_idx];
-                }
-                reduced_rhs[reduced_row_idx] = rhs_value;
-            }
-
-            const result = try system.solve();
-            self.elimination_map.liftFree(system.solutionValues(), constrained_values, full_solution);
-            return result;
-        }
-
-        @memcpy(full_solution, constrained_values);
-        return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
-    }
-
-    pub fn solveHomogeneous(
-        self: *EliminatedLinearSystem,
-        full_solution: []f64,
-    ) !cg.SolveResult {
-        std.debug.assert(full_solution.len == self.elimination_map.fullCount());
-
-        if (self.reduced_system) |*system| {
-            self.elimination_map.projectFree(self.full_rhs, system.rhsValues());
-            const result = try system.solve();
-            for (self.elimination_map.constrained_mask, 0..) |is_constrained, idx| {
-                full_solution[idx] = if (is_constrained)
-                    0.0
-                else
-                    system.solutionValues()[self.elimination_map.reduced_index[idx]];
-            }
-            return result;
-        }
-
-        @memset(full_solution, 0.0);
-        return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
     }
 };
 
@@ -394,7 +428,7 @@ test "linear system computes matrix diagonal and reuses owned buffers across sol
     try testing.expectApproxEqAbs(@as(f64, 1.0), system.solutionValues()[1], 1e-12);
 }
 
-test "eliminated linear system scatters constrained values and corrects reduced rhs" {
+test "linear system scatters constrained values and corrects reduced rhs" {
     const allocator = testing.allocator;
 
     var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 7);
@@ -419,7 +453,7 @@ test "eliminated linear system scatters constrained values and corrects reduced 
     matrix.values[6] = 2.0;
 
     const elimination_map = try EliminationMap.init(allocator, &[_]bool{ true, false, true });
-    var system = try EliminatedLinearSystem.init(allocator, matrix, elimination_map, .{});
+    var system = try LinearSystem.eliminate(allocator, matrix, elimination_map, .{});
     defer system.deinit(allocator);
 
     system.fullRhsValues()[0] = 0.0;
@@ -436,7 +470,7 @@ test "eliminated linear system scatters constrained values and corrects reduced 
     try testing.expectApproxEqAbs(@as(f64, 20.0), solution[2], 1e-12);
 }
 
-test "eliminated linear system reuses full rhs buffer and seeds from full state" {
+test "linear system reuses full rhs buffer and seeds from full state" {
     const allocator = testing.allocator;
 
     var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 3);
@@ -453,7 +487,7 @@ test "eliminated linear system reuses full rhs buffer and seeds from full state"
     matrix.values[2] = 6.0;
 
     const elimination_map = try EliminationMap.init(allocator, &[_]bool{ true, false, false });
-    var system = try EliminatedLinearSystem.init(allocator, matrix, elimination_map, .{});
+    var system = try LinearSystem.eliminate(allocator, matrix, elimination_map, .{});
     defer system.deinit(allocator);
 
     const rhs_ptr = system.fullRhsValues().ptr;

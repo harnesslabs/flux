@@ -18,6 +18,9 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - Public names that leak internal structure instead of presenting one obvious way to do the task
 - APIs that ask the caller for information already encoded in types or available from existing values
 - Transitional interfaces kept only for backward compatibility; pre-release code should delete them
+- Public surfaces whose nouns and verbs do not form a coherent mental model
+- Policy-shaped type names where a stable noun plus a stronger verb would be cleaner
+- Families of near-copy nouns that should likely be one noun with qualifiers/adjectives instead
 
 ### Unnecessary indirection
 - Wrappers that only rename or forward without enforcing a stronger invariant
@@ -50,6 +53,19 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - Parameter lists carrying compile-time or runtime information that can be derived
 - Names that expose mechanics instead of intent
 - Generic-looking entry points whose implementations still force maintainers to touch multiple branches for every new degree/dimension case
+- Abstractions whose qualifiers belong as adjectives on a noun, but were instead split into extra wrapper nouns
+
+## Abstraction language check
+
+For any public surface you flag, ask explicitly:
+- What is the noun: the stable structural object?
+- What is the verb: the meaningful operation on that object?
+- What are the adjectives: the qualifiers that refine the noun without changing what it fundamentally is?
+
+In this repo, adjectives are often `comptime` qualifiers such as dimension,
+degree, primal/dual side, scalar type, or ownership/policy mode. A cleanup
+finding is stronger when it can say "these three nouns should collapse into one
+noun plus one verb and one adjective" instead of only "there is duplication".
 
 ## Judgment rules
 
@@ -60,6 +76,8 @@ Before proposing new issues, check the current open GitHub issues for overlappin
 - Favor moving capability to the layer where it belongs. Example glue in the library is a smell; library workarounds in examples are also a smell.
 - Treat LOC reduction as a proxy, not a goal. Shorter code that weakens invariants is not a win.
 - If an API is sold as generic, ask whether the implementation is generic in the same sense. A disguised lookup table is usually not good enough.
+- Prefer one strong noun with adjectives over a family of shallow wrapper nouns, but only if the implementation stays structurally honest.
+- Prefer a verb on an existing noun over introducing a second noun when the capability is fundamentally "do X to this object".
 - In FEEC/DEC or topology-heavy code, prefer implementations derived from the mathematical object itself (`∂`, incidence, degree recursion, duality relation) over nested switches on `(dimension, degree)`.
 - Before accepting a refactor, ask: if we added one more supported degree/dimension, would this code naturally extend, or would we add another case? If another case is needed, call that out.
 

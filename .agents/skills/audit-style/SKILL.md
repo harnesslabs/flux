@@ -15,6 +15,8 @@ If a component is specified, scope to that component per `project/components.md`
 - Full words, no abbreviations: `exterior_derivative` not `ext_deriv`
 - Units and qualifiers appended in descending significance
 - Consistent naming patterns across similar constructs
+- Public names should read like a coherent domain language: stable nouns,
+  clear verbs, and qualifiers/adjectives that refine rather than fragment the model
 
 ### Dead code and stale references
 - Unreachable code paths
@@ -38,6 +40,7 @@ If a component is specified, scope to that component per `project/components.md`
 - Public API should be consistent in style (all snake_case, consistent parameter ordering)
 - Nested `switch` / `if` ladders over semantic axes like `(dimension, degree)` that may indicate a missing derived definition or comptime formulation rather than a true need for casework
 - Generic-looking APIs whose implementation style contradicts the abstraction they present
+- Families of type names that differ only by policy adjectives and may want one stronger noun instead
 
 ### Formatting
 - `zig fmt` compliance (should be caught by CI, but verify)
@@ -50,6 +53,7 @@ Before concluding that a style issue is only cosmetic, ask:
 - Is this "generic" function actually generic, or is it a manually enumerated case table?
 - Could the implementation be written once in terms of the native structure (incidence, recursion, comptime relation) instead of today’s supported cases?
 - Does this control flow naturally extend when the next degree/dimension/variant is added, or does it require editing multiple branches?
+- Are these words the right nouns, verbs, and adjectives for the abstraction, or are the names exposing implementation accidents?
 
 ## Output format
 

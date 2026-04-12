@@ -14,6 +14,8 @@ This skill is primarily **agent-invoked during `/tackle`** when a non-obvious de
 - Selecting an algorithm when multiple valid options exist
 - Changing an existing interface to accommodate new requirements
 - Deviating from a pattern established elsewhere in the codebase
+- Choosing whether a concept should be expressed as a noun, a verb on an
+  existing noun, or an adjective/qualifier on a stable abstraction
 
 ## Steps
 

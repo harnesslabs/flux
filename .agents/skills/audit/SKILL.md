@@ -26,6 +26,13 @@ Each agent should:
 - Produce findings in the format defined by its respective skill
 - Return its findings to the parent
 
+Across all five lenses, keep one shared abstraction question in view:
+- What are the nouns?
+- What are the verbs?
+- What are the adjectives/qualifiers?
+
+Use that to distinguish true structural problems from isolated local symptoms.
+
 ## Consolidation
 
 After all four agents complete, consolidate into a single report:

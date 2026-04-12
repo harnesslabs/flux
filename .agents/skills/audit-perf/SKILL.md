@@ -40,6 +40,11 @@ If a component is specified, scope to that component per `project/components.md`
 - Which functions are likely hot paths (called per-timestep, per-cell, per-edge)?
 - Are hot paths free of allocations and assertions that could be `@setRuntimeSafety(false)` in release?
 
+### Abstraction/performance tension
+- Generic-looking surfaces whose adjective space (`dimension`, `degree`, scalar type, layout mode) explodes into manual runtime branching
+- Wrapper layers that hide data movement, allocation, or copies behind tidy API names
+- Policy-specific nouns that prevent reuse of one optimized hot path across several variants
+
 ## Output format
 
 ```
@@ -64,6 +69,11 @@ Date: YYYY-MM-DD
 ```
 
 All findings should be filed as issues, not auto-fixed. Performance changes require benchmarking to verify improvement, which means they need their own PR with before/after measurements.
+
+When a performance issue is really an abstraction issue, say so explicitly:
+- wrong noun: too many concrete wrapper types block one optimized path
+- wrong verb: work is split across multiple steps instead of one fused operation
+- wrong adjective: a qualifier that should be `comptime` or layout-level is handled as dynamic casework
 
 Benchmark hygiene is part of the audit:
 - Flag apples-to-oranges comparisons where a benchmark method changed without a per-benchmark `version` bump.

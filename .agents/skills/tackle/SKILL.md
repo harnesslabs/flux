@@ -94,12 +94,26 @@ Design the public interface before implementing internals.
    - a different constraint/policy choice
    - a solver-graph composition use case
    If the name or ownership model would obviously need replacement there, redesign before implementing.
-5. **Default-forward checkpoint:** present the API surface to the user briefly, but continue without waiting for confirmation unless the design is materially uncertain, introduces a cross-component interface, or would be expensive to unwind if wrong. Ask for confirmation only in those cases.
-6. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
+5. Ask explicitly whether the interface has the right nouns and verbs:
+   - noun: the stable structural object
+   - verb: the meaningful operation on that object
+   Prefer `system.eliminate(...)` over introducing another wrapper type when
+   the operation is fundamentally a transformation of one existing object.
+6. Ask whether any qualifiers belong as adjectives on the noun rather than as
+   new nouns:
+   - `comptime` parameters
+   - scalar type
+   - dimension / degree
+   - primal vs dual side
+   - policy or ownership mode
+   Prefer qualifiers that refine one stable concept over families of near-copy
+   wrapper types, but only when the implementation remains genuinely generic.
+7. **Default-forward checkpoint:** present the API surface to the user briefly, but continue without waiting for confirmation unless the design is materially uncertain, introduces a cross-component interface, or would be expensive to unwind if wrong. Ask for confirmation only in those cases.
+8. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
    - Read the current epoch's `decision_log.md`
    - Append the decision in the standard format (see `/decide`)
    - Commit the decision log alongside the stubs
-7. Commit and push:
+9. Commit and push:
    ```sh
    git add <source files> <decision log if updated>
    git commit -m "feat(domain): stub API for <capability>"

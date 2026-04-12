@@ -46,7 +46,7 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const HeatSystem = struct {
-    constrained_system: linear_system.EliminatedLinearSystem,
+    linear_system: linear_system.LinearSystem,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -75,22 +75,22 @@ const HeatSystem = struct {
         var full_matrix = try triplets.build(allocator);
         errdefer full_matrix.deinit(allocator);
 
-        var constrained_system = try linear_system.EliminatedLinearSystem.init(
+        var system_runtime = try linear_system.LinearSystem.eliminate(
             allocator,
             full_matrix,
             elimination_map,
             .{},
         );
-        errdefer constrained_system.deinit(allocator);
+        errdefer system_runtime.deinit(allocator);
         full_matrix.deinit(allocator);
 
         return .{
-            .constrained_system = constrained_system,
+            .linear_system = system_runtime,
         };
     }
 
     pub fn deinit(self: *HeatSystem, allocator: std.mem.Allocator) void {
-        self.constrained_system.deinit(allocator);
+        self.linear_system.deinit(allocator);
     }
 };
 
@@ -220,7 +220,7 @@ const HeatStepperBuilder = struct {
 
     pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
         _ = allocator;
-        self.heat_system.constrained_system.seedSolutionFromFull(state_values);
+        self.heat_system.linear_system.seedSolutionFromFull(state_values);
         return .{
             .mesh = self.mesh,
             .heat_system = self.heat_system,
@@ -309,14 +309,14 @@ fn stepBackwardEuler(
 ) !void {
     _ = allocator;
     const masses = mesh.vertices.slice().items(.dual_volume);
-    const full_rhs = heat_system.constrained_system.fullRhsValues();
+    const full_rhs = heat_system.linear_system.fullRhsValues();
     std.debug.assert(full_rhs.len == state_values.len);
 
     for (full_rhs, masses, state_values) |*rhs_value, mass, state_value| {
         rhs_value.* = mass * state_value;
     }
 
-    _ = try heat_system.constrained_system.solveHomogeneous(state_values);
+    _ = try heat_system.linear_system.solveHomogeneous(state_values);
 }
 
 fn initializeState(
