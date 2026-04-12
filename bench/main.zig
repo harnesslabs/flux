@@ -250,7 +250,7 @@ const BenchmarkContext = struct {
         }
         const cavity_mesh = try allocator.create(Mesh2D);
         errdefer allocator.destroy(cavity_mesh);
-        cavity_mesh.* = try Mesh2D.uniform_grid(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
+        cavity_mesh.* = try Mesh2D.plane(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
         errdefer cavity_mesh.deinit(allocator);
         var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
         errdefer cavity_state.deinit(allocator);
@@ -1419,7 +1419,7 @@ pub fn main() !void {
     const stderr = stderrWriter();
     try stderr.print("  Building {d}x{d} mesh...\n", .{ grid_nx, grid_ny });
 
-    var mesh = try Mesh2D.uniform_grid(allocator, grid_nx, grid_ny, grid_width, grid_height);
+    var mesh = try Mesh2D.plane(allocator, grid_nx, grid_ny, grid_width, grid_height);
     defer mesh.deinit(allocator);
 
     try stderr.print("  Mesh: {d} vertices, {d} edges, {d} faces\n", .{

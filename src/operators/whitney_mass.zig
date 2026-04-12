@@ -623,7 +623,7 @@ const Mesh3D = topology.Mesh(3, 3);
 
 test "Whitney mass matrix is square with n_edges dimension" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var mass = try assemble_whitney_mass(1, allocator, &mesh);
@@ -635,7 +635,7 @@ test "Whitney mass matrix is square with n_edges dimension" {
 
 test "Whitney mass matrix is symmetric" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var mass = try assemble_whitney_mass(1, allocator, &mesh);
@@ -676,7 +676,7 @@ test "Whitney mass matrix is symmetric" {
 
 test "Whitney mass matrix is positive definite (xᵀMx > 0 for random x)" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var mass = try assemble_whitney_mass(1, allocator, &mesh);
@@ -703,7 +703,7 @@ test "Whitney mass matrix is positive definite (xᵀMx > 0 for random x)" {
 
 test "Whitney mass matrix has nonzero diagonal and at least one entry per row" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var mass = try assemble_whitney_mass(1, allocator, &mesh);

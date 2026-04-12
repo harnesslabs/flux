@@ -289,7 +289,7 @@ test "Poisson solve converges at second order on 2D uniform grids" {
     var errors: [levels.len]f64 = undefined;
 
     for (levels, 0..) |n, level_idx| {
-        var mesh = try Mesh2D.uniform_grid(allocator, n, n, 1.0, 1.0);
+        var mesh = try Mesh2D.plane(allocator, n, n, 1.0, 1.0);
         defer mesh.deinit(allocator);
 
         var operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);

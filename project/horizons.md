@@ -179,6 +179,31 @@ distinction between embedded geometry and coordinate/chart metadata.
 
 ---
 
+## Dimension-generic canonical geometry families
+
+**Layer:** architecture
+**Constraint on current work:** Today's canonical constructors may use honest
+current names such as `Mesh(2, 2).plane(...)` and `Mesh(3, 2).torus(...)`, but
+do not let those names harden into a design that blocks higher-dimensional
+families. We will likely want constructor nouns that describe the structural
+geometry family rather than one current dimension-specific instance:
+
+- rectangular / box-like product domains rather than only `plane`
+- spherical embeddings beyond the current triangulated 2-sphere
+- toroidal families beyond the current embedded surface torus
+
+The practical constraint now is to keep constructor implementation details and
+call sites easy to rename or regroup later. Avoid attaching extra semantics to
+`plane`, `sphere`, or `torus` that would make a later shift to
+`rectangular(...)`, `spherical(...)`, or `toroidal(...)` painful.
+
+**Enablers:** Stable canonical constructors, clearer support for `Mesh(n, n)`
+and `Mesh(n + 1, n)` families, and more examples that exercise geometry setup
+outside today's 2D surface cases.
+**Source:** Review note 2026-04-12
+
+---
+
 ## Schwarz-type domain decomposition
 
 **Layer:** architecture

@@ -62,7 +62,7 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
 test "M3 acceptance: Euler 2D conserves total circulation to machine precision over a short dipole run" {
     const allocator = testing.allocator;
 
-    var mesh = try euler.Mesh(2).uniform_grid(allocator, 16, 16, 1.0, 1.0);
+    var mesh = try euler.Mesh(2).plane(allocator, 16, 16, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var state = try euler.State(2).init(allocator, &mesh);

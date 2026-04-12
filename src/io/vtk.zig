@@ -216,7 +216,7 @@ fn writeDataArray(writer: anytype, name: []const u8, values: []const f64, num_co
 
 test "vtu output contains valid XML structure for minimal mesh" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
@@ -245,7 +245,7 @@ test "vtu output contains valid XML structure for minimal mesh" {
 
 test "vtu vertex coordinates round-trip to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 3.0, 5.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 2, 2, 3.0, 5.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
@@ -290,7 +290,7 @@ test "vtu vertex coordinates round-trip to machine precision" {
 
 test "vtu 0-form PointData round-trips to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Create a 0-form: f(v) = x² + y at each vertex.
@@ -325,7 +325,7 @@ test "vtu 0-form PointData round-trips to machine precision" {
 
 test "vtu 2-form CellData round-trips to machine precision" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // Create a 2-form: assign face index as value (distinct values for verification).
@@ -359,7 +359,7 @@ test "vtu 2-form CellData round-trips to machine precision" {
 
 test "vtu with both PointData and CellData" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const point_values = try allocator.alloc(f64, mesh.num_vertices());
@@ -390,7 +390,7 @@ test "vtu with both PointData and CellData" {
 
 test "vtu triangle connectivity matches mesh face vertices" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
@@ -428,7 +428,7 @@ test "vtu triangle connectivity matches mesh face vertices" {
 
 test "vtu all cell types are triangle (type 5)" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 3, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var output = std.ArrayListUnmanaged(u8){};
@@ -709,7 +709,7 @@ test "vtu 0-form PointData round-trips with random data across grid sizes" {
     };
 
     for (sizes) |size| {
-        var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 3.0, 2.0);
+        var mesh = try topology.Mesh(2, 2).plane(allocator, size[0], size[1], 3.0, 2.0);
         defer mesh.deinit(allocator);
 
         const values = try allocator.alloc(f64, mesh.num_vertices());
@@ -743,7 +743,7 @@ test "vtu 2-form CellData round-trips with random data across grid sizes" {
     };
 
     for (sizes) |size| {
-        var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 2.0, 1.0);
+        var mesh = try topology.Mesh(2, 2).plane(allocator, size[0], size[1], 2.0, 1.0);
         defer mesh.deinit(allocator);
 
         const values = try allocator.alloc(f64, mesh.num_faces());

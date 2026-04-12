@@ -251,7 +251,7 @@ test "boundary condition concept accepts Dirichlet and periodic on cochains" {
 
 test "boundary selection marks boundary vertices on 2D mesh" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var selection = try BoundarySelection(Primal0_2D).initBoundary(allocator, &mesh);
@@ -287,7 +287,7 @@ test "boundary selection marks boundary edges on 3D mesh" {
 
 test "Dirichlet is idempotent on boundary vertices" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var field = try Primal0_2D.init(allocator, &mesh);
@@ -318,7 +318,7 @@ test "Dirichlet is idempotent on boundary vertices" {
 
 test "PEC is idempotent on boundary edges" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var field = try Primal1_2D.init(allocator, &mesh);
@@ -343,7 +343,7 @@ test "PEC is idempotent on boundary edges" {
 
 test "periodic averages paired boundary vertices and is idempotent" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var field = try Primal0_2D.init(allocator, &mesh);
@@ -375,7 +375,7 @@ test "periodic averages paired boundary vertices and is idempotent" {
 
 test "Dirichlet composed with exterior derivative zeros boundary-edge gradient for constant boundary data" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var field = try Primal0_2D.init(allocator, &mesh);

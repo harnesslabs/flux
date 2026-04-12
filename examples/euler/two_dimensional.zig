@@ -100,7 +100,7 @@ pub fn runImpl(
     config: ConfigImpl,
     writer: anytype,
 ) !RunResultImpl {
-    var mesh = try Mesh.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    var mesh = try Mesh.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
     var state = try StateImpl.init(allocator, &mesh);

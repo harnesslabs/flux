@@ -243,7 +243,7 @@ const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -268,7 +268,7 @@ test "Δ₀ of linear function f(x,y) = x is zero at interior vertices" {
     const allocator = testing.allocator;
     const nx: u32 = 5;
     const ny: u32 = 4;
-    var mesh = try Mesh2D.uniform_grid(allocator, nx, ny, 3.0, 2.0);
+    var mesh = try Mesh2D.plane(allocator, nx, ny, 3.0, 2.0);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -296,7 +296,7 @@ test "Δ₀ of linear function f(x,y) = x is zero at interior vertices" {
 test "Δ₀ is positive-semidefinite on random 0-forms (1000 trials)" {
     // ⟨ω, Δ₀ω⟩_★₀ = ωᵀ ★₀ Δ₀ω = ωᵀ D₀ᵀ ★₁ D₀ ω = ‖D₀ω‖²_★₁ ≥ 0
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -326,7 +326,7 @@ test "Δ₀ is positive-semidefinite on random 0-forms (1000 trials)" {
 test "Δ₀ is symmetric in ★₀-weighted inner product (1000 trials)" {
     // Self-adjointness: ⟨Δ₀f, g⟩_★₀ = ⟨f, Δ₀g⟩_★₀
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -364,7 +364,7 @@ test "Δ₀ kernel is exactly the constant functions on connected mesh" {
     // On a connected mesh, the only 0-forms with Δ₀ω = 0 are constants.
     // Test: random non-constant 0-form has ‖Δ₀ω‖ > 0.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -389,7 +389,7 @@ test "Δ₀ kernel is exactly the constant functions on connected mesh" {
 
 test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC0.init(allocator, &mesh);
@@ -418,7 +418,7 @@ test "assembled Δ₀ apply matches compose-on-the-fly Laplacian" {
 
 test "assembled Δ₀ apply is stable across repeated applications" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 6, 5, 3.0, 2.0);
+    var mesh = try Mesh2D.plane(allocator, 6, 5, 3.0, 2.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC0.init(allocator, &mesh);
@@ -510,7 +510,7 @@ test "Δ₁ of exact 1-form d₀f has dδ component zero" {
     // and the dδ term applied to d₀f reduces to d₀(Δ₀f). This test
     // verifies Δ₁ acts correctly on exact forms.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -532,7 +532,7 @@ test "Δ₁ is positive-semidefinite on random 1-forms (500 trials)" {
     // ⟨ω, Δ₁ω⟩_★₁ = ‖d₁ω‖²_★₂ + ‖δ₀ω‖²_★₀ ≥ 0
     // The ★₁-weighted inner product uses dual_length/length ratios.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -565,7 +565,7 @@ test "Δ₁ is symmetric in ★₁-weighted inner product (500 trials)" {
     const allocator = testing.allocator;
     const sparse_mod = @import("../math/sparse.zig");
 
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -622,7 +622,7 @@ test "Δ₂ of constant 2-form: ⟨Δ₂c, c⟩_★₂ ≥ 0" {
     // the pointwise inverse was local. With the Whitney ★₁⁻¹ (global CG
     // solve), boundary effects propagate to interior faces.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -648,7 +648,7 @@ test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {
     // ⟨ω, Δ₂ω⟩_★₂ = ‖δ₁ω‖²_★₁ ≥ 0
     // The ★₂-weighted inner product uses 1/area ratios.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
@@ -677,7 +677,7 @@ test "Δ₂ is positive-semidefinite on random 2-forms (500 trials)" {
 test "Δ₂ is symmetric in ★₂-weighted inner product (500 trials)" {
     // Self-adjointness: ⟨Δ₂f, g⟩_★₂ = ⟨f, Δ₂g⟩_★₂
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
     const operator_context = try context.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();

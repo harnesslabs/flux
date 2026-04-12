@@ -88,7 +88,7 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
 fn run2D(allocator: std.mem.Allocator, config: Config2D, writer: anytype) !RunResult2D {
     const h = config.spacing();
     const dt = config.dt();
-    var mesh = try runtime.Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    var mesh = try runtime.Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
     var state = try runtime.MaxwellState2D.init(allocator, &mesh);
     defer state.deinit(allocator);
@@ -252,7 +252,7 @@ pub fn run(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim), 
 
 pub fn makeMesh(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim)) !Mesh(dim) {
     return switch (dim) {
-        2 => try runtime.Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain),
+        2 => try runtime.Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain),
         3 => try makeCavityMesh(allocator, config),
         else => unreachable,
     };

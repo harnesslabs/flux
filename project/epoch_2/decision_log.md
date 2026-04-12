@@ -273,6 +273,34 @@ ownership model obvious, removes duplicated example-local buffer management,
 and stays compatible with future problem families that use different exact
 solutions or norms but the same orchestration.
 
+## 2026-04-12: Canonical geometries live under `topology.geometries` with mesh-typed entrypoints
+
+**Decision:** Add `src/topology/geometries.zig` as the canonical constructor
+layer for reusable shapes (`plane`, `disk`, `sphere`, `torus`). Keep
+mesh-typed entrypoints such as `Mesh(2, 2).disk(...)` and `Mesh(3, 2).torus(...)`
+as thin forwards into that layer, while existing `uniform_grid` and `sphere`
+continue to provide the same mesh-typed surface.
+
+**Alternatives considered:**
+1. Leave all constructors embedded directly in `Mesh` with no geometry module:
+   rejected because the issue is specifically about establishing geometry as a
+   coherent setup layer rather than accreting shape-specific methods inside one
+   large mesh file.
+2. Move entirely to free functions and remove mesh methods immediately:
+   rejected for this issue because it would create avoidable churn across
+   existing examples, docs, and tests without changing the underlying
+   abstraction.
+3. Introduce special wrapper types per geometry (`DiskMesh`, `SphereMesh`,
+   etc.): rejected because the stable noun is still "mesh"; geometry family is
+   a constructor choice, not a different topological object.
+
+**Rationale:** The geometry layer should be visible as its own concept, but the
+result is still an ordinary `Mesh(...)`. A dedicated `topology.geometries`
+namespace makes the constructor catalog explicit and reusable, while thin mesh
+forwards preserve the simplest typed entrypoint for current consumers. This
+keeps the API aligned with the project's "one obvious way" preference without
+forcing a larger constructor-surface rewrite into the same PR.
+
 **Rationale:** The real question in issue #48 is empirical: does smaller
 incidence storage make boundary-operator application faster on large meshes?
 Separating the storage experiment from mesh/operator integration keeps the API

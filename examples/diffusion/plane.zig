@@ -137,7 +137,7 @@ fn simulateCase(
     std.debug.assert(config.domain > 0.0);
     std.debug.assert(config.dt_scale > 0.0);
 
-    var mesh = try Mesh2D.uniform_grid(allocator, config.grid, config.grid, config.domain, config.domain);
+    var mesh = try Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
     const operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
