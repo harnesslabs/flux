@@ -676,3 +676,67 @@ owned runtime around an already-assembled operator. Keeping the object matrix-
 agnostic but ownership-aware immediately shrinks both constrained and
 unconstrained diffusion examples, lets Poisson reuse the same packaging, and
 preserves a clean seam for later boundary-constraint composition.
+
+## 2026-04-11: Constrained implicit systems own reduced solve state and boundary couplings, not the source matrix
+
+**Decision:** Add `flux.operators.implicit_system.DirichletConstrainedSystem`
+as a layer above `AssembledImplicitSystem`. It owns:
+- the constrained/unconstrained mask
+- reduced-index bookkeeping
+- reusable full-size RHS storage
+- the reduced solve runtime
+- a sparse boundary-coupling matrix used to apply Dirichlet values at solve time
+
+It does **not** own the original full matrix after construction.
+
+**Alternatives considered:**
+1. Keep the full matrix inside the constrained object: rejected because some
+   callers, such as Poisson's zero-form path, only have a borrowed assembled
+   matrix from `OperatorContext`. Taking ownership there would either double-
+   free or force an unnecessary deep copy.
+2. Keep only mask/index bookkeeping and make callers apply boundary RHS
+   corrections themselves: rejected because that leaves the core reduced-system
+   orchestration in example code, which is exactly the abstraction gap this
+   issue is meant to close.
+3. Put boundary constraints directly into `AssembledImplicitSystem`: rejected
+   because constrained and unconstrained solves are different layers. The base
+   object should remain the reusable SPD solve runtime; the constrained layer
+   composes on top of it.
+
+**Rationale:** The essential reusable data for a constrained solve is not the
+entire full matrix, but the reduced matrix plus the boundary-coupling terms
+needed to shift the RHS when boundary values are nonzero. Owning just that data
+keeps the API valid for both borrowed and owned assembled matrices, moves the
+packing/unpacking logic into the library, and lets the plane diffusion example
+delete its manual boundary mask and reduced-index machinery without forcing a
+copy of every constrained matrix.
+
+## 2026-04-11: Linear-system abstractions are structural math concepts, not policy-shaped operator types
+
+**Decision:** Move the assembled-system runtime into `src/math/linear_system.zig`
+and expose structural nouns:
+- `LinearSystem`
+- `EliminationMap`
+- `EliminatedLinearSystem`
+
+Do not expose public types named after today's policy choice such as
+`DirichletConstrainedSystem`.
+
+**Alternatives considered:**
+1. Keep `implicit_system` under `src/operators/` with policy-shaped names:
+   rejected because the real concepts are linear algebra and elimination, not a
+   particular PDE boundary label. The operator layer uses these concepts but
+   does not own them.
+2. Keep only one monolithic constrained runtime type: rejected because it
+   obscures the reusable split between the base linear solve runtime and the
+   elimination map layered on top.
+3. Push all generality into one giant "system" object now: rejected because the
+   immediate structural split is already clear and valuable. We should name the
+   real concepts we understand today without inventing a premature universal
+   solver graph object.
+
+**Rationale:** This project is aiming at a general PDE solver library, not a
+collection of wrappers around today's examples. Structural abstractions should
+describe the underlying mathematical/computational role so they still make
+sense for other PDEs, dimensions, and solver families. `LinearSystem` plus an
+`EliminationMap` is such a split. `DirichletConstrainedSystem` was not.

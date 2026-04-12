@@ -3,7 +3,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
-const implicit_system_mod = flux.operators.implicit_system;
+const linear_system = flux.math.linear_system;
 const operator_context_mod = flux.operators.context;
 const evolution_mod = flux.integrators.evolution;
 
@@ -39,7 +39,7 @@ pub const ConvergenceResultImpl = struct {
 
 pub const SurfaceSystem = struct {
     operator_context: *SurfaceOperatorContext,
-    implicit_system: implicit_system_mod.AssembledImplicitSystem,
+    linear_system: linear_system.LinearSystem,
     masses: []f64,
 
     pub fn init(
@@ -69,22 +69,22 @@ pub const SurfaceSystem = struct {
         var system_matrix = try assembler.build(allocator);
         errdefer system_matrix.deinit(allocator);
 
-        var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+        var system_runtime = try linear_system.LinearSystem.init(
             allocator,
             system_matrix,
             .{},
         );
-        errdefer implicit_system.deinit(allocator);
+        errdefer system_runtime.deinit(allocator);
 
         return .{
             .operator_context = operator_context,
-            .implicit_system = implicit_system,
+            .linear_system = system_runtime,
             .masses = masses,
         };
     }
 
     pub fn deinit(self: *SurfaceSystem, allocator: std.mem.Allocator) void {
-        self.implicit_system.deinit(allocator);
+        self.linear_system.deinit(allocator);
         allocator.free(self.masses);
         self.operator_context.deinit();
     }
@@ -200,8 +200,8 @@ fn stepBackwardEuler(
     system: *SurfaceSystem,
     state_values: []f64,
 ) !void {
-    const rhs = system.implicit_system.rhsValues();
-    const solution = system.implicit_system.solutionValues();
+    const rhs = system.linear_system.rhsValues();
+    const solution = system.linear_system.solutionValues();
     std.debug.assert(rhs.len == state_values.len);
     std.debug.assert(solution.len == state_values.len);
 
@@ -209,7 +209,7 @@ fn stepBackwardEuler(
         rhs_value.* = mass * state_value;
     }
 
-    _ = try system.implicit_system.solve();
+    _ = try system.linear_system.solve();
 
     @memcpy(state_values, solution);
 }
@@ -236,7 +236,7 @@ const SurfaceStepperBuilder = struct {
 
     pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
         _ = allocator;
-        self.system.implicit_system.seedSolution(state_values);
+        self.system.linear_system.seedSolution(state_values);
         return .{
             .system = self.system,
             .state_values = state_values,

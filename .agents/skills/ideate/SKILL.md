@@ -53,6 +53,9 @@ This is the core of the conversation. For each idea (or cluster of related ideas
 - **Ask for the minimum viable version.** What's the smallest thing that would let you test whether this idea has legs?
 - **Connect to existing work.** Does this relate to something already built, planned, or decided? Name the specific file, issue, or decision.
 - **Challenge scope.** Is this flux's job, or is it a library/tool that flux should integrate with rather than build?
+- **Ask for the abstraction language.** If this idea becomes code, what are the
+  nouns, verbs, and adjectives? If the answer is a pile of near-synonyms or
+  policy-shaped wrapper types, the idea probably is not cooked enough yet.
 
 Do NOT ask all of these for every idea — use judgment. Some ideas need one question, some need several. Keep the conversation moving.
 

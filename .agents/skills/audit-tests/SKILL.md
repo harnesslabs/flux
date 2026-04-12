@@ -16,6 +16,7 @@ If a component is specified, scope to that component per `project/components.md`
 - Operators without property-based tests on random inputs
 - Edge cases not tested: empty mesh, single element, boundary-only elements, degenerate geometry
 - Error paths: what happens with invalid inputs? Are error returns tested?
+- Public abstractions whose noun/verb/adjective split is untested: e.g. only one adjective combination is covered even though the API claims broader generality
 
 ### Property test quality
 - Property tests should use random inputs, not hand-crafted examples only
@@ -39,6 +40,7 @@ If a component is specified, scope to that component per `project/components.md`
 ### Comptime tests
 - Are there `comptime` blocks that verify type-level properties?
 - Could any runtime test be promoted to a compile-time guarantee?
+- Are important adjectives encoded at `comptime` when they should be, and is that contract tested?
 
 ### Test organization
 - Tests should be in the same file as the code they test (Zig convention)
@@ -77,5 +79,9 @@ For each finding, propose whether it should be:
 - **Filed as an issue** (new property test, convergence test, coverage expansion)
 
 Convergence tests and property tests should always be filed as issues — they require careful mathematical thought, not quick fixes.
+
+If an API presents itself as a generic noun with adjective parameters, ask
+whether the tests actually exercise more than one meaningful adjective
+combination. A generic signature with one trivial instantiation is not strong evidence.
 
 Ask the user which findings to act on.

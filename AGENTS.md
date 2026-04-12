@@ -30,6 +30,49 @@ parallel convenience and "real" APIs unless there is a concrete current need.
 The project is pre-release; correctness and coherence matter more than
 backward compatibility with transitional interfaces.
 
+When extracting an abstraction from an issue or a duplicated example pattern,
+do **not** stop at the nearest working seam. Pressure-test the candidate API
+against the project's long-term target shape from `project/vision.md` and
+`project/horizons.md` before committing to public nouns or ownership boundaries.
+In practice:
+- Prefer structural concepts over today's policy labels. A public type name
+  should usually describe the underlying mathematical or computational role
+  (`LinearSystem`, `EliminationMap`, `Integrator`) rather than one current
+  use-case variant (`DirichletSystem`, `HeatRunner`, `PlaneScaffold`).
+- Ask explicitly what the core nouns and verbs are before finalizing an API.
+  Good abstractions usually read like a small domain language:
+  nouns are stable structural objects (`Mesh`, `LinearSystem`, `Evolution`);
+  verbs are the meaningful operations on them (`assemble`, `eliminate`,
+  `advance`, `project`, `lift`). If the API reads like a pile of case-specific
+  helper names instead of a coherent language, keep refining.
+- Ask whether important qualifiers are best expressed as adjectives rather than
+  new nouns. In this codebase, adjectives are often `comptime` qualifiers or
+  type parameters that refine a structural noun without replacing it:
+  dimension, degree, primal/dual side, scalar type, or similar. Prefer
+  `Mesh(3, 2)` or a degree-parameterized form over inventing a separate public
+  noun when the concept is still "a mesh" or "a form" with qualifiers.
+- Use adjectives carefully. They should refine a real noun, not disguise a
+  missing abstraction. If adding one more adjective forces manual case tables,
+  duplicated branches, or a new wrapper family, the underlying noun/verb split
+  is probably still wrong.
+- Treat every new public type name as a mathematical claim. If it would feel
+  wrong or embarrassingly narrow for a future example such as a mixed system,
+  a high-dimensional phase-space problem, or a different solver family, the
+  abstraction is probably still too shallow.
+- Use example shrinkage as a quality signal, not the only success criterion.
+  The stronger signal is that *new* examples would be straightforward to write
+  without inventing new framework nouns.
+- If an issue appears to call for a concrete local helper but the deeper
+  structural abstraction is visible, prefer the deeper abstraction even if it
+  requires a harder design pass up front. Local duplication removal is not
+  enough by itself.
+- Before finalizing an interface, ask explicitly: "What are the underlying
+  concepts here? What would this look like for a PDE, discretization, or
+  dimensionality we do not support yet?"
+- Prefer a strong verb on an existing structural noun over introducing a new
+  wrapper noun when the operation is fundamentally "do X to this object". A
+  second public noun needs stronger justification than a new method.
+
 When an API is presented as degree-generic, dimension-generic, or otherwise
 mathematically generic, pressure-test the implementation too — not just the
 signature. A generic public API backed by a hardcoded case table over today's
@@ -103,6 +146,12 @@ project, not just the code.
 Before finalizing any interface, check horizons to ensure the design does not
 preclude a known future direction. When ideation produces a horizon-level
 insight, add it there — not in the epoch roadmap.
+
+Issue acceptance criteria are necessary but not sufficient design guidance.
+They identify the concrete pain to remove, but they do not automatically define
+the right public abstraction. If satisfying an issue literally would introduce
+policy-shaped or example-shaped public nouns, step back and redesign around the
+deeper reusable concept instead.
 
 ---
 

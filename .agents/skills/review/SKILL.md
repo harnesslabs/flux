@@ -77,6 +77,8 @@ These are the findings the user is least likely to catch:
 - Were any non-obvious architectural decisions made? If yes, are they in the decision log?
 - Labels correct: `type/`, `domain/`, `priority/` all set?
 - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
+- Do the public names form a coherent abstraction language: stable nouns,
+  meaningful verbs, and qualifiers/adjectives in the right place?
 - Are there follow-on issues that should be opened before this merges?
 - If review exposes **non-blocking but real** follow-on work that should not bloat the current PR:
   - Check whether it is already tracked
