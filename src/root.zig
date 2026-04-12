@@ -59,6 +59,7 @@ pub const io = @import("io/root.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");
     pub const cg = @import("math/cg.zig");
+    pub const linear_system = @import("math/linear_system.zig");
 };
 pub const operators = struct {
     pub const boundary_conditions = @import("operators/boundary_conditions.zig");
@@ -67,7 +68,6 @@ pub const operators = struct {
     pub const context = @import("operators/context.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
-    pub const implicit_system = @import("operators/implicit_system.zig");
     pub const laplacian = @import("operators/laplacian.zig");
     pub const observers = @import("operators/observers.zig");
     pub const poisson = @import("operators/poisson.zig");

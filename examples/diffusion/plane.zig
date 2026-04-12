@@ -3,7 +3,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
-const implicit_system_mod = flux.operators.implicit_system;
+const linear_system = flux.math.linear_system;
 const operator_context_mod = flux.operators.context;
 const evolution_mod = flux.integrators.evolution;
 
@@ -46,7 +46,7 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const HeatSystem = struct {
-    constrained_system: implicit_system_mod.DirichletConstrainedSystem,
+    constrained_system: linear_system.EliminatedLinearSystem,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -58,8 +58,7 @@ const HeatSystem = struct {
         const stiffness = laplacian.stiffness;
         const masses = mesh.vertices.slice().items(.dual_volume);
 
-        const boundary_mask = try mesh.boundary_mask(allocator, 0);
-        defer allocator.free(boundary_mask);
+        const elimination_map = try linear_system.EliminationMap.initBoundary(Mesh2D, allocator, mesh, 0);
 
         var triplets = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
         defer triplets.deinit(allocator);
@@ -76,10 +75,10 @@ const HeatSystem = struct {
         var full_matrix = try triplets.build(allocator);
         errdefer full_matrix.deinit(allocator);
 
-        var constrained_system = try implicit_system_mod.DirichletConstrainedSystem.init(
+        var constrained_system = try linear_system.EliminatedLinearSystem.init(
             allocator,
             full_matrix,
-            boundary_mask,
+            elimination_map,
             .{},
         );
         errdefer constrained_system.deinit(allocator);
@@ -317,7 +316,7 @@ fn stepBackwardEuler(
         rhs_value.* = mass * state_value;
     }
 
-    _ = try heat_system.constrained_system.solveHomogeneousDirichlet(state_values);
+    _ = try heat_system.constrained_system.solveHomogeneous(state_values);
 }
 
 fn initializeState(

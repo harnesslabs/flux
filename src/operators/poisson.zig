@@ -12,8 +12,8 @@ const topology = @import("../topology/mesh.zig");
 const obj = @import("../io/obj.zig");
 const sparse = @import("../math/sparse.zig");
 const conjugate_gradient = @import("../math/cg.zig");
+const linear_system = @import("../math/linear_system.zig");
 const operator_context_mod = @import("context.zig");
-const implicit_system_mod = @import("implicit_system.zig");
 
 comptime {
     @setEvalBranchQuota(20000);
@@ -110,10 +110,11 @@ fn solve_dirichlet_reduced_system(
     std.debug.assert(boundary_mask.len == full_matrix.n_rows);
     std.debug.assert(boundary_values.len == full_matrix.n_rows);
 
-    var constrained_system = try implicit_system_mod.DirichletConstrainedSystem.init(
+    const elimination_map = try linear_system.EliminationMap.init(allocator, boundary_mask);
+    var constrained_system = try linear_system.EliminatedLinearSystem.init(
         allocator,
         full_matrix,
-        boundary_mask,
+        elimination_map,
         .{
             .tolerance_relative = config.tolerance_relative,
             .iteration_limit = config.iteration_limit,
@@ -124,7 +125,7 @@ fn solve_dirichlet_reduced_system(
     const solution = try allocator.alloc(f64, full_matrix.n_rows);
     errdefer allocator.free(solution);
     @memcpy(constrained_system.fullRhsValues(), full_rhs);
-    const cg_result = try constrained_system.solveDirichlet(boundary_values, solution);
+    const cg_result = try constrained_system.solveWithConstrainedValues(boundary_values, solution);
 
     return .{
         .solution = solution,

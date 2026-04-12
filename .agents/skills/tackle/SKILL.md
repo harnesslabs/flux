@@ -10,13 +10,14 @@ Find and work the highest-priority open issue to completion — one issue, one b
 1. Read `project/components.md` to understand codebase scope boundaries.
 2. Read `project/epoch_*/roadmap.md` for the current epoch to understand milestone priorities and acceptance criteria.
 3. Read `project/horizons.md` — before writing any interface, check that it does not preclude a known future direction.
-4. Get live state:
+4. Read `project/vision.md` when the work introduces or reshapes a public abstraction. Treat issue wording as the local symptom, not automatically as the correct abstraction boundary.
+5. Get live state:
    ```sh
    gh milestone list --state open
    gh issue list --state open --label "priority/high" --json number,title,labels,milestone
    gh issue list --state open --label "status/blocked" --json number,title,labels,milestone
    ```
-5. Select the best issue to work next using this priority order:
+6. Select the best issue to work next using this priority order:
    - On the current milestone (check which milestone is earliest in the roadmap)
    - `type/invariant` preferred — these are on the critical path for acceptance criteria
    - `priority/high` over `priority/medium`
@@ -24,7 +25,7 @@ Find and work the highest-priority open issue to completion — one issue, one b
    - Skip `status/blocked` issues (they can't be worked until unblocked)
    - Non-epoch bugs (`type/bug`) may take priority if they are breaking something
 
-6. Present the chosen issue to the user: number, title, acceptance criterion, and a one-sentence rationale for why this one. Ask for confirmation or redirection.
+7. Present the chosen issue to the user: number, title, acceptance criterion, and a one-sentence rationale for why this one. Ask for confirmation or redirection.
 
 ## Scope the work
 
@@ -32,7 +33,8 @@ On confirmation:
 
 1. Read the full issue body: `gh issue view <number>`
 2. Identify the **component scope** from `project/components.md` based on the issue's `domain/` label. Name the component and direct dependencies explicitly before opening source files.
-3. Create a branch and immediately open a draft PR:
+3. State the deeper structural concept you expect the issue to touch. If the issue title/body names a policy or one example family, ask whether that is the real abstraction or only the current manifestation.
+4. Create a branch and immediately open a draft PR:
    ```sh
    git checkout main && git pull
    git checkout -b <number>-<short-slug>
@@ -61,7 +63,7 @@ On confirmation:
    ```
    Slug format: lowercase, hyphens, ≤5 words. Example: `42-csr-incidence-matrix`.
 
-4. Read all relevant source files within the component scope before writing any code.
+5. Read all relevant source files within the component scope before writing any code.
    Start with the files named in the issue and the component entry in `project/components.md`. Only expand to additional direct dependencies when the current files prove they are needed. Do not read unrelated modules "for context".
 
 ## Phase 1: Tests
@@ -86,12 +88,18 @@ Design the public interface before implementing internals.
 1. Write function signatures, struct definitions, and type-level constraints as stubs.
 2. Use `@compileError("not yet implemented")` or `unreachable` for function bodies.
 3. Verify the tests compile against the stubs (they should fail at runtime, not compile time).
-4. **Default-forward checkpoint:** present the API surface to the user briefly, but continue without waiting for confirmation unless the design is materially uncertain, introduces a cross-component interface, or would be expensive to unwind if wrong. Ask for confirmation only in those cases.
-5. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
+4. Pressure-test every new public noun against at least one uncomfortable future case from `project/vision.md` / `project/horizons.md`:
+   - a different PDE family
+   - a different dimensionality
+   - a different constraint/policy choice
+   - a solver-graph composition use case
+   If the name or ownership model would obviously need replacement there, redesign before implementing.
+5. **Default-forward checkpoint:** present the API surface to the user briefly, but continue without waiting for confirmation unless the design is materially uncertain, introduces a cross-component interface, or would be expensive to unwind if wrong. Ask for confirmation only in those cases.
+6. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
    - Read the current epoch's `decision_log.md`
    - Append the decision in the standard format (see `/decide`)
    - Commit the decision log alongside the stubs
-6. Commit and push:
+7. Commit and push:
    ```sh
    git add <source files> <decision log if updated>
    git commit -m "feat(domain): stub API for <capability>"
@@ -119,6 +127,8 @@ Fill in the stubs until tests pass.
    - Do **not** expand the current PR to include these unless they are required to finish the issue correctly
    - Before creating anything, check whether the follow-on is already tracked
    - If it is real, untracked, and worth doing later, open a **non-milestone** GitHub issue with the normal labels (`type/`, `domain/`, `priority/`) and explicitly leave milestone unset
+
+10. If the implementation solves the issue by introducing a narrow policy-shaped abstraction, stop and redesign before finalizing. The goal is to remove the symptom by exposing the deeper reusable concept, not by wrapping today's special case in a new public type.
 
 The rhythm is: **write → test → commit → push → repeat**.
 

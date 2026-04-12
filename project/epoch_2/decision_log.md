@@ -710,3 +710,33 @@ keeps the API valid for both borrowed and owned assembled matrices, moves the
 packing/unpacking logic into the library, and lets the plane diffusion example
 delete its manual boundary mask and reduced-index machinery without forcing a
 copy of every constrained matrix.
+
+## 2026-04-11: Linear-system abstractions are structural math concepts, not policy-shaped operator types
+
+**Decision:** Move the assembled-system runtime into `src/math/linear_system.zig`
+and expose structural nouns:
+- `LinearSystem`
+- `EliminationMap`
+- `EliminatedLinearSystem`
+
+Do not expose public types named after today's policy choice such as
+`DirichletConstrainedSystem`.
+
+**Alternatives considered:**
+1. Keep `implicit_system` under `src/operators/` with policy-shaped names:
+   rejected because the real concepts are linear algebra and elimination, not a
+   particular PDE boundary label. The operator layer uses these concepts but
+   does not own them.
+2. Keep only one monolithic constrained runtime type: rejected because it
+   obscures the reusable split between the base linear solve runtime and the
+   elimination map layered on top.
+3. Push all generality into one giant "system" object now: rejected because the
+   immediate structural split is already clear and valuable. We should name the
+   real concepts we understand today without inventing a premature universal
+   solver graph object.
+
+**Rationale:** This project is aiming at a general PDE solver library, not a
+collection of wrappers around today's examples. Structural abstractions should
+describe the underlying mathematical/computational role so they still make
+sense for other PDEs, dimensions, and solver families. `LinearSystem` plus an
+`EliminationMap` is such a split. `DirichletConstrainedSystem` was not.
