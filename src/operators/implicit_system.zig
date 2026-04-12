@@ -87,34 +87,90 @@ pub const AssembledImplicitSystem = struct {
 };
 
 pub const DirichletConstrainedSystem = struct {
+    boundary_coupling: sparse.CsrMatrix(f64),
+    constrained_mask: []bool,
+    reduced_index: []u32,
+    free_indices: []u32,
+    full_rhs: []f64,
+    reduced_system: ?AssembledImplicitSystem,
+
     pub fn init(
         allocator: std.mem.Allocator,
         full_matrix: sparse.CsrMatrix(f64),
         constrained_mask: []const bool,
         config: SolveConfig,
     ) !DirichletConstrainedSystem {
-        _ = allocator;
-        _ = full_matrix;
-        _ = constrained_mask;
-        _ = config;
-        @panic("not yet implemented");
+        std.debug.assert(full_matrix.n_rows == full_matrix.n_cols);
+        std.debug.assert(constrained_mask.len == full_matrix.n_rows);
+
+        const owned_mask = try allocator.dupe(bool, constrained_mask);
+        errdefer allocator.free(owned_mask);
+
+        const reduced_index = try allocator.alloc(u32, full_matrix.n_rows);
+        errdefer allocator.free(reduced_index);
+        @memset(reduced_index, std.math.maxInt(u32));
+
+        var free_count: u32 = 0;
+        for (owned_mask, 0..) |is_constrained, idx| {
+            if (is_constrained) continue;
+            reduced_index[idx] = free_count;
+            free_count += 1;
+        }
+
+        const free_indices = try allocator.alloc(u32, free_count);
+        errdefer allocator.free(free_indices);
+        for (owned_mask, 0..) |is_constrained, idx| {
+            if (is_constrained) continue;
+            free_indices[reduced_index[idx]] = @intCast(idx);
+        }
+
+        const full_rhs = try allocator.alloc(f64, full_matrix.n_rows);
+        errdefer allocator.free(full_rhs);
+        @memset(full_rhs, 0.0);
+
+        const reduced_parts = try initReducedSystem(
+            allocator,
+            full_matrix,
+            owned_mask,
+            reduced_index,
+            free_count,
+            config,
+        );
+        errdefer {
+            reduced_parts.boundary_coupling.deinit(allocator);
+            if (reduced_parts.reduced_system) |*system| system.deinit(allocator);
+        }
+
+        return .{
+            .boundary_coupling = reduced_parts.boundary_coupling,
+            .constrained_mask = owned_mask,
+            .reduced_index = reduced_index,
+            .free_indices = free_indices,
+            .full_rhs = full_rhs,
+            .reduced_system = reduced_parts.reduced_system,
+        };
     }
 
     pub fn deinit(self: *DirichletConstrainedSystem, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-        @panic("not yet implemented");
+        if (self.reduced_system) |*system| system.deinit(allocator);
+        allocator.free(self.full_rhs);
+        allocator.free(self.free_indices);
+        allocator.free(self.reduced_index);
+        allocator.free(self.constrained_mask);
+        self.boundary_coupling.deinit(allocator);
     }
 
     pub fn fullRhsValues(self: *DirichletConstrainedSystem) []f64 {
-        _ = self;
-        @panic("not yet implemented");
+        return self.full_rhs;
     }
 
     pub fn seedSolutionFromFull(self: *DirichletConstrainedSystem, full_values: []const f64) void {
-        _ = self;
-        _ = full_values;
-        @panic("not yet implemented");
+        std.debug.assert(full_values.len == self.full_rhs.len);
+        if (self.reduced_system) |*system| {
+            for (self.free_indices, 0..) |full_idx, reduced_idx| {
+                system.solutionValues()[reduced_idx] = full_values[full_idx];
+            }
+        }
     }
 
     pub fn solveDirichlet(
@@ -122,21 +178,119 @@ pub const DirichletConstrainedSystem = struct {
         boundary_values: []const f64,
         full_solution: []f64,
     ) !cg.SolveResult {
-        _ = self;
-        _ = boundary_values;
-        _ = full_solution;
-        @panic("not yet implemented");
+        std.debug.assert(boundary_values.len == self.full_rhs.len);
+        std.debug.assert(full_solution.len == self.full_rhs.len);
+
+        if (self.reduced_system) |*system| {
+            const reduced_rhs = system.rhsValues();
+            for (self.free_indices, 0..) |full_row_idx, reduced_row_idx| {
+                var rhs_value = self.full_rhs[full_row_idx];
+                const row = self.boundary_coupling.row(@intCast(reduced_row_idx));
+                for (row.cols, row.vals) |col_idx, value| {
+                    rhs_value -= value * boundary_values[col_idx];
+                }
+                reduced_rhs[reduced_row_idx] = rhs_value;
+            }
+
+            const result = try system.solve();
+            scatterSolution(self, boundary_values, full_solution);
+            return result;
+        }
+
+        @memcpy(full_solution, boundary_values);
+        return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
     }
 
     pub fn solveHomogeneousDirichlet(
         self: *DirichletConstrainedSystem,
         full_solution: []f64,
     ) !cg.SolveResult {
-        _ = self;
-        _ = full_solution;
-        @panic("not yet implemented");
+        std.debug.assert(full_solution.len == self.full_rhs.len);
+
+        if (self.reduced_system) |*system| {
+            const reduced_rhs = system.rhsValues();
+            for (self.free_indices, 0..) |full_row_idx, reduced_row_idx| {
+                reduced_rhs[reduced_row_idx] = self.full_rhs[full_row_idx];
+            }
+
+            const result = try system.solve();
+            for (self.constrained_mask, 0..) |is_constrained, idx| {
+                full_solution[idx] = if (is_constrained)
+                    0.0
+                else
+                    system.solutionValues()[self.reduced_index[idx]];
+            }
+            return result;
+        }
+
+        @memset(full_solution, 0.0);
+        return .{ .iterations = 0, .relative_residual = 0.0, .converged = true };
     }
 };
+
+fn initReducedSystem(
+    allocator: std.mem.Allocator,
+    full_matrix: sparse.CsrMatrix(f64),
+    constrained_mask: []const bool,
+    reduced_index: []const u32,
+    free_count: u32,
+    config: SolveConfig,
+) !struct {
+    boundary_coupling: sparse.CsrMatrix(f64),
+    reduced_system: ?AssembledImplicitSystem,
+} {
+    var boundary_triplets = sparse.TripletAssembler(f64).init(free_count, full_matrix.n_cols);
+    defer boundary_triplets.deinit(allocator);
+
+    if (free_count == 0) {
+        return .{
+            .boundary_coupling = try boundary_triplets.build(allocator),
+            .reduced_system = null,
+        };
+    }
+
+    var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
+    defer triplets.deinit(allocator);
+
+    for (0..full_matrix.n_rows) |row_idx_usize| {
+        if (constrained_mask[row_idx_usize]) continue;
+
+        const reduced_row = reduced_index[row_idx_usize];
+        const row = full_matrix.row(@intCast(row_idx_usize));
+        for (row.cols, row.vals) |col_idx, value| {
+            if (constrained_mask[col_idx]) {
+                try boundary_triplets.addEntry(allocator, reduced_row, col_idx, value);
+            } else {
+                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], value);
+            }
+        }
+    }
+
+    var reduced_matrix = try triplets.build(allocator);
+    errdefer reduced_matrix.deinit(allocator);
+
+    var boundary_coupling = try boundary_triplets.build(allocator);
+    errdefer boundary_coupling.deinit(allocator);
+
+    return .{
+        .boundary_coupling = boundary_coupling,
+        .reduced_system = try AssembledImplicitSystem.init(allocator, reduced_matrix, config),
+    };
+}
+
+fn scatterSolution(
+    self: *DirichletConstrainedSystem,
+    boundary_values: []const f64,
+    full_solution: []f64,
+) void {
+    const system = &(self.reduced_system orelse unreachable);
+    for (self.constrained_mask, 0..) |is_constrained, idx| {
+        full_solution[idx] = if (is_constrained)
+            boundary_values[idx]
+        else
+            system.solutionValues()[self.reduced_index[idx]];
+    }
+}
 
 fn diagonalOf(allocator: std.mem.Allocator, matrix: sparse.CsrMatrix(f64)) ![]f64 {
     const diagonal = try allocator.alloc(f64, matrix.n_rows);
@@ -200,6 +354,7 @@ test "Dirichlet constrained system scatters boundary values and corrects reduced
     const allocator = testing.allocator;
 
     var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 7);
+    defer matrix.deinit(allocator);
     matrix.row_ptr[0] = 0;
     matrix.row_ptr[1] = 2;
     matrix.row_ptr[2] = 5;
@@ -245,6 +400,7 @@ test "Dirichlet constrained system reuses full rhs buffer and seeds from full st
     const allocator = testing.allocator;
 
     var matrix = try sparse.CsrMatrix(f64).init(allocator, 3, 3, 3);
+    defer matrix.deinit(allocator);
     matrix.row_ptr[0] = 0;
     matrix.row_ptr[1] = 1;
     matrix.row_ptr[2] = 2;

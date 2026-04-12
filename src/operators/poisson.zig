@@ -110,73 +110,21 @@ fn solve_dirichlet_reduced_system(
     std.debug.assert(boundary_mask.len == full_matrix.n_rows);
     std.debug.assert(boundary_values.len == full_matrix.n_rows);
 
-    const reduced_index = try allocator.alloc(u32, full_matrix.n_rows);
-    defer allocator.free(reduced_index);
-    @memset(reduced_index, std.math.maxInt(u32));
-
-    var free_count: u32 = 0;
-    for (boundary_mask, 0..) |is_boundary, cell_idx_usize| {
-        if (is_boundary) continue;
-        reduced_index[cell_idx_usize] = free_count;
-        free_count += 1;
-    }
-
-    if (free_count == 0) {
-        const solution = try allocator.dupe(f64, boundary_values);
-        return .{
-            .solution = solution,
-            .cg_result = .{ .iterations = 0, .relative_residual = 0.0, .converged = true },
-        };
-    }
-
-    var triplets = sparse.TripletAssembler(f64).init(free_count, free_count);
-    defer triplets.deinit(allocator);
-
-    const reduced_rhs = try allocator.alloc(f64, free_count);
-    defer allocator.free(reduced_rhs);
-    @memset(reduced_rhs, 0.0);
-
-    for (0..full_matrix.n_rows) |row_idx_usize| {
-        if (boundary_mask[row_idx_usize]) continue;
-
-        const row_idx: u32 = @intCast(row_idx_usize);
-        const reduced_row = reduced_index[row_idx_usize];
-        var rhs_value = full_rhs[row_idx_usize];
-        const row = full_matrix.row(row_idx);
-        for (row.cols, row.vals) |col_idx, value| {
-            if (boundary_mask[col_idx]) {
-                rhs_value -= value * boundary_values[col_idx];
-            } else {
-                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], value);
-            }
-        }
-        reduced_rhs[reduced_row] = rhs_value;
-    }
-
-    const reduced_matrix = try triplets.build(allocator);
-
-    var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+    var constrained_system = try implicit_system_mod.DirichletConstrainedSystem.init(
         allocator,
-        reduced_matrix,
+        full_matrix,
+        boundary_mask,
         .{
             .tolerance_relative = config.tolerance_relative,
             .iteration_limit = config.iteration_limit,
         },
     );
-    defer implicit_system.deinit(allocator);
-
-    @memcpy(implicit_system.rhsValues(), reduced_rhs);
-    const cg_result = try implicit_system.solve();
-    const reduced_solution = implicit_system.solutionValues();
+    defer constrained_system.deinit(allocator);
 
     const solution = try allocator.alloc(f64, full_matrix.n_rows);
     errdefer allocator.free(solution);
-    for (boundary_mask, 0..) |is_boundary, cell_idx_usize| {
-        solution[cell_idx_usize] = if (is_boundary)
-            boundary_values[cell_idx_usize]
-        else
-            reduced_solution[reduced_index[cell_idx_usize]];
-    }
+    @memcpy(constrained_system.fullRhsValues(), full_rhs);
+    const cg_result = try constrained_system.solveDirichlet(boundary_values, solution);
 
     return .{
         .solution = solution,

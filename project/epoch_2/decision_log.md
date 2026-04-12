@@ -676,3 +676,37 @@ owned runtime around an already-assembled operator. Keeping the object matrix-
 agnostic but ownership-aware immediately shrinks both constrained and
 unconstrained diffusion examples, lets Poisson reuse the same packaging, and
 preserves a clean seam for later boundary-constraint composition.
+
+## 2026-04-11: Constrained implicit systems own reduced solve state and boundary couplings, not the source matrix
+
+**Decision:** Add `flux.operators.implicit_system.DirichletConstrainedSystem`
+as a layer above `AssembledImplicitSystem`. It owns:
+- the constrained/unconstrained mask
+- reduced-index bookkeeping
+- reusable full-size RHS storage
+- the reduced solve runtime
+- a sparse boundary-coupling matrix used to apply Dirichlet values at solve time
+
+It does **not** own the original full matrix after construction.
+
+**Alternatives considered:**
+1. Keep the full matrix inside the constrained object: rejected because some
+   callers, such as Poisson's zero-form path, only have a borrowed assembled
+   matrix from `OperatorContext`. Taking ownership there would either double-
+   free or force an unnecessary deep copy.
+2. Keep only mask/index bookkeeping and make callers apply boundary RHS
+   corrections themselves: rejected because that leaves the core reduced-system
+   orchestration in example code, which is exactly the abstraction gap this
+   issue is meant to close.
+3. Put boundary constraints directly into `AssembledImplicitSystem`: rejected
+   because constrained and unconstrained solves are different layers. The base
+   object should remain the reusable SPD solve runtime; the constrained layer
+   composes on top of it.
+
+**Rationale:** The essential reusable data for a constrained solve is not the
+entire full matrix, but the reduced matrix plus the boundary-coupling terms
+needed to shift the RHS when boundary values are nonzero. Owning just that data
+keeps the API valid for both borrowed and owned assembled matrices, moves the
+packing/unpacking logic into the library, and lets the plane diffusion example
+delete its manual boundary mask and reduced-index machinery without forcing a
+copy of every constrained matrix.

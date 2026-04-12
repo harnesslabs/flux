@@ -46,10 +46,7 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const HeatSystem = struct {
-    implicit_system: implicit_system_mod.AssembledImplicitSystem,
-    reduced_index: []u32,
-    interior_vertices: []u32,
-    boundary_mask: []bool,
+    constrained_system: implicit_system_mod.DirichletConstrainedSystem,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -61,68 +58,40 @@ const HeatSystem = struct {
         const stiffness = laplacian.stiffness;
         const masses = mesh.vertices.slice().items(.dual_volume);
 
-        const boundary_mask = try boundaryVertexMask(allocator, mesh);
-        errdefer allocator.free(boundary_mask);
+        const boundary_mask = try mesh.boundary_mask(allocator, 0);
+        defer allocator.free(boundary_mask);
 
-        const reduced_index = try allocator.alloc(u32, mesh.num_vertices());
-        errdefer allocator.free(reduced_index);
-        @memset(reduced_index, std.math.maxInt(u32));
-
-        var interior_count: u32 = 0;
-        for (0..mesh.num_vertices()) |vertex_idx_usize| {
-            const vertex_idx: u32 = @intCast(vertex_idx_usize);
-            if (boundary_mask[vertex_idx]) continue;
-            reduced_index[vertex_idx] = interior_count;
-            interior_count += 1;
-        }
-
-        const interior_vertices = try allocator.alloc(u32, interior_count);
-        errdefer allocator.free(interior_vertices);
-        for (0..mesh.num_vertices()) |vertex_idx_usize| {
-            const vertex_idx: u32 = @intCast(vertex_idx_usize);
-            if (boundary_mask[vertex_idx]) continue;
-            interior_vertices[reduced_index[vertex_idx]] = vertex_idx;
-        }
-
-        var triplets = sparse.TripletAssembler(f64).init(interior_count, interior_count);
+        var triplets = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
         defer triplets.deinit(allocator);
         for (0..mesh.num_vertices()) |row_idx_usize| {
             const row_idx: u32 = @intCast(row_idx_usize);
-            if (boundary_mask[row_idx]) continue;
-
-            const reduced_row = reduced_index[row_idx];
-            try triplets.addEntry(allocator, reduced_row, reduced_row, masses[row_idx]);
+            try triplets.addEntry(allocator, row_idx, row_idx, masses[row_idx]);
 
             const row = stiffness.row(row_idx);
             for (row.cols, row.vals) |col_idx, value| {
-                if (boundary_mask[col_idx]) continue;
-                try triplets.addEntry(allocator, reduced_row, reduced_index[col_idx], dt * value);
+                try triplets.addEntry(allocator, row_idx, col_idx, dt * value);
             }
         }
 
-        var reduced_matrix = try triplets.build(allocator);
-        errdefer reduced_matrix.deinit(allocator);
+        var full_matrix = try triplets.build(allocator);
+        errdefer full_matrix.deinit(allocator);
 
-        var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+        var constrained_system = try implicit_system_mod.DirichletConstrainedSystem.init(
             allocator,
-            reduced_matrix,
+            full_matrix,
+            boundary_mask,
             .{},
         );
-        errdefer implicit_system.deinit(allocator);
+        errdefer constrained_system.deinit(allocator);
+        full_matrix.deinit(allocator);
 
         return .{
-            .implicit_system = implicit_system,
-            .reduced_index = reduced_index,
-            .interior_vertices = interior_vertices,
-            .boundary_mask = boundary_mask,
+            .constrained_system = constrained_system,
         };
     }
 
     pub fn deinit(self: *HeatSystem, allocator: std.mem.Allocator) void {
-        self.implicit_system.deinit(allocator);
-        allocator.free(self.boundary_mask);
-        allocator.free(self.interior_vertices);
-        allocator.free(self.reduced_index);
+        self.constrained_system.deinit(allocator);
     }
 };
 
@@ -244,30 +213,6 @@ fn convergenceConfig(grid: u32) ConfigImpl {
     };
 }
 
-fn boundaryVertexMask(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]bool {
-    const mask = try allocator.alloc(bool, mesh.num_vertices());
-    @memset(mask, false);
-
-    const edge_vertices = mesh.simplices(1).items(.vertices);
-    for (mesh.boundary_edges) |edge_idx| {
-        const edge = edge_vertices[edge_idx];
-        mask[edge[0]] = true;
-        mask[edge[1]] = true;
-    }
-    return mask;
-}
-
-fn seedReducedSolution(
-    heat_system: *HeatSystem,
-    full_state: []const f64,
-    reduced_solution: []f64,
-) void {
-    std.debug.assert(reduced_solution.len == heat_system.interior_vertices.len);
-    for (heat_system.interior_vertices, 0..) |vertex_idx, interior_idx| {
-        reduced_solution[interior_idx] = full_state[vertex_idx];
-    }
-}
-
 const HeatStepperBuilder = struct {
     pub const Stepper = HeatStepper;
 
@@ -276,11 +221,7 @@ const HeatStepperBuilder = struct {
 
     pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
         _ = allocator;
-        seedReducedSolution(
-            self.heat_system,
-            state_values,
-            self.heat_system.implicit_system.solutionValues(),
-        );
+        self.heat_system.constrained_system.seedSolutionFromFull(state_values);
         return .{
             .mesh = self.mesh,
             .heat_system = self.heat_system,
@@ -369,23 +310,14 @@ fn stepBackwardEuler(
 ) !void {
     _ = allocator;
     const masses = mesh.vertices.slice().items(.dual_volume);
-    const reduced_rhs = heat_system.implicit_system.rhsValues();
-    const reduced_solution = heat_system.implicit_system.solutionValues();
-    std.debug.assert(reduced_rhs.len == heat_system.interior_vertices.len);
-    std.debug.assert(reduced_solution.len == heat_system.interior_vertices.len);
+    const full_rhs = heat_system.constrained_system.fullRhsValues();
+    std.debug.assert(full_rhs.len == state_values.len);
 
-    for (heat_system.interior_vertices, 0..) |vertex_idx, interior_idx| {
-        reduced_rhs[interior_idx] = masses[vertex_idx] * state_values[vertex_idx];
+    for (full_rhs, masses, state_values) |*rhs_value, mass, state_value| {
+        rhs_value.* = mass * state_value;
     }
 
-    _ = try heat_system.implicit_system.solve();
-
-    for (heat_system.boundary_mask, 0..) |is_boundary, vertex_idx| {
-        if (is_boundary) state_values[vertex_idx] = 0.0;
-    }
-    for (heat_system.interior_vertices, 0..) |vertex_idx, interior_idx| {
-        state_values[vertex_idx] = reduced_solution[interior_idx];
-    }
+    _ = try heat_system.constrained_system.solveHomogeneousDirichlet(state_values);
 }
 
 fn initializeState(
