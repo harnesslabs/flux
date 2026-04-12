@@ -1731,6 +1731,82 @@ test "sphere constructor refinement preserves spherical geometry and Euler chara
     }
 }
 
+test "disk constructor produces a triangulated topological disk" {
+    const allocator = testing.allocator;
+    const radius = 2.0;
+    const radial_segments: u32 = 3;
+    const angular_segments: u32 = 12;
+    var mesh = try Mesh(2, 2).disk(allocator, radius, radial_segments, angular_segments);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(@as(u32, 1) + radial_segments * angular_segments, mesh.num_vertices());
+    try testing.expectEqual(radial_segments * angular_segments * 2 - angular_segments, mesh.num_faces());
+
+    const euler_characteristic = @as(i64, mesh.num_vertices()) - @as(i64, mesh.num_edges()) + @as(i64, mesh.num_faces());
+    try testing.expectEqual(@as(i64, 1), euler_characteristic);
+
+    const coords = mesh.vertices.slice().items(.coords);
+    for (coords) |coord| {
+        const norm = @sqrt(coord[0] * coord[0] + coord[1] * coord[1]);
+        try testing.expect(norm <= radius + 1e-12);
+    }
+}
+
+test "torus constructor produces an oriented embedded torus" {
+    const allocator = testing.allocator;
+    const major_radius = 3.0;
+    const minor_radius = 1.0;
+    const major_segments: u32 = 8;
+    const minor_segments: u32 = 6;
+    var mesh = try Mesh(3, 2).torus(allocator, major_radius, minor_radius, major_segments, minor_segments);
+    defer mesh.deinit(allocator);
+
+    try testing.expectEqual(major_segments * minor_segments, mesh.num_vertices());
+    try testing.expectEqual(2 * major_segments * minor_segments, mesh.num_faces());
+
+    const euler_characteristic = @as(i64, mesh.num_vertices()) - @as(i64, mesh.num_edges()) + @as(i64, mesh.num_faces());
+    try testing.expectEqual(@as(i64, 0), euler_characteristic);
+
+    const coords = mesh.vertices.slice().items(.coords);
+    for (coords) |coord| {
+        const radial_xy = @sqrt(coord[0] * coord[0] + coord[1] * coord[1]);
+        const tube_radius = @sqrt((radial_xy - major_radius) * (radial_xy - major_radius) + coord[2] * coord[2]);
+        try testing.expectApproxEqAbs(minor_radius, tube_radius, 1e-12);
+    }
+
+    const faces = mesh.simplices(2).items(.vertices);
+    for (faces) |face| {
+        const a = coords[face[0]];
+        const b = coords[face[1]];
+        const c = coords[face[2]];
+        const ab = [3]f64{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const ac = [3]f64{ c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+        const normal = [3]f64{
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        };
+        const centroid = [3]f64{
+            (a[0] + b[0] + c[0]) / 3.0,
+            (a[1] + b[1] + c[1]) / 3.0,
+            (a[2] + b[2] + c[2]) / 3.0,
+        };
+        const radial_xy = @sqrt(centroid[0] * centroid[0] + centroid[1] * centroid[1]);
+        const ring_center = [3]f64{
+            major_radius * centroid[0] / radial_xy,
+            major_radius * centroid[1] / radial_xy,
+            0.0,
+        };
+        const outward = [3]f64{
+            centroid[0] - ring_center[0],
+            centroid[1] - ring_center[1],
+            centroid[2] - ring_center[2],
+        };
+        const orientation = normal[0] * outward[0] + normal[1] * outward[1] + normal[2] * outward[2];
+        try testing.expect(orientation > 0.0);
+    }
+}
+
 test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
     const allocator = testing.allocator;
     var mesh = try Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
