@@ -23,39 +23,87 @@ pub const AssembledImplicitSystem = struct {
         matrix: sparse.CsrMatrix(f64),
         config: SolveConfig,
     ) !AssembledImplicitSystem {
-        _ = allocator;
-        _ = matrix;
-        _ = config;
-        @panic("not yet implemented");
+        std.debug.assert(matrix.n_rows == matrix.n_cols);
+
+        const diagonal = try diagonalOf(allocator, matrix);
+        errdefer allocator.free(diagonal);
+
+        const rhs = try allocator.alloc(f64, matrix.n_rows);
+        errdefer allocator.free(rhs);
+        @memset(rhs, 0.0);
+
+        const solution = try allocator.alloc(f64, matrix.n_rows);
+        errdefer allocator.free(solution);
+        @memset(solution, 0.0);
+
+        var scratch = try cg.Scratch.init(allocator, @intCast(matrix.n_rows));
+        errdefer scratch.deinit(allocator);
+
+        return .{
+            .matrix = matrix,
+            .diagonal = diagonal,
+            .rhs = rhs,
+            .solution = solution,
+            .scratch = scratch,
+            .config = config,
+        };
     }
 
     pub fn deinit(self: *AssembledImplicitSystem, allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-        @panic("not yet implemented");
+        self.scratch.deinit(allocator);
+        allocator.free(self.solution);
+        allocator.free(self.rhs);
+        allocator.free(self.diagonal);
+        self.matrix.deinit(allocator);
     }
 
     pub fn rhsValues(self: *AssembledImplicitSystem) []f64 {
-        _ = self;
-        @panic("not yet implemented");
+        return self.rhs;
     }
 
     pub fn solutionValues(self: *AssembledImplicitSystem) []f64 {
-        _ = self;
-        @panic("not yet implemented");
+        return self.solution;
     }
 
     pub fn seedSolution(self: *AssembledImplicitSystem, values: []const f64) void {
-        _ = self;
-        _ = values;
-        @panic("not yet implemented");
+        std.debug.assert(values.len == self.solution.len);
+        @memcpy(self.solution, values);
     }
 
     pub fn solve(self: *AssembledImplicitSystem) !cg.SolveResult {
-        _ = self;
-        @panic("not yet implemented");
+        var preconditioner = cg.DiagonalPreconditioner{ .diagonal = self.diagonal };
+        const result = cg.solve(
+            self.matrix,
+            self.rhs,
+            self.solution,
+            self.config.tolerance_relative,
+            self.config.iteration_limit,
+            &preconditioner,
+            self.scratch,
+        );
+        if (!result.converged) return error.ConjugateGradientDidNotConverge;
+        return result;
     }
 };
+
+fn diagonalOf(allocator: std.mem.Allocator, matrix: sparse.CsrMatrix(f64)) ![]f64 {
+    const diagonal = try allocator.alloc(f64, matrix.n_rows);
+    errdefer allocator.free(diagonal);
+    @memset(diagonal, 0.0);
+
+    for (0..matrix.n_rows) |row_idx_usize| {
+        const row_idx: u32 = @intCast(row_idx_usize);
+        const row = matrix.row(row_idx);
+        for (row.cols, row.vals) |col_idx, value| {
+            if (col_idx != row_idx) continue;
+            diagonal[row_idx] = value;
+            break;
+        }
+        std.debug.assert(diagonal[row_idx] > 0.0);
+    }
+
+    return diagonal;
+}
 
 test "assembled implicit system computes matrix diagonal and reuses owned buffers across solves" {
     const allocator = testing.allocator;
