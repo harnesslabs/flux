@@ -1,7 +1,9 @@
 const std = @import("std");
+const sparse = @import("../math/sparse.zig");
 
 pub fn plane(
     comptime MeshType: type,
+    comptime Api: type,
     allocator: std.mem.Allocator,
     nx: u32,
     ny: u32,
@@ -18,41 +20,274 @@ pub fn plane(
     std.debug.assert(width > 0.0);
     std.debug.assert(height > 0.0);
 
-    const vertex_count: usize = (nx + 1) * (ny + 1);
-    const face_count: usize = 2 * nx * ny;
-    var vertex_coords = try std.ArrayList([2]f64).initCapacity(allocator, vertex_count);
-    defer vertex_coords.deinit(allocator);
-    var face_vertices = try std.ArrayList([3]u32).initCapacity(allocator, face_count);
-    defer face_vertices.deinit(allocator);
-
     const dx = width / @as(f64, @floatFromInt(nx));
     const dy = height / @as(f64, @floatFromInt(ny));
 
-    for (0..nx + 1) |i_usize| {
-        const i: u32 = @intCast(i_usize);
-        for (0..ny + 1) |j_usize| {
-            const j: u32 = @intCast(j_usize);
-            vertex_coords.appendAssumeCapacity(.{
-                @as(f64, @floatFromInt(i)) * dx,
-                @as(f64, @floatFromInt(j)) * dy,
+    const vertex_count: u32 = (nx + 1) * (ny + 1);
+    const horizontal_edge_count: u32 = nx * (ny + 1);
+    const vertical_edge_count: u32 = (nx + 1) * ny;
+    const diagonal_edge_count: u32 = nx * ny;
+    const edge_count: u32 = horizontal_edge_count + vertical_edge_count + diagonal_edge_count;
+    const face_count: u32 = 2 * nx * ny;
+
+    var vertices: Api.VerticesStorage = .{};
+    try vertices.ensureTotalCapacity(allocator, vertex_count);
+    errdefer vertices.deinit(allocator);
+
+    var edges_list: Api.EdgeStorage = .{};
+    try edges_list.ensureTotalCapacity(allocator, edge_count);
+    errdefer edges_list.deinit(allocator);
+
+    var faces_list: Api.FaceStorage = .{};
+    try faces_list.ensureTotalCapacity(allocator, face_count);
+    errdefer faces_list.deinit(allocator);
+
+    for (0..nx + 1) |i_u| {
+        const fi: f64 = @floatFromInt(i_u);
+        for (0..ny + 1) |j_u| {
+            const fj: f64 = @floatFromInt(j_u);
+            var coords: [MeshType.embedding_dimension]f64 = @splat(0);
+            coords[0] = fi * dx;
+            coords[1] = fj * dy;
+            vertices.appendAssumeCapacity(.{ .coords = coords, .dual_volume = 0 });
+        }
+    }
+
+    for (0..ny + 1) |j_u| {
+        for (0..nx) |i_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            edges_list.appendAssumeCapacity(.{
+                .vertices = .{ Api.vertexIndex(i, j, ny), Api.vertexIndex(i + 1, j, ny) },
+                .volume = 0,
+                .barycenter = @splat(0),
+            });
+        }
+    }
+    for (0..nx + 1) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            edges_list.appendAssumeCapacity(.{
+                .vertices = .{ Api.vertexIndex(i, j, ny), Api.vertexIndex(i, j + 1, ny) },
+                .volume = 0,
+                .barycenter = @splat(0),
+            });
+        }
+    }
+    for (0..nx) |i_u| {
+        for (0..ny) |j_u| {
+            const i: u32 = @intCast(i_u);
+            const j: u32 = @intCast(j_u);
+            edges_list.appendAssumeCapacity(.{
+                .vertices = .{ Api.vertexIndex(i, j, ny), Api.vertexIndex(i + 1, j + 1, ny) },
+                .volume = 0,
+                .barycenter = @splat(0),
             });
         }
     }
 
-    for (0..nx) |i_usize| {
-        const i: u32 = @intCast(i_usize);
-        for (0..ny) |j_usize| {
-            const j: u32 = @intCast(j_usize);
-            const sw = planeVertexIndex(i, j, ny);
-            const se = planeVertexIndex(i + 1, j, ny);
-            const nw = planeVertexIndex(i, j + 1, ny);
-            const ne = planeVertexIndex(i + 1, j + 1, ny);
-            face_vertices.appendAssumeCapacity(.{ sw, se, ne });
-            face_vertices.appendAssumeCapacity(.{ sw, ne, nw });
+    for (0..nx) |i_u| {
+        const i: u32 = @intCast(i_u);
+        for (0..ny) |j_u| {
+            const j: u32 = @intCast(j_u);
+            const sw = Api.vertexIndex(i, j, ny);
+            const se = Api.vertexIndex(i + 1, j, ny);
+            const nw = Api.vertexIndex(i, j + 1, ny);
+            const ne = Api.vertexIndex(i + 1, j + 1, ny);
+            const zero_barycenter: [MeshType.embedding_dimension]f64 = @splat(0);
+
+            faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .volume = 0, .barycenter = zero_barycenter });
+            faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .volume = 0, .barycenter = zero_barycenter });
         }
     }
 
-    return MeshType.from_triangles(allocator, vertex_coords.items, face_vertices.items);
+    var boundary_1: sparse.PackedIncidenceMatrix = undefined;
+    {
+        var dense = try sparse.CsrMatrix(i8).init(allocator, edge_count, vertex_count, 2 * edge_count);
+        errdefer dense.deinit(allocator);
+        const edge_verts = edges_list.slice().items(.vertices);
+        for (0..edge_count) |edge_idx| {
+            dense.row_ptr[edge_idx] = @intCast(2 * edge_idx);
+            dense.col_idx[2 * edge_idx] = edge_verts[edge_idx][0];
+            dense.values[2 * edge_idx] = -1;
+            dense.col_idx[2 * edge_idx + 1] = edge_verts[edge_idx][1];
+            dense.values[2 * edge_idx + 1] = 1;
+        }
+        dense.row_ptr[edge_count] = 2 * edge_count;
+
+        boundary_1 = try sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 1, dense);
+        dense.deinit(allocator);
+    }
+    errdefer boundary_1.deinit(allocator);
+
+    var boundary_2: sparse.PackedIncidenceMatrix = undefined;
+    {
+        var dense = try sparse.CsrMatrix(i8).init(allocator, face_count, edge_count, 3 * face_count);
+        errdefer dense.deinit(allocator);
+        var face_idx: u32 = 0;
+        for (0..nx) |i_u| {
+            const i: u32 = @intCast(i_u);
+            for (0..ny) |j_u| {
+                const j: u32 = @intCast(j_u);
+                const h_ij = Api.horizontalEdgeIndex(i, j, nx);
+                const h_i_jp1 = Api.horizontalEdgeIndex(i, j + 1, nx);
+                const v_ip1_j = Api.verticalEdgeIndex(i + 1, j, ny, horizontal_edge_count);
+                const v_i_j = Api.verticalEdgeIndex(i, j, ny, horizontal_edge_count);
+                const d_ij = Api.diagonalEdgeIndex(i, j, ny, horizontal_edge_count, vertical_edge_count);
+
+                dense.row_ptr[face_idx] = 3 * face_idx;
+                dense.col_idx[3 * face_idx] = h_ij;
+                dense.values[3 * face_idx] = 1;
+                dense.col_idx[3 * face_idx + 1] = v_ip1_j;
+                dense.values[3 * face_idx + 1] = 1;
+                dense.col_idx[3 * face_idx + 2] = d_ij;
+                dense.values[3 * face_idx + 2] = -1;
+                face_idx += 1;
+
+                dense.row_ptr[face_idx] = 3 * face_idx;
+                dense.col_idx[3 * face_idx] = h_i_jp1;
+                dense.values[3 * face_idx] = -1;
+                dense.col_idx[3 * face_idx + 1] = v_i_j;
+                dense.values[3 * face_idx + 1] = -1;
+                dense.col_idx[3 * face_idx + 2] = d_ij;
+                dense.values[3 * face_idx + 2] = 1;
+                face_idx += 1;
+            }
+        }
+        dense.row_ptr[face_count] = 3 * face_count;
+
+        boundary_2 = try sparse.PackedIncidenceMatrix.fromBoundaryCsr(allocator, 2, dense);
+        dense.deinit(allocator);
+    }
+    errdefer boundary_2.deinit(allocator);
+
+    const coords = vertices.slice().items(.coords);
+
+    {
+        const edge_slice = edges_list.slice();
+        const edge_verts = edge_slice.items(.vertices);
+        const edge_volumes = edge_slice.items(.volume);
+        const edge_barycenters = edge_slice.items(.barycenter);
+        for (0..edge_count) |edge_idx| {
+            edge_volumes[edge_idx] = Api.euclideanDistance(coords[edge_verts[edge_idx][0]], coords[edge_verts[edge_idx][1]]);
+            edge_barycenters[edge_idx] = Api.pointMidpoint(coords[edge_verts[edge_idx][0]], coords[edge_verts[edge_idx][1]]);
+        }
+    }
+
+    {
+        const face_slice = faces_list.slice();
+        const face_verts = face_slice.items(.vertices);
+        const face_volumes = face_slice.items(.volume);
+        const face_barycenters = face_slice.items(.barycenter);
+        for (0..face_count) |face_idx| {
+            const p0 = coords[face_verts[face_idx][0]];
+            const p1 = coords[face_verts[face_idx][1]];
+            const p2 = coords[face_verts[face_idx][2]];
+            face_volumes[face_idx] = Api.triangleArea(p0, p1, p2);
+            face_barycenters[face_idx] = Api.triangleBarycenter(p0, p1, p2);
+        }
+    }
+
+    const dual_edge_volumes = try allocator.alloc(f64, edge_count);
+    errdefer allocator.free(dual_edge_volumes);
+    var boundary_edges: []u32 = &.{};
+    {
+        const scratch = try allocator.alloc(u32, 3 * edge_count);
+        defer allocator.free(scratch);
+        const edge_face_count = scratch[0..edge_count];
+        const edge_face_0 = scratch[edge_count .. 2 * edge_count];
+        const edge_face_1 = scratch[2 * edge_count .. 3 * edge_count];
+        @memset(edge_face_count, 0);
+
+        for (0..face_count) |face_idx| {
+            const face_edges = boundary_2.row(@intCast(face_idx));
+            for (face_edges.cols) |edge_idx| {
+                const count = edge_face_count[edge_idx];
+                if (count == 0) {
+                    edge_face_0[edge_idx] = @intCast(face_idx);
+                } else {
+                    edge_face_1[edge_idx] = @intCast(face_idx);
+                }
+                edge_face_count[edge_idx] = count + 1;
+            }
+        }
+
+        const barycenters = faces_list.slice().items(.barycenter);
+        const edge_verts = edges_list.slice().items(.vertices);
+        var boundary_count: u32 = 0;
+        for (0..edge_count) |edge_idx| {
+            if (edge_face_count[edge_idx] == 2) {
+                dual_edge_volumes[edge_idx] = Api.euclideanDistance(barycenters[edge_face_0[edge_idx]], barycenters[edge_face_1[edge_idx]]);
+            } else if (edge_face_count[edge_idx] == 1) {
+                const midpoint = Api.pointMidpoint(coords[edge_verts[edge_idx][0]], coords[edge_verts[edge_idx][1]]);
+                dual_edge_volumes[edge_idx] = Api.euclideanDistance(barycenters[edge_face_0[edge_idx]], midpoint);
+                boundary_count += 1;
+            } else {
+                return error.NonManifoldEdge;
+            }
+        }
+
+        boundary_edges = try allocator.alloc(u32, boundary_count);
+        var boundary_write: u32 = 0;
+        for (0..edge_count) |edge_idx| {
+            if (edge_face_count[edge_idx] != 1) continue;
+            boundary_edges[boundary_write] = @intCast(edge_idx);
+            boundary_write += 1;
+        }
+        std.debug.assert(boundary_write == boundary_count);
+    }
+
+    {
+        const dual_volumes = vertices.slice().items(.dual_volume);
+        @memset(dual_volumes, 0);
+
+        const face_verts = faces_list.slice().items(.vertices);
+        for (0..face_count) |face_idx| {
+            const vs = face_verts[face_idx];
+            const p0 = coords[vs[0]];
+            const p1 = coords[vs[1]];
+            const p2 = coords[vs[2]];
+
+            const l01_sq = Api.distanceSquared(p0, p1);
+            const l12_sq = Api.distanceSquared(p1, p2);
+            const l20_sq = Api.distanceSquared(p2, p0);
+
+            const area_4 = 4.0 * Api.triangleArea(p0, p1, p2);
+            if (!(area_4 > 0.0)) return error.DegenerateTriangle;
+
+            const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
+            const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
+            const cot2 = (l12_sq + l20_sq - l01_sq) / area_4;
+
+            dual_volumes[vs[0]] += (cot1 * l20_sq + cot2 * l01_sq) / 8.0;
+            dual_volumes[vs[1]] += (cot2 * l01_sq + cot0 * l12_sq) / 8.0;
+            dual_volumes[vs[2]] += (cot0 * l12_sq + cot1 * l20_sq) / 8.0;
+        }
+    }
+
+    var mesh = MeshType{
+        .vertices = vertices,
+        .simplex_lists = .{ edges_list, faces_list },
+        .boundaries = .{ boundary_1, boundary_2 },
+        .dual_edge_volumes = dual_edge_volumes,
+        .boundary_edges = boundary_edges,
+        .whitney_operators = undefined,
+    };
+    errdefer {
+        allocator.free(mesh.boundary_edges);
+        allocator.free(mesh.dual_edge_volumes);
+        mesh.vertices.deinit(allocator);
+        inline for (0..MeshType.topological_dimension) |simplex_idx| {
+            mesh.simplex_lists[simplex_idx].deinit(allocator);
+        }
+        for (&mesh.boundaries) |*boundary| {
+            boundary.deinit(allocator);
+        }
+    }
+
+    mesh.whitney_operators = try Api.assembleWhitneyOperators(allocator, &mesh);
+    return mesh;
 }
 
 pub fn sphere(
@@ -208,10 +443,6 @@ pub fn torus(
     }
 
     return MeshType.from_triangles(allocator, vertex_coords.items, face_vertices.items);
-}
-
-fn planeVertexIndex(i: u32, j: u32, ny: u32) u32 {
-    return i * (ny + 1) + j;
 }
 
 fn diskVertexIndex(ring: u32, sector: u32, angular_segments: u32) u32 {

@@ -391,6 +391,52 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return operators;
         }
 
+        const PlaneGeometryApi = struct {
+            pub const VerticesStorage = @FieldType(Self, "vertices");
+            pub const EdgeStorage = @TypeOf(@as(Self, undefined).simplex_lists[0]);
+            pub const FaceStorage = @TypeOf(@as(Self, undefined).simplex_lists[1]);
+
+            pub fn assembleWhitneyOperators(allocator: std.mem.Allocator, mesh: *const Self) !@FieldType(Self, "whitney_operators") {
+                return Self.assembleWhitneyOperators(allocator, mesh);
+            }
+
+            pub fn vertexIndex(i: u32, j: u32, ny_val: u32) u32 {
+                return Self.vertex_index(i, j, ny_val);
+            }
+
+            pub fn horizontalEdgeIndex(i: u32, j: u32, nx_val: u32) u32 {
+                return Self.horizontal_edge_index(i, j, nx_val);
+            }
+
+            pub fn verticalEdgeIndex(i: u32, j: u32, ny_val: u32, n_horizontal: u32) u32 {
+                return Self.vertical_edge_index(i, j, ny_val, n_horizontal);
+            }
+
+            pub fn diagonalEdgeIndex(i: u32, j: u32, ny_val: u32, n_horizontal: u32, n_vertical: u32) u32 {
+                return Self.diagonal_edge_index(i, j, ny_val, n_horizontal, n_vertical);
+            }
+
+            pub fn distanceSquared(a: [embedding_dimension]f64, b: [embedding_dimension]f64) f64 {
+                return Self.distance_squared(a, b);
+            }
+
+            pub fn euclideanDistance(a: [embedding_dimension]f64, b: [embedding_dimension]f64) f64 {
+                return Self.euclidean_distance(a, b);
+            }
+
+            pub fn pointMidpoint(a: [embedding_dimension]f64, b: [embedding_dimension]f64) [embedding_dimension]f64 {
+                return Self.point_midpoint(a, b);
+            }
+
+            pub fn triangleArea(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64) f64 {
+                return Self.triangle_area(a, b, c);
+            }
+
+            pub fn triangleBarycenter(a: [embedding_dimension]f64, b: [embedding_dimension]f64, c: [embedding_dimension]f64) [embedding_dimension]f64 {
+                return Self.triangle_barycenter(a, b, c);
+            }
+        };
+
         // ───────────────────────────────────────────────────────────────────
         // Plane constructor
         // ───────────────────────────────────────────────────────────────────
@@ -416,7 +462,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             width: f64,
             height: f64,
         ) !Self {
-            return geometries.plane(Self, allocator, nx, ny, width, height);
+            return geometries.plane(Self, PlaneGeometryApi, allocator, nx, ny, width, height);
         }
 
         /// Construct an embedded triangulated sphere of radius `radius`.
