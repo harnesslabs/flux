@@ -51,6 +51,75 @@ fn invokeListeners(
     }
 }
 
+pub fn ReferenceAux(
+    comptime MeshType: type,
+    comptime InitializerType: type,
+    comptime ErrorMeasureType: type,
+) type {
+    return struct {
+        mesh: *const MeshType,
+        exact_values: []f64,
+        initializer: InitializerType,
+        error_measure: ErrorMeasureType,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            mesh: *const MeshType,
+            len: usize,
+            initializer: InitializerType,
+            error_measure: ErrorMeasureType,
+        ) !@This() {
+            return .{
+                .mesh = mesh,
+                .exact_values = try allocator.alloc(f64, len),
+                .initializer = initializer,
+                .error_measure = error_measure,
+            };
+        }
+
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.exact_values);
+        }
+
+        pub fn fillExact(self: *@This(), time: f64) void {
+            self.initializer.fill(self.mesh, self.exact_values, time);
+        }
+
+        pub fn exactValues(self: *@This()) []f64 {
+            return self.exact_values;
+        }
+
+        pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+            return self.error_measure.compute(self.mesh, state_values, self.exact_values);
+        }
+    };
+}
+
+pub fn empiricalRates(
+    allocator: std.mem.Allocator,
+    errors: []const f64,
+    refinement_ratio: f64,
+) ![]f64 {
+    std.debug.assert(refinement_ratio > 1.0);
+
+    if (errors.len < 2) {
+        return allocator.alloc(f64, 0);
+    }
+
+    const rates = try allocator.alloc(f64, errors.len - 1);
+    errdefer allocator.free(rates);
+
+    for (0..errors.len - 1) |idx| {
+        const coarse = errors[idx];
+        const fine = errors[idx + 1];
+        std.debug.assert(coarse > 0.0);
+        std.debug.assert(fine > 0.0);
+        rates[idx] = std.math.log(f64, refinement_ratio, coarse / fine);
+    }
+
+    return rates;
+}
+
 /// Evolution object for reusable state stepping.
 ///
 /// The caller owns the primary state storage. The evolution object owns the
