@@ -161,7 +161,7 @@ const DualC3D3 = cochain.Cochain(Mesh3D, 3, cochain.Dual);
 test "d₀ of constant function is zero" {
     // A constant 0-form has zero gradient everywhere.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try C0.init(allocator, &mesh);
@@ -182,7 +182,7 @@ test "d₀ on linear function f(x,y) = x" {
     const allocator = testing.allocator;
     const nx: u32 = 3;
     const ny: u32 = 2;
-    var mesh = try Mesh2D.uniform_grid(allocator, nx, ny, 3.0, 2.0);
+    var mesh = try Mesh2D.plane(allocator, nx, ny, 3.0, 2.0);
     defer mesh.deinit(allocator);
 
     var omega = try C0.init(allocator, &mesh);
@@ -208,7 +208,7 @@ test "d₀ on linear function f(x,y) = x" {
 test "d₁ of d₀ is zero on a specific function" {
     // dd = 0: applying d₁ after d₀ to any 0-form yields the zero 2-form.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var omega = try C0.init(allocator, &mesh);
@@ -236,7 +236,7 @@ test "dd = 0 for random 0-forms on triangular mesh (1000 trials)" {
     // This is the cohomological identity — it must hold exactly because
     // boundary₂ · boundary₁ = 0 as integer matrices.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_DD_00);
@@ -270,7 +270,7 @@ test "dd = 0 for random 1-forms on triangular mesh (1000 trials)" {
     // 1-form (one that is d₀ of something) yields zero — which is the
     // same dd=0 identity tested from the 1-form side.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 6, 5, 3.0, 2.0);
+    var mesh = try Mesh2D.plane(allocator, 6, 5, 3.0, 2.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_DD_01);
@@ -464,7 +464,7 @@ test "d̃₀ on constant dual 0-form is zero at interior edges" {
     // two faces with opposite signs). Boundary edges have only one
     // adjacent face, so d̃₀ is nonzero there — this is expected.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try DualC0.init(allocator, &mesh);
@@ -505,7 +505,7 @@ test "d̃d̃ = 0 for random dual 0-forms (1000 trials)" {
     // d̃₁(d̃₀(ω)) = boundary(1)ᵀ · boundary(2)ᵀ · ω = (boundary(2) · boundary(1))ᵀ · ω = 0
     // because ∂∂ = 0.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_DD_D0);

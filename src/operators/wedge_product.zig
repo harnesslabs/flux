@@ -238,7 +238,7 @@ test "compile-time: wedge degree arithmetic yields the sum degree" {
 
 test "wedge of 0-forms is pointwise multiplication" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var alpha = try C0.init(allocator, &mesh);
@@ -263,7 +263,7 @@ test "wedge of 0-forms is pointwise multiplication" {
 
 test "wedge of 0-form and 1-form averages the endpoint values" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var scalar = try C0.init(allocator, &mesh);
@@ -358,7 +358,7 @@ test "associativity holds for random closed 1-forms on tetrahedral meshes" {
 
 test "Leibniz rule holds on random 2D 0- and 1-forms" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xA11CE_84_03);

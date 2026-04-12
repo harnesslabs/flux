@@ -430,7 +430,7 @@ test "CG solves Whitney mass matrix system" {
 
     const allocator = testing.allocator;
     const Mesh2D = topology.Mesh(2, 2);
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 4, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 4, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var mass = try whitney.assemble_whitney_mass(1, allocator, &mesh);

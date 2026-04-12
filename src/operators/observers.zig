@@ -287,7 +287,7 @@ fn selectVelocity(state: *const MockState3D) *const Primal1_3D {
 
 test "evaluateAll composes energy, L2, and max observers on a mock state" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var scalar = try Primal0_2D.init(allocator, &mesh);
@@ -332,7 +332,7 @@ test "evaluateAll composes energy, L2, and max observers on a mock state" {
 
 test "circulation observer sums an oriented loop through a 1-cochain" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var scalar = try Primal0_2D.init(allocator, &mesh);
@@ -365,7 +365,7 @@ test "circulation observer sums an oriented loop through a 1-cochain" {
 
 test "divergence norm observer vanishes on exact top-degree derivative by dd = 0" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var potential = try Primal0_2D.init(allocator, &mesh);
@@ -424,7 +424,7 @@ test "helicity observer matches manual sum of u wedge du on tetrahedral mesh" {
 
 test "divergence observer matches manual exterior-derivative norm" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var scalar = try Primal0_2D.init(allocator, &mesh);

@@ -10,7 +10,7 @@ const testing = std.testing;
 const flux = @import("../root.zig");
 const sparse = @import("../math/sparse.zig");
 const whitney = @import("../operators/whitney_mass.zig");
-pub const geometries = @import("geometries.zig");
+const geometries = @import("geometries.zig");
 
 pub const WhitneyMassOperator = struct {
     mass: sparse.CsrMatrix(f64),
@@ -392,7 +392,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         }
 
         // ───────────────────────────────────────────────────────────────────
-        // Uniform grid constructor
+        // Plane constructor
         // ───────────────────────────────────────────────────────────────────
 
         /// Construct a uniform triangulated rectangular grid on `[0, width] × [0, height]`.
@@ -409,337 +409,14 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
         /// centroids rather than circumcenters. This avoids the degeneracy where
         /// right triangles sharing a hypotenuse have coincident circumcenters,
         /// ensuring every edge has nonzero dual length and ★₁ is non-singular.
-        pub fn uniform_grid(
+        pub fn plane(
             allocator: std.mem.Allocator,
             nx: u32,
             ny: u32,
             width: f64,
             height: f64,
         ) !Self {
-            comptime {
-                if (topological_dimension != 2) @compileError("uniform_grid is only available for 2D meshes (topological_dimension = 2)");
-            }
-            if (nx == 0 or ny == 0) @panic("grid dimensions must be positive");
-            if (!(width > 0) or !(height > 0)) @panic("domain size must be positive");
-
-            const dx = width / @as(f64, @floatFromInt(nx));
-            const dy = height / @as(f64, @floatFromInt(ny));
-
-            const vertex_count: u32 = (nx + 1) * (ny + 1);
-            const horizontal_edge_count: u32 = nx * (ny + 1);
-            const vertical_edge_count: u32 = (nx + 1) * ny;
-            const diagonal_edge_count: u32 = nx * ny;
-            const edge_count: u32 = horizontal_edge_count + vertical_edge_count + diagonal_edge_count;
-            const face_count: u32 = 2 * nx * ny;
-
-            // -- Allocate entity storage --
-
-            var vertices = std.MultiArrayList(Vertex(embedding_dimension)){};
-            try vertices.ensureTotalCapacity(allocator, vertex_count);
-            errdefer vertices.deinit(allocator);
-
-            var edges_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 1)){};
-            try edges_list.ensureTotalCapacity(allocator, edge_count);
-            errdefer edges_list.deinit(allocator);
-
-            var faces_list = std.MultiArrayList(Simplex(embedding_dimension, topological_dimension, 2)){};
-            try faces_list.ensureTotalCapacity(allocator, face_count);
-            errdefer faces_list.deinit(allocator);
-
-            // -- Populate vertices --
-            // Indexed as vertex_index(i, j) = i * (ny + 1) + j.
-            for (0..nx + 1) |i_u| {
-                const fi: f64 = @floatFromInt(i_u);
-                for (0..ny + 1) |j_u| {
-                    const fj: f64 = @floatFromInt(j_u);
-                    var coords: [embedding_dimension]f64 = @splat(0);
-                    coords[0] = fi * dx;
-                    coords[1] = fj * dy;
-                    vertices.appendAssumeCapacity(.{ .coords = coords, .dual_volume = 0 });
-                }
-            }
-
-            // -- Populate edges --
-            // Horizontal: horizontal_edge(i,j) = j*nx + i, tail = vertex(i,j), head = vertex(i+1,j)
-            for (0..ny + 1) |j_u| {
-                for (0..nx) |i_u| {
-                    const i: u32 = @intCast(i_u);
-                    const j: u32 = @intCast(j_u);
-                    edges_list.appendAssumeCapacity(.{
-                        .vertices = .{ vertex_index(i, j, ny), vertex_index(i + 1, j, ny) },
-                        .volume = 0,
-                        .barycenter = @splat(0),
-                    });
-                }
-            }
-            // Vertical: vertical_edge(i,j) = horizontal_edge_count + i*ny + j
-            for (0..nx + 1) |i_u| {
-                for (0..ny) |j_u| {
-                    const i: u32 = @intCast(i_u);
-                    const j: u32 = @intCast(j_u);
-                    edges_list.appendAssumeCapacity(.{
-                        .vertices = .{ vertex_index(i, j, ny), vertex_index(i, j + 1, ny) },
-                        .volume = 0,
-                        .barycenter = @splat(0),
-                    });
-                }
-            }
-            // Diagonal (SW→NE): diagonal_edge(i,j) = horizontal_edge_count + vertical_edge_count + i*ny + j
-            for (0..nx) |i_u| {
-                for (0..ny) |j_u| {
-                    const i: u32 = @intCast(i_u);
-                    const j: u32 = @intCast(j_u);
-                    edges_list.appendAssumeCapacity(.{
-                        .vertices = .{ vertex_index(i, j, ny), vertex_index(i + 1, j + 1, ny) },
-                        .volume = 0,
-                        .barycenter = @splat(0),
-                    });
-                }
-            }
-
-            // -- Populate faces --
-            // Two triangles per cell, both CCW-oriented.
-            for (0..nx) |i_u| {
-                const i: u32 = @intCast(i_u);
-                for (0..ny) |j_u| {
-                    const j: u32 = @intCast(j_u);
-                    const sw = vertex_index(i, j, ny);
-                    const se = vertex_index(i + 1, j, ny);
-                    const nw = vertex_index(i, j + 1, ny);
-                    const ne = vertex_index(i + 1, j + 1, ny);
-
-                    const zero_cc: [embedding_dimension]f64 = @splat(0);
-
-                    // Lower-right triangle: SW → SE → NE
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, se, ne }, .volume = 0, .barycenter = zero_cc });
-                    // Upper-left triangle:  SW → NE → NW
-                    faces_list.appendAssumeCapacity(.{ .vertices = .{ sw, ne, nw }, .volume = 0, .barycenter = zero_cc });
-                }
-            }
-
-            // -- Build ∂₁ (n_edges × n_vertices) --
-            // Each edge row has exactly 2 nonzeros: tail = −1, head = +1.
-            var boundary_1: BoundaryMatrix = undefined;
-            {
-                var boundary_1_dense = try DenseBoundaryMatrix.init(allocator, edge_count, vertex_count, 2 * edge_count);
-                errdefer boundary_1_dense.deinit(allocator);
-                const edge_verts = edges_list.slice().items(.vertices);
-                for (0..edge_count) |e| {
-                    boundary_1_dense.row_ptr[e] = @intCast(2 * e);
-                    // tail < head for the uniform grid, so columns are sorted
-                    boundary_1_dense.col_idx[2 * e] = edge_verts[e][0];
-                    boundary_1_dense.values[2 * e] = -1;
-                    boundary_1_dense.col_idx[2 * e + 1] = edge_verts[e][1];
-                    boundary_1_dense.values[2 * e + 1] = 1;
-                }
-                boundary_1_dense.row_ptr[edge_count] = 2 * edge_count;
-
-                boundary_1 = try BoundaryMatrix.fromBoundaryCsr(allocator, 1, boundary_1_dense);
-                boundary_1_dense.deinit(allocator);
-            }
-            errdefer boundary_1.deinit(allocator);
-
-            // -- Build ∂₂ (n_faces × n_edges) --
-            // Each face row has exactly 3 nonzeros for the oriented boundary edges.
-            //
-            // Lower-right (SW,SE,NE): +h(i,j), +vert(i+1,j), −diag(i,j)
-            // Upper-left  (SW,NE,NW): −h(i,j+1), −vert(i,j), +diag(i,j)
-            //
-            // Column ordering: horizontal < vertical < diagonal (always sorted).
-            var boundary_2: BoundaryMatrix = undefined;
-            {
-                var boundary_2_dense = try DenseBoundaryMatrix.init(allocator, face_count, edge_count, 3 * face_count);
-                errdefer boundary_2_dense.deinit(allocator);
-                var f_idx: u32 = 0;
-                for (0..nx) |i_u| {
-                    const i: u32 = @intCast(i_u);
-                    for (0..ny) |j_u| {
-                        const j: u32 = @intCast(j_u);
-                        const h_ij = horizontal_edge_index(i, j, nx);
-                        const h_i_jp1 = horizontal_edge_index(i, j + 1, nx);
-                        const v_ip1_j = vertical_edge_index(i + 1, j, ny, horizontal_edge_count);
-                        const v_i_j = vertical_edge_index(i, j, ny, horizontal_edge_count);
-                        const d_ij = diagonal_edge_index(i, j, ny, horizontal_edge_count, vertical_edge_count);
-
-                        // Lower-right triangle
-                        boundary_2_dense.row_ptr[f_idx] = 3 * f_idx;
-                        boundary_2_dense.col_idx[3 * f_idx + 0] = h_ij;
-                        boundary_2_dense.values[3 * f_idx + 0] = 1;
-                        boundary_2_dense.col_idx[3 * f_idx + 1] = v_ip1_j;
-                        boundary_2_dense.values[3 * f_idx + 1] = 1;
-                        boundary_2_dense.col_idx[3 * f_idx + 2] = d_ij;
-                        boundary_2_dense.values[3 * f_idx + 2] = -1;
-                        f_idx += 1;
-
-                        // Upper-left triangle
-                        boundary_2_dense.row_ptr[f_idx] = 3 * f_idx;
-                        boundary_2_dense.col_idx[3 * f_idx + 0] = h_i_jp1;
-                        boundary_2_dense.values[3 * f_idx + 0] = -1;
-                        boundary_2_dense.col_idx[3 * f_idx + 1] = v_i_j;
-                        boundary_2_dense.values[3 * f_idx + 1] = -1;
-                        boundary_2_dense.col_idx[3 * f_idx + 2] = d_ij;
-                        boundary_2_dense.values[3 * f_idx + 2] = 1;
-                        f_idx += 1;
-                    }
-                }
-                boundary_2_dense.row_ptr[face_count] = 3 * face_count;
-
-                boundary_2 = try BoundaryMatrix.fromBoundaryCsr(allocator, 2, boundary_2_dense);
-                boundary_2_dense.deinit(allocator);
-            }
-            errdefer boundary_2.deinit(allocator);
-
-            // -- Compute primal geometry --
-
-            const coords = vertices.slice().items(.coords);
-
-            // Edge lengths and barycenters
-            {
-                const edge_slice = edges_list.slice();
-                const edge_verts = edge_slice.items(.vertices);
-                const edge_volumes = edge_slice.items(.volume);
-                const edge_barycenters = edge_slice.items(.barycenter);
-                for (0..edge_count) |e| {
-                    edge_volumes[e] = euclidean_distance(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                    edge_barycenters[e] = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                }
-            }
-
-            // Face areas and barycenters
-            {
-                const face_slice = faces_list.slice();
-                const face_verts = face_slice.items(.vertices);
-                const face_volumes = face_slice.items(.volume);
-                const face_barycenters = face_slice.items(.barycenter);
-                for (0..face_count) |f| {
-                    const p0 = coords[face_verts[f][0]];
-                    const p1 = coords[face_verts[f][1]];
-                    const p2 = coords[face_verts[f][2]];
-                    face_volumes[f] = triangle_area(p0, p1, p2);
-                    face_barycenters[f] = triangle_barycenter(p0, p1, p2);
-                }
-            }
-
-            // -- Compute circumcentric dual geometry --
-
-            // Dual edge volumes require edge→face adjacency.
-            // Each edge borders at most 2 faces; boundary edges border exactly 1.
-            // Single scratch allocation: [count | face_0 | face_1], each edge_count u32s.
-            const dual_edge_volumes = try allocator.alloc(f64, edge_count);
-            errdefer allocator.free(dual_edge_volumes);
-            var boundary_edge_buf: []u32 = &.{};
-            {
-                const scratch = try allocator.alloc(u32, 3 * edge_count);
-                defer allocator.free(scratch);
-                const edge_face_count = scratch[0..edge_count];
-                const edge_face_0 = scratch[edge_count .. 2 * edge_count];
-                const edge_face_1 = scratch[2 * edge_count .. 3 * edge_count];
-                @memset(edge_face_count, 0);
-
-                for (0..face_count) |f| {
-                    const face_edges = boundary_2.row(@intCast(f));
-                    for (face_edges.cols) |e| {
-                        const count = edge_face_count[e];
-                        if (count == 0) {
-                            edge_face_0[e] = @intCast(f);
-                        } else {
-                            edge_face_1[e] = @intCast(f);
-                        }
-                        edge_face_count[e] = count + 1;
-                    }
-                }
-
-                const barycenters = faces_list.slice().items(.barycenter);
-                const edge_verts = edges_list.slice().items(.vertices);
-
-                // Count boundary edges (adjacent to exactly one face) and
-                // compute dual edge volumes in one pass.
-                var boundary_count: u32 = 0;
-                for (0..edge_count) |e| {
-                    if (edge_face_count[e] == 2) {
-                        dual_edge_volumes[e] = euclidean_distance(
-                            barycenters[edge_face_0[e]],
-                            barycenters[edge_face_1[e]],
-                        );
-                    } else if (edge_face_count[e] == 1) {
-                        const mid = point_midpoint(coords[edge_verts[e][0]], coords[edge_verts[e][1]]);
-                        dual_edge_volumes[e] = euclidean_distance(barycenters[edge_face_0[e]], mid);
-                        boundary_count += 1;
-                    } else {
-                        return flux.Error.NonManifoldEdge;
-                    }
-                }
-
-                // Collect boundary edge indices.
-                boundary_edge_buf = try allocator.alloc(u32, boundary_count);
-                var bi: u32 = 0;
-                for (0..edge_count) |e| {
-                    if (edge_face_count[e] == 1) {
-                        boundary_edge_buf[bi] = @intCast(e);
-                        bi += 1;
-                    }
-                }
-                std.debug.assert(bi == boundary_count);
-            }
-
-            // Dual vertex volumes via the cotangent formula.
-            //
-            // For triangle (v₀, v₁, v₂) with edge lengths l₀₁, l₁₂, l₂₀:
-            //   cot(αᵢ) = (lⱼₖ² + lₖᵢ² − lᵢⱼ²) / (4 · area)
-            //
-            //   dual_volume[vᵢ] += (cot(αⱼ) · lᵢₖ² + cot(αₖ) · lᵢⱼ²) / 8
-            //
-            // This gives the circumcentric (Voronoi) dual area contribution.
-            // Reference: Meyer et al., "Discrete Differential-Geometry Operators
-            // for Triangulated 2-Manifolds" (2002), §4.
-            {
-                const dual_volumes = vertices.slice().items(.dual_volume);
-                @memset(dual_volumes, 0);
-
-                const face_verts = faces_list.slice().items(.vertices);
-                for (0..face_count) |f| {
-                    const vs = face_verts[f];
-                    const p0 = coords[vs[0]];
-                    const p1 = coords[vs[1]];
-                    const p2 = coords[vs[2]];
-
-                    const l01_sq = distance_squared(p0, p1);
-                    const l12_sq = distance_squared(p1, p2);
-                    const l20_sq = distance_squared(p2, p0);
-
-                    const area_4 = 4.0 * triangle_area(p0, p1, p2);
-                    // Degenerate triangles cause division by zero in the
-                    // cotangent formula below.
-                    if (!(area_4 > 0)) return flux.Error.DegenerateTriangle;
-
-                    const cot0 = (l01_sq + l20_sq - l12_sq) / area_4;
-                    const cot1 = (l01_sq + l12_sq - l20_sq) / area_4;
-                    const cot2 = (l12_sq + l20_sq - l01_sq) / area_4;
-
-                    dual_volumes[vs[0]] += (cot1 * l20_sq + cot2 * l01_sq) / 8.0;
-                    dual_volumes[vs[1]] += (cot2 * l01_sq + cot0 * l12_sq) / 8.0;
-                    dual_volumes[vs[2]] += (cot0 * l12_sq + cot1 * l20_sq) / 8.0;
-                }
-            }
-
-            // -- Whitney mass matrix M₁ and diagonal preconditioner --
-            //
-            // M₁ is the Galerkin inner product of Whitney 1-form basis functions.
-            // It replaces the diagonal ★₁ (which only converges on orthogonal
-            // dual meshes) with an SPD matrix that is exact on any triangulation.
-            // The diagonal ★₁ values (dual_length / length) serve as a spectrally
-            // equivalent preconditioner for CG solves of M₁.
-
-            var partial = Self{
-                .vertices = vertices,
-                .simplex_lists = .{ edges_list, faces_list },
-                .boundaries = .{ boundary_1, boundary_2 },
-                .dual_edge_volumes = dual_edge_volumes,
-                .boundary_edges = boundary_edge_buf,
-                .whitney_operators = undefined,
-            };
-            partial.whitney_operators = try assembleWhitneyOperators(allocator, &partial);
-            return partial;
+            return geometries.plane(Self, allocator, nx, ny, width, height);
         }
 
         /// Construct an embedded triangulated sphere of radius `radius`.
@@ -753,21 +430,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             radius: f64,
             refinement: u32,
         ) !Self {
-            comptime {
-                if (embedding_dimension != 3 or topological_dimension != 2) {
-                    @compileError("sphere is only available for Mesh(3, 2)");
-                }
-            }
-            if (!(radius > 0.0)) @panic("sphere radius must be positive");
-
-            var polyhedron = try buildRefinedSphereOctahedron(allocator, radius, refinement);
-            defer polyhedron.deinit(allocator);
-
-            const oriented_faces = try allocator.dupe([3]u32, polyhedron.faces);
-            defer allocator.free(oriented_faces);
-            orientSphereFacesOutward(polyhedron.vertices, oriented_faces);
-
-            return Self.from_triangles(allocator, polyhedron.vertices, oriented_faces);
+            return geometries.sphere(Self, allocator, radius, refinement);
         }
 
         pub fn disk(
@@ -1688,9 +1351,9 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
 // Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-test "uniform grid entity counts" {
+test "plane constructor entity counts" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 3, 4, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).plane(allocator, 3, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     try testing.expectEqual(@as(u32, 20), mesh.num_vertices()); // (3+1)*(4+1)
@@ -1829,7 +1492,7 @@ test "torus constructor produces an oriented embedded torus" {
 
 test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh(2, 2).plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     for (0..mesh.num_edges()) |e| {
@@ -1845,7 +1508,7 @@ test "boundary operator ∂₁ has exactly 2 nonzeros per row" {
 
 test "boundary operator ∂₂ has exactly 3 nonzeros per row" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh(2, 2).plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     for (0..mesh.num_faces()) |f| {
@@ -1870,7 +1533,7 @@ test "boundary of boundary is zero for 2D triangulations" {
     };
 
     for (sizes) |size| {
-        var mesh = try Mesh(2, 2).uniform_grid(allocator, size[0], size[1], 1.0, 1.0);
+        var mesh = try Mesh(2, 2).plane(allocator, size[0], size[1], 1.0, 1.0);
         defer mesh.deinit(allocator);
 
         var vertex_sum = try allocator.alloc(i32, mesh.num_vertices());
@@ -1900,7 +1563,7 @@ test "boundary queries on 2D meshes agree with boundary incidence" {
     const allocator = testing.allocator;
     const Mesh2D = Mesh(2, 2);
 
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const boundary_vertex_mask = try mesh.boundary_mask(allocator, 0);
@@ -1944,26 +1607,31 @@ test "boundary queries on 2D meshes agree with boundary incidence" {
 
 test "edge lengths for unit square 1×1 grid" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const lengths = mesh.simplices(1).items(.volume);
 
     // 1×1 grid: 2 horizontal (len 1), 2 vertical (len 1), 1 diagonal (len √2)
     try testing.expectEqual(@as(u32, 5), mesh.num_edges());
-    // Horizontal edges
-    try testing.expectApproxEqAbs(@as(f64, 1.0), lengths[0], 1e-15);
-    try testing.expectApproxEqAbs(@as(f64, 1.0), lengths[1], 1e-15);
-    // Vertical edges
-    try testing.expectApproxEqAbs(@as(f64, 1.0), lengths[2], 1e-15);
-    try testing.expectApproxEqAbs(@as(f64, 1.0), lengths[3], 1e-15);
-    // Diagonal edge
-    try testing.expectApproxEqAbs(@sqrt(2.0), lengths[4], 1e-15);
+    var unit_count: u32 = 0;
+    var diagonal_count: u32 = 0;
+    for (lengths) |length| {
+        if (@abs(length - 1.0) < 1e-15) {
+            unit_count += 1;
+        } else if (@abs(length - @sqrt(2.0)) < 1e-15) {
+            diagonal_count += 1;
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+    try testing.expectEqual(@as(u32, 4), unit_count);
+    try testing.expectEqual(@as(u32, 1), diagonal_count);
 }
 
 test "face areas for uniform grid" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const areas = mesh.simplices(2).items(.volume);
@@ -1976,7 +1644,7 @@ test "face areas for uniform grid" {
 
 test "barycenters of triangles are at centroids" {
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 2.0, 2.0);
+    var mesh = try Mesh(2, 2).plane(allocator, 1, 1, 2.0, 2.0);
     defer mesh.deinit(allocator);
 
     const barycenters = mesh.simplices(2).items(.barycenter);
@@ -1995,7 +1663,7 @@ test "dual vertex areas sum to total mesh area" {
     const width: f64 = 3.0;
     const height: f64 = 2.0;
 
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 5, 4, width, height);
+    var mesh = try Mesh(2, 2).plane(allocator, 5, 4, width, height);
     defer mesh.deinit(allocator);
 
     const dual_areas = mesh.vertices.slice().items(.dual_volume);
@@ -2016,7 +1684,7 @@ test "interior vertex dual area equals cell area" {
     const dx = width / @as(f64, @floatFromInt(nx));
     const dy = height / @as(f64, @floatFromInt(ny));
 
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
+    var mesh = try Mesh(2, 2).plane(allocator, nx, ny, width, height);
     defer mesh.deinit(allocator);
 
     const dual_areas = mesh.vertices.slice().items(.dual_volume);
@@ -2034,7 +1702,7 @@ test "all edges have nonzero dual length" {
     // With barycentric dual, every edge (including diagonals) has nonzero
     // dual length because adjacent triangles have distinct barycenters.
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh(2, 2).plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const dual_lengths = mesh.dual_edge_volumes;
@@ -2076,7 +1744,7 @@ test "random grid dimensions produce valid meshes (100 trials)" {
         const width = rng.random().float(f64) * 99.9 + 0.1; // (0.1, 100.0)
         const height = rng.random().float(f64) * 99.9 + 0.1;
 
-        var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
+        var mesh = try Mesh(2, 2).plane(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
         // Entity counts match the grid formulas.
@@ -2135,7 +1803,7 @@ test "cotangent Laplacian is robust on random grid dimensions (50 trials)" {
         const width = rng.random().float(f64) * 99.9 + 0.1;
         const height = rng.random().float(f64) * 99.9 + 0.1;
 
-        var mesh = try Mesh(2, 2).uniform_grid(allocator, nx, ny, width, height);
+        var mesh = try Mesh(2, 2).plane(allocator, nx, ny, width, height);
         defer mesh.deinit(allocator);
 
         const operator_context = try context_mod.OperatorContext(Mesh(2, 2)).init(allocator, &mesh);
@@ -2629,7 +2297,7 @@ test "uniform_grid 1×1 is the smallest valid grid" {
     // nx=0, ny=0, width=0, height≤0 all panic (precondition violations).
     // This test verifies the smallest valid grid constructs successfully.
     const allocator = testing.allocator;
-    var mesh = try Mesh(2, 2).uniform_grid(allocator, 1, 1, 0.001, 0.001);
+    var mesh = try Mesh(2, 2).plane(allocator, 1, 1, 0.001, 0.001);
     defer mesh.deinit(allocator);
     try testing.expectEqual(@as(u32, 4), mesh.num_vertices());
     try testing.expectEqual(@as(u32, 2), mesh.num_faces());

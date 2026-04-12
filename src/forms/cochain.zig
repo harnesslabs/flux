@@ -244,7 +244,7 @@ const Mesh2D = topology.Mesh(2, 2);
 
 test "Cochain(Mesh, 0) has one value per vertex" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 4, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
@@ -255,7 +255,7 @@ test "Cochain(Mesh, 0) has one value per vertex" {
 
 test "Cochain(Mesh, 1) has one value per edge" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 4, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
@@ -266,7 +266,7 @@ test "Cochain(Mesh, 1) has one value per edge" {
 
 test "Cochain(Mesh, 2) has one value per face" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 4, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 2, Primal).init(allocator, &mesh);
@@ -277,7 +277,7 @@ test "Cochain(Mesh, 2) has one value per face" {
 
 test "Cochain initializes to zero" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
@@ -331,7 +331,7 @@ test "Cochain degree bounded by mesh dimension" {
 
 test "add two 0-cochains" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var a = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
@@ -352,7 +352,7 @@ test "add two 0-cochains" {
 
 test "sub two 1-cochains" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var a = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
@@ -373,7 +373,7 @@ test "sub two 1-cochains" {
 
 test "scale a cochain" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 0, Primal).init(allocator, &mesh);
@@ -390,7 +390,7 @@ test "scale a cochain" {
 
 test "negate a cochain" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var c = try Cochain(Mesh2D, 1, Primal).init(allocator, &mesh);
@@ -407,7 +407,7 @@ test "negate a cochain" {
 
 test "inner product and norm" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     // 1×1 grid has 4 vertices
@@ -530,7 +530,7 @@ test "SIMD inner product kernel matches scalar reference for tail lengths" {
 test "add is commutative for random 0-cochains (1000 trials)" {
     // a + b = b + a for all cochains a, b.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_ADD_00);
@@ -572,7 +572,7 @@ test "add is commutative for random 0-cochains (1000 trials)" {
 test "add is associative for random 1-cochains (1000 trials)" {
     // (a + b) + c = a + (b + c) for all cochains a, b, c.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_A55_01);
@@ -620,7 +620,7 @@ test "add is associative for random 1-cochains (1000 trials)" {
 test "scale distributes over add for random cochains (1000 trials)" {
     // α(a + b) = αa + αb for all cochains a, b and scalar α.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 2.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 2, 2.0, 1.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_D15_02);
@@ -664,7 +664,7 @@ test "scale distributes over add for random cochains (1000 trials)" {
 test "negate is self-inverse for random cochains (1000 trials)" {
     // negate(negate(a)) = a for all cochains a.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_4E9_03);
@@ -694,7 +694,7 @@ test "negate is self-inverse for random cochains (1000 trials)" {
 test "inner product is symmetric for random cochains (1000 trials)" {
     // ⟨a, b⟩ = ⟨b, a⟩ for all cochains a, b.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_1F5_04);
@@ -717,7 +717,7 @@ test "inner product is symmetric for random cochains (1000 trials)" {
 test "norm_squared is non-negative for random cochains (1000 trials)" {
     // ‖a‖² ≥ 0 for all cochains a, with equality iff a = 0.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xC0C_402_05);

@@ -12,7 +12,7 @@
 //!
 //! // Build a mesh
 //! const Mesh2D = flux.topology.Mesh(2, 2);
-//! var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+//! var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
 //! const operators = try flux.operators.context.OperatorContext(Mesh2D).init(allocator, &mesh);
 //! defer operators.deinit();
 //!

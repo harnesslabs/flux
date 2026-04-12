@@ -60,7 +60,7 @@ pub fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_
     const dt = 0.1 * (domain_length / @as(f64, @floatFromInt(grid_n)));
     const num_steps: u32 = @intFromFloat(@round(final_time / dt));
 
-    var mesh = try runtime.Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
+    var mesh = try runtime.Mesh2D.plane(allocator, grid_n, grid_n, domain_length, domain_length);
     defer mesh.deinit(allocator);
 
     var state = try runtime.MaxwellState2D.init(allocator, &mesh);
@@ -79,7 +79,7 @@ pub fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_
 }
 
 pub fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_length: f64) !f64 {
-    var mesh = try runtime.Mesh2D.uniform_grid(allocator, grid_n, grid_n, domain_length, domain_length);
+    var mesh = try runtime.Mesh2D.plane(allocator, grid_n, grid_n, domain_length, domain_length);
     defer mesh.deinit(allocator);
     const operator_context = try operator_context_mod.OperatorContext(runtime.Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();

@@ -298,7 +298,7 @@ test "OperatorContext deinit releases assembled operator storage" {
     const allocator = gpa.allocator();
 
     {
-        var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+        var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
         defer mesh.deinit(allocator);
 
         const operator_context = try OperatorContext(Mesh2D).init(allocator, &mesh);

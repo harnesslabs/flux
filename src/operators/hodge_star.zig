@@ -669,7 +669,7 @@ test "compile-time: ★⁻¹ maps 3D dual k-forms back to primal (3-k)-forms" {
 
 test "★₀ scales by dual vertex area" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC0.init(allocator, &mesh);
@@ -689,7 +689,7 @@ test "★₁ applies Whitney mass matrix (not diagonal)" {
     // The Whitney mass matrix is not diagonal — ★₁ applied to a unit
     // 1-form should differ from the diagonal dual_length/length scaling.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC1.init(allocator, &mesh);
@@ -712,7 +712,7 @@ test "★₁ applies Whitney mass matrix (not diagonal)" {
 
 test "★₂ scales by 1 / face area" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 2.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 2, 2.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC2.init(allocator, &mesh);
@@ -730,7 +730,7 @@ test "★₂ scales by 1 / face area" {
 
 test "Metric(.flat) reproduces Euclidean Hodge star exactly for all 2D degrees" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 3, 2, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     const metric = Metric(Mesh2D, .flat){};
@@ -832,7 +832,7 @@ test "Metric(.riemannian) on a constant tensor matches Euclidean star on the pul
 
 test "Metric(.riemannian) preserves ★⁻¹ ∘ ★ = id for 2D primal 1-forms" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const face_count = mesh.num_faces();
@@ -962,7 +962,7 @@ test "★⁻¹ ∘ ★ = identity for all degrees on random inputs" {
     // exact (diagonal multiply + divide). For k=1, the round-trip goes
     // through SpMV + CG solve — tolerance is set by CG convergence.
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 5, 4, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     // k=0,2: two floating-point ops → 1e-14 relative tolerance.
@@ -1067,7 +1067,7 @@ test "★★⁻¹ = id for all degrees on random 3D tetrahedral meshes" {
 
 test "★⁻¹ returns error when Whitney CG solve exhausts iteration limit" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC1.init(allocator, &mesh);

@@ -114,7 +114,7 @@ test "compile-time: chain type deduction for ★⁻¹ ∘ d ∘ ★ (codifferent
 
 test "chain with single operator equals direct call" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     var omega = try PrimalC0.init(allocator, &mesh);
@@ -135,7 +135,7 @@ test "chain with single operator equals direct call" {
 
 test "codifferential δ₁ via chain matches manual ★⁻¹ ∘ d ∘ ★" {
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_C047);
@@ -172,7 +172,7 @@ test "δd via chain matches laplacian on 0-forms" {
     // Verify the chain produces the same result as the assembled context path.
     const context_mod = @import("context.zig");
     const allocator = testing.allocator;
-    var mesh = try Mesh2D.uniform_grid(allocator, 4, 3, 2.0, 1.5);
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
     const operator_context = try context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);

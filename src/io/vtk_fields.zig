@@ -60,7 +60,7 @@ pub fn write_fields(
 
 test "project_edges_to_faces averages absolute edge values per face" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 2, 2, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const edge_values = try allocator.alloc(f64, mesh.num_edges());
@@ -89,7 +89,7 @@ test "project_edges_to_faces averages absolute edge values per face" {
 
 test "project_edges_to_faces takes absolute values" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 1, 1, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const edge_values = try allocator.alloc(f64, mesh.num_edges());
@@ -106,7 +106,7 @@ test "project_edges_to_faces takes absolute values" {
 
 test "write_fields produces vtu with E_intensity and B_flux CellData" {
     const allocator = testing.allocator;
-    var mesh = try topology.Mesh(2, 2).uniform_grid(allocator, 3, 3, 1.0, 1.0);
+    var mesh = try topology.Mesh(2, 2).plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
     const e_values = try allocator.alloc(f64, mesh.num_edges());
