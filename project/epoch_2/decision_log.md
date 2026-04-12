@@ -244,6 +244,35 @@ data model and with the project's "one obvious way" rule. The topology layer
 now owns canonical sphere construction, examples and benches reuse it directly,
 and future geometries remain tracked under the broader constructor issue.
 
+## 2026-04-12: Reference-evolution verification reuses one auxiliary contract
+
+**Decision:** Keep exact/reference verification support as a generic helper
+inside `src/integrators/evolution.zig`: `ReferenceAux(mesh, initializer,
+error_measure)` owns the exact buffer and delegates exact-field filling and
+error evaluation, while a small `empiricalRates(...)` helper reports pairwise
+convergence rates. Example families provide the analytic solution and norm; the
+library owns the orchestration contract.
+
+**Alternatives considered:**
+1. Leave each example family to define its own `*EvolutionAux` struct:
+   rejected because plane and sphere diffusion were already duplicating the
+   same ownership and method shape, and future examples would repeat it again.
+2. Introduce a new top-level `verification` or `testing` module immediately:
+   rejected for now because the reusable concept is still tightly coupled to
+   `Evolution`'s auxiliary contract. A separate module would add one more noun
+   before we have more than this single integration seam.
+3. Move analytic initializers and error norms into the library: rejected
+   because those remain problem-local mathematical data, not shared framework
+   mechanics.
+
+**Rationale:** The stable structural object here is not an "analytic solution
+runner" or an example-specific helper. It is auxiliary state attached to an
+evolution that knows how to materialize reference values and compare the
+current state against them. Keeping that contract next to `Evolution` makes the
+ownership model obvious, removes duplicated example-local buffer management,
+and stays compatible with future problem families that use different exact
+solutions or norms but the same orchestration.
+
 **Rationale:** The real question in issue #48 is empirical: does smaller
 incidence storage make boundary-operator application faster on large meshes?
 Separating the storage experiment from mesh/operator integration keeps the API

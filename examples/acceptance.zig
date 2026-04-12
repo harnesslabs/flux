@@ -111,13 +111,16 @@ test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     const grids = [_]u32{ 8, 16 };
     const results = try diffusion.runConvergenceStudy(.plane, allocator, &grids);
     defer allocator.free(results);
+    const errors = [_]f64{ results[0].l2_error, results[1].l2_error };
+    const rates = try flux.integrators.evolution.empiricalRates(allocator, &errors, 2.0);
+    defer allocator.free(rates);
 
     try testing.expectEqual(grids.len, results.len);
-    const rate = std.math.log(f64, 2.0, results[0].l2_error / results[1].l2_error);
+    try testing.expectEqual(@as(usize, 1), rates.len);
     // Backward-Euler heat solve is second order in space; require ≥ 1.75 to
     // accept asymptotic noise on the small-grid pair while still failing if
     // the operator stack regresses to first order.
-    try testing.expect(rate > 1.75);
+    try testing.expect(rates[0] > 1.75);
 }
 
 test "M3 acceptance: diffusion-surface solution matches the analytic eigenmode under refinement" {

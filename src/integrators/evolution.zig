@@ -51,6 +51,75 @@ fn invokeListeners(
     }
 }
 
+pub fn ReferenceAux(
+    comptime MeshType: type,
+    comptime InitializerType: type,
+    comptime ErrorMeasureType: type,
+) type {
+    return struct {
+        mesh: *const MeshType,
+        exact_values: []f64,
+        initializer: InitializerType,
+        error_measure: ErrorMeasureType,
+
+        pub fn init(
+            allocator: std.mem.Allocator,
+            mesh: *const MeshType,
+            len: usize,
+            initializer: InitializerType,
+            error_measure: ErrorMeasureType,
+        ) !@This() {
+            return .{
+                .mesh = mesh,
+                .exact_values = try allocator.alloc(f64, len),
+                .initializer = initializer,
+                .error_measure = error_measure,
+            };
+        }
+
+        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+            allocator.free(self.exact_values);
+        }
+
+        pub fn fillExact(self: *@This(), time: f64) void {
+            self.initializer.fill(self.mesh, self.exact_values, time);
+        }
+
+        pub fn exactValues(self: *@This()) []f64 {
+            return self.exact_values;
+        }
+
+        pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
+            return self.error_measure.compute(self.mesh, state_values, self.exact_values);
+        }
+    };
+}
+
+pub fn empiricalRates(
+    allocator: std.mem.Allocator,
+    errors: []const f64,
+    refinement_ratio: f64,
+) ![]f64 {
+    std.debug.assert(refinement_ratio > 1.0);
+
+    if (errors.len < 2) {
+        return allocator.alloc(f64, 0);
+    }
+
+    const rates = try allocator.alloc(f64, errors.len - 1);
+    errdefer allocator.free(rates);
+
+    for (0..errors.len - 1) |idx| {
+        const coarse = errors[idx];
+        const fine = errors[idx + 1];
+        std.debug.assert(coarse > 0.0);
+        std.debug.assert(fine > 0.0);
+        rates[idx] = std.math.log(f64, refinement_ratio, coarse / fine);
+    }
+
+    return rates;
+}
+
 /// Evolution object for reusable state stepping.
 ///
 /// The caller owns the primary state storage. The evolution object owns the
@@ -353,6 +422,37 @@ test "Evolution computes error against the current exact field" {
     evolution.fillExact(0.0);
     try testing.expectEqual(@as(u32, 0), evolution.stepCount());
     try testing.expectApproxEqAbs(2.0, evolution.l2Error(), 1e-15);
+}
+
+test "ReferenceAux owns exact buffer and computes error generically" {
+    const allocator = testing.allocator;
+    var mesh = MockMesh{};
+    var state = [_]f64{ 1.0, 2.0 };
+
+    const Aux = ReferenceAux(MockMesh, MockExactInitializer, MockErrorMeasure);
+    var aux = try Aux.init(
+        allocator,
+        &mesh,
+        state.len,
+        MockExactInitializer{},
+        MockErrorMeasure{},
+    );
+    defer aux.deinit(allocator);
+
+    aux.fillExact(0.0);
+    try testing.expectEqual(state.len, aux.exactValues().len);
+    try testing.expectApproxEqAbs(2.0, aux.l2Error(state[0..]), 1e-15);
+}
+
+test "empiricalRates returns pairwise convergence rates" {
+    const allocator = testing.allocator;
+    const errors = [_]f64{ 4.0, 1.0, 0.25 };
+    const rates = try empiricalRates(allocator, &errors, 2.0);
+    defer allocator.free(rates);
+
+    try testing.expectEqual(@as(usize, 2), rates.len);
+    try testing.expectApproxEqAbs(2.0, rates[0], 1e-12);
+    try testing.expectApproxEqAbs(2.0, rates[1], 1e-12);
 }
 
 test "Evolution run notifies listeners at begin, each step, and end" {

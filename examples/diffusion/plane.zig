@@ -157,15 +157,15 @@ fn simulateCase(
         .heat_system = &heat_system,
     };
     const stepper = try stepper_builder.initStepper(allocator, state.values);
-    const aux = try HeatEvolutionAux.init(
+    const aux = try HeatReferenceAux.init(
         allocator,
         &mesh,
+        state.values.len,
         HeatExactInitializer{ .initial_condition = initial_condition },
         HeatErrorMeasure{},
-        state.values.len,
     );
 
-    const Evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatEvolutionAux);
+    const Evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatReferenceAux);
     var evolution = Evolution.init(
         allocator,
         state.values,
@@ -262,44 +262,7 @@ const HeatExactInitializer = struct {
         initializeState(mesh, values, self.initial_condition, time);
     }
 };
-
-const HeatEvolutionAux = struct {
-    mesh: *const Mesh2D,
-    exact_values: []f64,
-    exact_initializer: HeatExactInitializer,
-    error_measure: HeatErrorMeasure,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        mesh: *const Mesh2D,
-        exact_initializer: HeatExactInitializer,
-        error_measure: HeatErrorMeasure,
-        len: usize,
-    ) !@This() {
-        return .{
-            .mesh = mesh,
-            .exact_values = try allocator.alloc(f64, len),
-            .exact_initializer = exact_initializer,
-            .error_measure = error_measure,
-        };
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(self.exact_values);
-    }
-
-    pub fn fillExact(self: *@This(), time: f64) void {
-        self.exact_initializer.fill(self.mesh, self.exact_values, time);
-    }
-
-    pub fn exactValues(self: *@This()) []f64 {
-        return self.exact_values;
-    }
-
-    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
-        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
-    }
-};
+const HeatReferenceAux = evolution_mod.ReferenceAux(Mesh2D, HeatExactInitializer, HeatErrorMeasure);
 
 fn stepBackwardEuler(
     allocator: std.mem.Allocator,
