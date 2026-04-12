@@ -3,7 +3,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
-const cg = flux.math.cg;
+const implicit_system_mod = flux.operators.implicit_system;
 const operator_context_mod = flux.operators.context;
 const evolution_mod = flux.integrators.evolution;
 
@@ -39,10 +39,8 @@ pub const ConvergenceResultImpl = struct {
 
 pub const SurfaceSystem = struct {
     operator_context: *SurfaceOperatorContext,
-    system_matrix: sparse.CsrMatrix(f64),
+    implicit_system: implicit_system_mod.AssembledImplicitSystem,
     masses: []f64,
-    diagonal: []f64,
-    scratch: cg.Scratch,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -71,30 +69,23 @@ pub const SurfaceSystem = struct {
         var system_matrix = try assembler.build(allocator);
         errdefer system_matrix.deinit(allocator);
 
-        const diagonal = try allocator.alloc(f64, masses.len);
-        errdefer allocator.free(diagonal);
-        for (0..masses.len) |row_idx| {
-            diagonal[row_idx] = diagonalEntry(system_matrix, @intCast(row_idx));
-            std.debug.assert(diagonal[row_idx] > 0.0);
-        }
-
-        var scratch = try cg.Scratch.init(allocator, mesh.num_vertices());
-        errdefer scratch.deinit(allocator);
+        var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+            allocator,
+            system_matrix,
+            .{},
+        );
+        errdefer implicit_system.deinit(allocator);
 
         return .{
             .operator_context = operator_context,
-            .system_matrix = system_matrix,
+            .implicit_system = implicit_system,
             .masses = masses,
-            .diagonal = diagonal,
-            .scratch = scratch,
         };
     }
 
     pub fn deinit(self: *SurfaceSystem, allocator: std.mem.Allocator) void {
-        self.scratch.deinit(allocator);
-        allocator.free(self.diagonal);
+        self.implicit_system.deinit(allocator);
         allocator.free(self.masses);
-        self.system_matrix.deinit(allocator);
         self.operator_context.deinit();
     }
 };
@@ -205,20 +196,12 @@ fn convergenceConfig(refinement: u32) ConfigImpl {
     };
 }
 
-fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
-    const row = matrix.row(row_idx);
-    for (row.cols, row.vals) |col_idx, value| {
-        if (col_idx == row_idx) return value;
-    }
-    unreachable;
-}
-
 fn stepBackwardEuler(
     system: *SurfaceSystem,
     state_values: []f64,
-    rhs: []f64,
-    solution: []f64,
 ) !void {
+    const rhs = system.implicit_system.rhsValues();
+    const solution = system.implicit_system.solutionValues();
     std.debug.assert(rhs.len == state_values.len);
     std.debug.assert(solution.len == state_values.len);
 
@@ -226,17 +209,7 @@ fn stepBackwardEuler(
         rhs_value.* = mass * state_value;
     }
 
-    var preconditioner = cg.DiagonalPreconditioner{ .diagonal = system.diagonal };
-    const solve_result = cg.solve(
-        system.system_matrix,
-        rhs,
-        solution,
-        1e-10,
-        4000,
-        &preconditioner,
-        system.scratch,
-    );
-    if (!solve_result.converged) return error.ConjugateGradientDidNotConverge;
+    _ = try system.implicit_system.solve();
 
     @memcpy(state_values, solution);
 }
@@ -244,17 +217,15 @@ fn stepBackwardEuler(
 const SurfaceStepper = struct {
     system: *SurfaceSystem,
     state_values: []f64,
-    rhs: []f64,
-    solution: []f64,
 
     pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         _ = allocator;
-        try stepBackwardEuler(self.system, self.state_values, self.rhs, self.solution);
+        try stepBackwardEuler(self.system, self.state_values);
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(self.solution);
-        allocator.free(self.rhs);
+        _ = self;
+        _ = allocator;
     }
 };
 
@@ -264,15 +235,12 @@ const SurfaceStepperBuilder = struct {
     system: *SurfaceSystem,
 
     pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
-        const len = self.system.masses.len;
-        const stepper = Stepper{
+        _ = allocator;
+        self.system.implicit_system.seedSolution(state_values);
+        return .{
             .system = self.system,
             .state_values = state_values,
-            .rhs = try allocator.alloc(f64, len),
-            .solution = try allocator.alloc(f64, len),
         };
-        @memcpy(stepper.solution, state_values);
-        return stepper;
     }
 };
 

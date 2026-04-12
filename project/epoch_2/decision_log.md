@@ -650,3 +650,29 @@ implement ParaView output, progress bars, and future diagnostics as listeners
 without each family wiring its own timestep loop. It also creates the seam that
 future diagnostics and checkpoints can reuse without hard-coding them into the
 core evolution object.
+
+## 2026-04-11: Assembled implicit systems own solve workspace, but not constraint policy
+
+**Decision:** Introduce `flux.operators.implicit_system.AssembledImplicitSystem`
+as the library-owned runtime object for one assembled SPD solve. The object owns
+the matrix, Jacobi diagonal, reusable `rhs` and `solution` buffers, and CG
+scratch. Constraint policy stays outside: callers may build either a full system
+or a reduced constrained system, then hand the resulting matrix to the same
+runtime object.
+
+**Alternatives considered:**
+1. Keep exposing only raw `CsrMatrix` + `cg.Scratch`: rejected because every
+   implicit caller then rebuilds the same mini-runtime by hand, which was the
+   exact diffusion and Poisson duplication this issue surfaced.
+2. Bake Dirichlet/constraint elimination into the new object: rejected because
+   issue `#182` is still open and different constraint policies should compose
+   with the solve runtime rather than being frozen into its first implementation.
+3. Put the object in `src/math/`: rejected because the matrix solver primitive
+   already lives in `math`; this new type is the operator-facing packaging layer
+   that binds assembled operator state to a reusable solve lifetime.
+
+**Rationale:** The missing abstraction was not “another solver,” it was the
+owned runtime around an already-assembled operator. Keeping the object matrix-
+agnostic but ownership-aware immediately shrinks both constrained and
+unconstrained diffusion examples, lets Poisson reuse the same packaging, and
+preserves a clean seam for later boundary-constraint composition.

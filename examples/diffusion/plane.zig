@@ -3,7 +3,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
-const cg = flux.math.cg;
+const implicit_system_mod = flux.operators.implicit_system;
 const operator_context_mod = flux.operators.context;
 const evolution_mod = flux.integrators.evolution;
 
@@ -46,12 +46,10 @@ pub const ConvergenceResultImpl = struct {
 };
 
 const HeatSystem = struct {
-    reduced_matrix: sparse.CsrMatrix(f64),
+    implicit_system: implicit_system_mod.AssembledImplicitSystem,
     reduced_index: []u32,
     interior_vertices: []u32,
     boundary_mask: []bool,
-    diagonal: []f64,
-    scratch: cg.Scratch,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -105,34 +103,26 @@ const HeatSystem = struct {
         var reduced_matrix = try triplets.build(allocator);
         errdefer reduced_matrix.deinit(allocator);
 
-        const diagonal = try allocator.alloc(f64, interior_count);
-        errdefer allocator.free(diagonal);
-        for (0..interior_count) |row_idx_usize| {
-            const row_idx: u32 = @intCast(row_idx_usize);
-            diagonal[row_idx] = diagonalEntry(reduced_matrix, row_idx);
-            std.debug.assert(diagonal[row_idx] > 0.0);
-        }
-
-        var scratch = try cg.Scratch.init(allocator, interior_count);
-        errdefer scratch.deinit(allocator);
+        var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+            allocator,
+            reduced_matrix,
+            .{},
+        );
+        errdefer implicit_system.deinit(allocator);
 
         return .{
-            .reduced_matrix = reduced_matrix,
+            .implicit_system = implicit_system,
             .reduced_index = reduced_index,
             .interior_vertices = interior_vertices,
             .boundary_mask = boundary_mask,
-            .diagonal = diagonal,
-            .scratch = scratch,
         };
     }
 
     pub fn deinit(self: *HeatSystem, allocator: std.mem.Allocator) void {
-        self.scratch.deinit(allocator);
-        allocator.free(self.diagonal);
+        self.implicit_system.deinit(allocator);
         allocator.free(self.boundary_mask);
         allocator.free(self.interior_vertices);
         allocator.free(self.reduced_index);
-        self.reduced_matrix.deinit(allocator);
     }
 };
 
@@ -267,16 +257,8 @@ fn boundaryVertexMask(allocator: std.mem.Allocator, mesh: *const Mesh2D) ![]bool
     return mask;
 }
 
-fn diagonalEntry(matrix: sparse.CsrMatrix(f64), row_idx: u32) f64 {
-    const row = matrix.row(row_idx);
-    for (row.cols, row.vals) |col_idx, value| {
-        if (col_idx == row_idx) return value;
-    }
-    unreachable;
-}
-
 fn seedReducedSolution(
-    heat_system: *const HeatSystem,
+    heat_system: *HeatSystem,
     full_state: []const f64,
     reduced_solution: []f64,
 ) void {
@@ -290,28 +272,27 @@ const HeatStepperBuilder = struct {
     pub const Stepper = HeatStepper;
 
     mesh: *const Mesh2D,
-    heat_system: *const HeatSystem,
+    heat_system: *HeatSystem,
 
     pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
-        const len = self.heat_system.interior_vertices.len;
-        const stepper = Stepper{
+        _ = allocator;
+        seedReducedSolution(
+            self.heat_system,
+            state_values,
+            self.heat_system.implicit_system.solutionValues(),
+        );
+        return .{
             .mesh = self.mesh,
             .heat_system = self.heat_system,
             .state_values = state_values,
-            .reduced_rhs = try allocator.alloc(f64, len),
-            .reduced_solution = try allocator.alloc(f64, len),
         };
-        seedReducedSolution(self.heat_system, state_values, stepper.reduced_solution);
-        return stepper;
     }
 };
 
 const HeatStepper = struct {
     mesh: *const Mesh2D,
-    heat_system: *const HeatSystem,
+    heat_system: *HeatSystem,
     state_values: []f64,
-    reduced_rhs: []f64,
-    reduced_solution: []f64,
 
     pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         try stepBackwardEuler(
@@ -319,14 +300,12 @@ const HeatStepper = struct {
             self.mesh,
             self.heat_system,
             self.state_values,
-            self.reduced_rhs,
-            self.reduced_solution,
         );
     }
 
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(self.reduced_solution);
-        allocator.free(self.reduced_rhs);
+        _ = self;
+        _ = allocator;
     }
 };
 
@@ -385,13 +364,13 @@ const HeatEvolutionAux = struct {
 fn stepBackwardEuler(
     allocator: std.mem.Allocator,
     mesh: *const Mesh2D,
-    heat_system: *const HeatSystem,
+    heat_system: *HeatSystem,
     state_values: []f64,
-    reduced_rhs: []f64,
-    reduced_solution: []f64,
 ) !void {
     _ = allocator;
     const masses = mesh.vertices.slice().items(.dual_volume);
+    const reduced_rhs = heat_system.implicit_system.rhsValues();
+    const reduced_solution = heat_system.implicit_system.solutionValues();
     std.debug.assert(reduced_rhs.len == heat_system.interior_vertices.len);
     std.debug.assert(reduced_solution.len == heat_system.interior_vertices.len);
 
@@ -399,17 +378,7 @@ fn stepBackwardEuler(
         reduced_rhs[interior_idx] = masses[vertex_idx] * state_values[vertex_idx];
     }
 
-    var preconditioner = cg.DiagonalPreconditioner{ .diagonal = heat_system.diagonal };
-    const solve_result = cg.solve(
-        heat_system.reduced_matrix,
-        reduced_rhs,
-        reduced_solution,
-        1e-10,
-        4000,
-        &preconditioner,
-        heat_system.scratch,
-    );
-    if (!solve_result.converged) return error.ConjugateGradientDidNotConverge;
+    _ = try heat_system.implicit_system.solve();
 
     for (heat_system.boundary_mask, 0..) |is_boundary, vertex_idx| {
         if (is_boundary) state_values[vertex_idx] = 0.0;
