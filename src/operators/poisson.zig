@@ -11,8 +11,9 @@ const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
 const obj = @import("../io/obj.zig");
 const sparse = @import("../math/sparse.zig");
-const operator_context_mod = @import("context.zig");
 const conjugate_gradient = @import("../math/cg.zig");
+const operator_context_mod = @import("context.zig");
+const implicit_system_mod = @import("implicit_system.zig");
 
 comptime {
     @setEvalBranchQuota(20000);
@@ -152,30 +153,21 @@ fn solve_dirichlet_reduced_system(
         reduced_rhs[reduced_row] = rhs_value;
     }
 
-    var reduced_matrix = try triplets.build(allocator);
-    defer reduced_matrix.deinit(allocator);
+    const reduced_matrix = try triplets.build(allocator);
 
-    const diagonal = try diagonal_of(allocator, reduced_matrix);
-    defer allocator.free(diagonal);
-
-    var preconditioner = conjugate_gradient.DiagonalPreconditioner{ .diagonal = diagonal };
-    const reduced_solution = try allocator.alloc(f64, free_count);
-    defer allocator.free(reduced_solution);
-    @memset(reduced_solution, 0.0);
-
-    var scratch = try conjugate_gradient.Scratch.init(allocator, free_count);
-    defer scratch.deinit(allocator);
-
-    const cg_result = conjugate_gradient.solve(
+    var implicit_system = try implicit_system_mod.AssembledImplicitSystem.init(
+        allocator,
         reduced_matrix,
-        reduced_rhs,
-        reduced_solution,
-        config.tolerance_relative,
-        config.iteration_limit,
-        &preconditioner,
-        scratch,
+        .{
+            .tolerance_relative = config.tolerance_relative,
+            .iteration_limit = config.iteration_limit,
+        },
     );
-    if (!cg_result.converged) return error.ConjugateGradientDidNotConverge;
+    defer implicit_system.deinit(allocator);
+
+    @memcpy(implicit_system.rhsValues(), reduced_rhs);
+    const cg_result = try implicit_system.solve();
+    const reduced_solution = implicit_system.solutionValues();
 
     const solution = try allocator.alloc(f64, full_matrix.n_rows);
     errdefer allocator.free(solution);
@@ -223,28 +215,6 @@ fn assemble_one_form_matrix(
     }
 
     return triplets.build(allocator);
-}
-
-fn diagonal_of(
-    allocator: std.mem.Allocator,
-    matrix: sparse.CsrMatrix(f64),
-) ![]f64 {
-    const diagonal = try allocator.alloc(f64, matrix.n_rows);
-    errdefer allocator.free(diagonal);
-    @memset(diagonal, 0.0);
-
-    for (0..matrix.n_rows) |row_idx_usize| {
-        const row_idx: u32 = @intCast(row_idx_usize);
-        const row = matrix.row(row_idx);
-        for (row.cols, row.vals) |col_idx, value| {
-            if (col_idx != row_idx) continue;
-            diagonal[row_idx] = value;
-            break;
-        }
-        std.debug.assert(diagonal[row_idx] > 0.0);
-    }
-
-    return diagonal;
 }
 
 fn exact_solution_2d(coords: [2]f64) f64 {
