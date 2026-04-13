@@ -85,6 +85,34 @@ pub const concepts = struct {
     pub const mesh = @import("concepts/mesh.zig");
 };
 
+test "public API exposes explicit DEC and FEEC operator families" {
+    const testing = @import("std").testing;
+
+    try testing.expect(@hasDecl(@This().operators, "dec"));
+    try testing.expect(@hasDecl(@This().operators, "feec"));
+    try testing.expect(!@hasDecl(@This().operators, "context"));
+}
+
+test "DEC context only exposes DEC-family operators" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const DecContext = @This().operators.dec.context.OperatorContext(Mesh2D);
+
+    try testing.expect(@hasDecl(DecContext, "exteriorDerivative"));
+    try testing.expect(!@hasDecl(DecContext, "hodgeStar"));
+    try testing.expect(!@hasDecl(DecContext, "laplacian"));
+}
+
+test "FEEC context only exposes FEEC-family operators" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const FeecContext = @This().operators.feec.context.OperatorContext(Mesh2D);
+
+    try testing.expect(@hasDecl(FeecContext, "hodgeStar"));
+    try testing.expect(@hasDecl(FeecContext, "laplacian"));
+    try testing.expect(!@hasDecl(FeecContext, "exteriorDerivative"));
+}
+
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
 }
