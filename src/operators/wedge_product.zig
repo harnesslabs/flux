@@ -14,25 +14,23 @@
 const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
+const feec = @import("../forms/feec.zig");
 const topology = @import("../topology/mesh.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 
 fn WedgeResult(comptime LeftType: type, comptime RightType: type) type {
-    return cochain.Cochain(LeftType.MeshT, LeftType.degree + RightType.degree, cochain.Primal);
+    return feec.Form(feec.WhitneySpace(LeftType.MeshT, LeftType.degree + RightType.degree));
 }
 
 fn validateWedgeInputs(comptime LeftType: type, comptime RightType: type) void {
-    if (!@hasDecl(LeftType, "degree") or !@hasDecl(LeftType, "MeshT") or !@hasDecl(LeftType, "duality")) {
-        @compileError("wedge requires the left input to be a Cochain type");
-    }
-    if (!@hasDecl(RightType, "degree") or !@hasDecl(RightType, "MeshT") or !@hasDecl(RightType, "duality")) {
-        @compileError("wedge requires the right input to be a Cochain type");
+    if (!@hasDecl(LeftType, "SpaceT") or !@hasDecl(RightType, "SpaceT")) {
+        @compileError("wedge requires FEEC form inputs rather than bare cochains");
     }
     if (LeftType.MeshT != RightType.MeshT) {
-        @compileError("wedge requires both cochains to use the same mesh type");
+        @compileError("wedge requires both FEEC forms to use the same mesh type");
     }
-    if (LeftType.duality != cochain.Primal or RightType.duality != cochain.Primal) {
-        @compileError("wedge currently supports only primal cochains");
+    if (LeftType.SpaceT.family != feec.Whitney or RightType.SpaceT.family != feec.Whitney) {
+        @compileError("wedge currently supports only Whitney FEEC spaces");
     }
     if (LeftType.degree + RightType.degree > LeftType.MeshT.topological_dimension) {
         @compileError(std.fmt.comptimePrint(
@@ -51,21 +49,37 @@ pub fn wedge(
     const RightType = @TypeOf(right);
     comptime validateWedgeInputs(LeftType, RightType);
 
+    const OutputType = WedgeResult(LeftType, RightType);
+    std.debug.assert(left.space.mesh == right.space.mesh);
+
+    var output = try OutputType.initOwned(
+        allocator,
+        feec.WhitneySpace(LeftType.MeshT, LeftType.degree + RightType.degree).init(left.space.mesh),
+    );
+    errdefer output.deinit(allocator);
+
+    try wedgeCoefficientsInto(
+        output.coefficientsMut().values,
+        left.coefficientsConst().*,
+        right.coefficientsConst().*,
+    );
+    return output;
+}
+
+fn wedgeCoefficientsInto(output_values: []f64, left: anytype, right: anytype) !void {
+    const LeftType = @TypeOf(left);
+    const RightType = @TypeOf(right);
+    std.debug.assert(left.mesh == right.mesh);
+
     const degree_left = LeftType.degree;
     const degree_right = RightType.degree;
     const degree_out = degree_left + degree_right;
-    const OutputType = WedgeResult(LeftType, RightType);
-
-    std.debug.assert(left.mesh == right.mesh);
-
-    var output = try OutputType.init(allocator, left.mesh);
-    errdefer output.deinit(allocator);
 
     if (degree_out == 0) {
-        for (output.values, left.values, right.values) |*out, left_value, right_value| {
+        for (output_values, left.values, right.values) |*out, left_value, right_value| {
             out.* = left_value * right_value;
         }
-        return output;
+        return;
     }
 
     const left_values = left.values;
@@ -119,10 +133,8 @@ pub fn wedge(
 
             sum += @as(f64, @floatFromInt(permutationSign(degree_out + 1, permutation))) * left_value * right_value;
         }
-        output.values[out_index] = coefficient * sum;
+        output_values[out_index] = coefficient * sum;
     }
-
-    return output;
 }
 
 fn wedgeCoefficient(comptime degree_left: comptime_int, comptime degree_right: comptime_int) f64 {
@@ -226,13 +238,27 @@ const C3D1 = cochain.Cochain(Mesh3D, 1, cochain.Primal);
 const C3D2 = cochain.Cochain(Mesh3D, 2, cochain.Primal);
 const C3D3 = cochain.Cochain(Mesh3D, 3, cochain.Primal);
 
+fn whitneyView(coefficients: anytype) feec.Form(feec.WhitneySpace(@TypeOf(coefficients.*).MeshT, @TypeOf(coefficients.*).degree)) {
+    const CochainType = @TypeOf(coefficients.*);
+    const WhitneySpaceType = feec.WhitneySpace(CochainType.MeshT, CochainType.degree);
+    const space = WhitneySpaceType.init(coefficients.mesh);
+    return space.view(coefficients);
+}
+
 test "compile-time: wedge degree arithmetic yields the sum degree" {
     comptime {
-        const Result2D = WedgeResult(C1, C1);
-        try testing.expect(Result2D == C2);
+        const Whitney2D1 = feec.Form(feec.WhitneySpace(Mesh2D, 1));
+        const Result2D = WedgeResult(Whitney2D1, Whitney2D1);
+        if (Result2D.SpaceT.degree != 2) {
+            @compileError("2D FEEC wedge should produce a degree-2 FEEC form");
+        }
 
-        const Result3D = WedgeResult(C3D1, C3D2);
-        try testing.expect(Result3D == C3D3);
+        const Whitney3D1 = feec.Form(feec.WhitneySpace(Mesh3D, 1));
+        const Whitney3D2 = feec.Form(feec.WhitneySpace(Mesh3D, 2));
+        const Result3D = WedgeResult(Whitney3D1, Whitney3D2);
+        if (Result3D.SpaceT.degree != 3) {
+            @compileError("3D FEEC wedge should produce a degree-3 FEEC form");
+        }
     }
 }
 
@@ -253,12 +279,41 @@ test "wedge of 0-forms is pointwise multiplication" {
         value.* = 2.0 * @as(f64, @floatFromInt(i + 3));
     }
 
+    var product = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
+    defer product.deinit(allocator);
+
+    for (product.coefficientsConst().values, 0..) |value, i| {
+        try testing.expectApproxEqAbs(alpha.values[i] * beta.values[i], value, 1e-15);
+    }
+}
+
+test "wedge operates on FEEC Whitney forms instead of bare cochains" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const Whitney1 = @import("../forms/feec.zig").WhitneySpace(Mesh2D, 1);
+    var alpha_coefficients = try C1.init(allocator, &mesh);
+    defer alpha_coefficients.deinit(allocator);
+    var beta_coefficients = try C1.init(allocator, &mesh);
+    defer beta_coefficients.deinit(allocator);
+
+    for (alpha_coefficients.values, 0..) |*value, i| {
+        value.* = @floatFromInt(i + 1);
+    }
+    for (beta_coefficients.values, 0..) |*value, i| {
+        value.* = @floatFromInt(2 * i + 1);
+    }
+
+    const edge_space = Whitney1.init(&mesh);
+    const alpha = edge_space.view(&alpha_coefficients);
+    const beta = edge_space.view(&beta_coefficients);
+
     var product = try wedge(allocator, alpha, beta);
     defer product.deinit(allocator);
 
-    for (product.values, 0..) |value, i| {
-        try testing.expectApproxEqAbs(alpha.values[i] * beta.values[i], value, 1e-15);
-    }
+    try testing.expect(@TypeOf(product).SpaceT.degree == 2);
+    try testing.expect(product.coefficientsConst().mesh == &mesh);
 }
 
 test "wedge of 0-form and 1-form averages the endpoint values" {
@@ -279,11 +334,11 @@ test "wedge of 0-form and 1-form averages the endpoint values" {
         value.* = @as(f64, @floatFromInt(i + 1));
     }
 
-    var product = try wedge(allocator, scalar, one_form);
+    var product = try wedge(allocator, whitneyView(&scalar), whitneyView(&one_form));
     defer product.deinit(allocator);
 
     const edges = mesh.simplices(1).items(.vertices);
-    for (product.values, edges, one_form.values) |value, edge, edge_value| {
+    for (product.coefficientsConst().values, edges, one_form.values) |value, edge, edge_value| {
         const expected = 0.5 * (scalar.values[edge[0]] + scalar.values[edge[1]]) * edge_value;
         try testing.expectApproxEqAbs(expected, value, 1e-14);
     }
@@ -304,12 +359,12 @@ test "graded commutativity holds on random 3D 1- and 2-forms" {
         for (alpha.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
         for (beta.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
 
-        var left = try wedge(allocator, alpha, beta);
+        var left = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
         defer left.deinit(allocator);
-        var right = try wedge(allocator, beta, alpha);
+        var right = try wedge(allocator, whitneyView(&beta), whitneyView(&alpha));
         defer right.deinit(allocator);
 
-        for (left.values, right.values) |lhs, rhs| {
+        for (left.coefficientsConst().values, right.coefficientsConst().values) |lhs, rhs| {
             try testing.expectApproxEqAbs(lhs, rhs, 1e-12);
         }
     }
@@ -340,17 +395,17 @@ test "associativity holds for random closed 1-forms on tetrahedral meshes" {
         var gamma = try exterior_derivative.exterior_derivative(allocator, potential_c);
         defer gamma.deinit(allocator);
 
-        var alpha_beta = try wedge(allocator, alpha, beta);
+        var alpha_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
         defer alpha_beta.deinit(allocator);
-        var left = try wedge(allocator, alpha_beta, gamma);
+        var left = try wedge(allocator, alpha_beta, whitneyView(&gamma));
         defer left.deinit(allocator);
 
-        var beta_gamma = try wedge(allocator, beta, gamma);
+        var beta_gamma = try wedge(allocator, whitneyView(&beta), whitneyView(&gamma));
         defer beta_gamma.deinit(allocator);
-        var right = try wedge(allocator, alpha, beta_gamma);
+        var right = try wedge(allocator, whitneyView(&alpha), beta_gamma);
         defer right.deinit(allocator);
 
-        for (left.values, right.values) |lhs, rhs| {
+        for (left.coefficientsConst().values, right.coefficientsConst().values) |lhs, rhs| {
             try testing.expectApproxEqAbs(lhs, rhs, 1e-11);
         }
     }
@@ -371,22 +426,22 @@ test "Leibniz rule holds on random 2D 0- and 1-forms" {
         for (alpha.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
         for (beta.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
 
-        var alpha_wedge_beta = try wedge(allocator, alpha, beta);
+        var alpha_wedge_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
         defer alpha_wedge_beta.deinit(allocator);
-        var left = try exterior_derivative.exterior_derivative(allocator, alpha_wedge_beta);
+        var left = try exterior_derivative.exterior_derivative(allocator, alpha_wedge_beta.coefficientsConst().*);
         defer left.deinit(allocator);
 
         var d_alpha = try exterior_derivative.exterior_derivative(allocator, alpha);
         defer d_alpha.deinit(allocator);
-        var d_alpha_wedge_beta = try wedge(allocator, d_alpha, beta);
+        var d_alpha_wedge_beta = try wedge(allocator, whitneyView(&d_alpha), whitneyView(&beta));
         defer d_alpha_wedge_beta.deinit(allocator);
 
         var d_beta = try exterior_derivative.exterior_derivative(allocator, beta);
         defer d_beta.deinit(allocator);
-        var alpha_wedge_d_beta = try wedge(allocator, alpha, d_beta);
+        var alpha_wedge_d_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&d_beta));
         defer alpha_wedge_d_beta.deinit(allocator);
 
-        for (left.values, d_alpha_wedge_beta.values, alpha_wedge_d_beta.values) |lhs, rhs_a, rhs_b| {
+        for (left.values, d_alpha_wedge_beta.coefficientsConst().values, alpha_wedge_d_beta.coefficientsConst().values) |lhs, rhs_a, rhs_b| {
             try testing.expectApproxEqAbs(lhs, rhs_a + rhs_b, 1e-11);
         }
     }

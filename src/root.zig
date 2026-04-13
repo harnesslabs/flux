@@ -54,7 +54,7 @@ pub const Error = error{
 
 // ── Submodule re-exports (for namespaced access) ────────────────────────
 
-pub const forms = @import("forms/cochain.zig");
+pub const forms = @import("forms/root.zig");
 pub const io = @import("io/root.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");
@@ -122,6 +122,18 @@ test "FEEC context only exposes FEEC-family operators" {
     try testing.expect(@hasDecl(FeecContext, "hodgeStar"));
     try testing.expect(@hasDecl(FeecContext, "laplacian"));
     try testing.expect(!@hasDecl(FeecContext, "exteriorDerivative"));
+}
+
+test "forms API exposes FEEC spaces while keeping Cochain storage-only" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const C1 = @This().forms.Cochain(Mesh2D, 1, @This().forms.Primal);
+
+    try testing.expect(@hasDecl(@This().forms, "feec"));
+    try testing.expect(@hasDecl(@This().forms.feec, "WhitneySpace"));
+    try testing.expect(!@hasDecl(C1, "interpolate"));
+    try testing.expect(!@hasDecl(C1, "project"));
+    try testing.expect(!@hasDecl(C1, "space"));
 }
 
 test {
