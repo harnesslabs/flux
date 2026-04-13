@@ -54,7 +54,7 @@ pub const Error = error{
 
 // ── Submodule re-exports (for namespaced access) ────────────────────────
 
-pub const forms = @import("forms/cochain.zig");
+pub const forms = @import("forms/root.zig");
 pub const io = @import("io/root.zig");
 pub const math = struct {
     pub const sparse = @import("math/sparse.zig");

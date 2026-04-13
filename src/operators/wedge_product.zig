@@ -14,19 +14,30 @@
 const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
+const feec = @import("../forms/feec.zig");
 const topology = @import("../topology/mesh.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 
 fn WedgeResult(comptime LeftType: type, comptime RightType: type) type {
+    if (@hasDecl(LeftType, "SpaceT") and @hasDecl(RightType, "SpaceT")) {
+        return feec.Form(feec.WhitneySpace(LeftType.MeshT, LeftType.degree + RightType.degree));
+    }
     return cochain.Cochain(LeftType.MeshT, LeftType.degree + RightType.degree, cochain.Primal);
 }
 
 fn validateWedgeInputs(comptime LeftType: type, comptime RightType: type) void {
+    if (@hasDecl(LeftType, "SpaceT") and @hasDecl(RightType, "SpaceT")) {
+        if (LeftType.MeshT != RightType.MeshT) {
+            @compileError("wedge requires both FEEC forms to use the same mesh type");
+        }
+        return;
+    }
+
     if (!@hasDecl(LeftType, "degree") or !@hasDecl(LeftType, "MeshT") or !@hasDecl(LeftType, "duality")) {
-        @compileError("wedge requires the left input to be a Cochain type");
+        @compileError("wedge requires the left input to be a Cochain type or FEEC form");
     }
     if (!@hasDecl(RightType, "degree") or !@hasDecl(RightType, "MeshT") or !@hasDecl(RightType, "duality")) {
-        @compileError("wedge requires the right input to be a Cochain type");
+        @compileError("wedge requires the right input to be a Cochain type or FEEC form");
     }
     if (LeftType.MeshT != RightType.MeshT) {
         @compileError("wedge requires both cochains to use the same mesh type");
@@ -55,6 +66,12 @@ pub fn wedge(
     const degree_right = RightType.degree;
     const degree_out = degree_left + degree_right;
     const OutputType = WedgeResult(LeftType, RightType);
+
+    if (@hasDecl(LeftType, "SpaceT") and @hasDecl(RightType, "SpaceT")) {
+        var output = try OutputType.initOwned(allocator, feec.WhitneySpace(LeftType.MeshT, degree_out).init(left.space.mesh));
+        errdefer output.deinit(allocator);
+        unreachable;
+    }
 
     std.debug.assert(left.mesh == right.mesh);
 

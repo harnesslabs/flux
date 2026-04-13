@@ -245,6 +245,32 @@ reintroducing another transitional public API.
 
 **Source:** PR #198, issue #193
 
+## 2026-04-13: FEEC semantics use explicit Space/Form wrappers over shared cochain storage
+
+**Decision:** Keep `Cochain` as the shared coefficient-storage object and add a
+FEEC layer in `forms.feec` built around explicit `Space` and `Form` nouns.
+Current lowest-order FEEC use is represented honestly by `WhitneySpace(...)`,
+while `Form(space)` wraps shared or owned cochain storage without making the
+storage type itself carry FEEC semantic meaning.
+
+**Alternatives considered:**
+1. Add FEEC methods directly onto `Cochain`: rejected because it would keep
+   storage and FEEC basis semantics conflated, which is the ambiguity this
+   milestone is trying to remove.
+2. Introduce only a `WhitneyForm` noun with no separate space object:
+   rejected because the structural concept in the library vision is the
+   function space. A form value should be understood as an element of a space,
+   not as a new storage family.
+
+**Rationale:** This gives the library a stable structural noun pair that fits
+the long-term operator-on-function-space vision and still stays honest about
+today's FEEC support. `Space` is the reusable semantic layer, `Form` is a view
+or owner over coefficients in that space, and `WhitneySpace` remains an
+explicit family qualifier rather than pretending FEEC is already generic over
+all basis families.
+
+**Source:** PR #199, issue #129
+
 ## 2026-04-11: Canonical geometry constructors stay honest about supported mesh types
 
 **Decision:** Add `Mesh(3, 2).sphere(allocator, radius, refinement)` as the
