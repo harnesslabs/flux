@@ -7,6 +7,7 @@
 const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
+const feec = @import("../forms/feec.zig");
 const topology = @import("../topology/mesh.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 const wedge_product = @import("wedge_product.zig");
@@ -241,11 +242,17 @@ pub fn HelicityObserver(
             var derivative = try exterior_derivative.exterior_derivative(allocator, field.*);
             defer derivative.deinit(allocator);
 
-            var helicity_density = try wedge_product.wedge(allocator, field.*, derivative);
+            const velocity_space = feec.WhitneySpace(CochainType.MeshT, CochainType.degree).init(field.mesh);
+            const vorticity_space = feec.WhitneySpace(CochainType.MeshT, CochainType.degree + 1).init(field.mesh);
+            var helicity_density = try wedge_product.wedge(
+                allocator,
+                velocity_space.view(field),
+                vorticity_space.view(&derivative),
+            );
             defer helicity_density.deinit(allocator);
 
             var helicity: f64 = 0.0;
-            for (helicity_density.values) |value| {
+            for (helicity_density.coefficientsConst().values) |value| {
                 helicity += value;
             }
             return helicity;
@@ -411,11 +418,13 @@ test "helicity observer matches manual sum of u wedge du on tetrahedral mesh" {
 
     var derivative = try exterior_derivative.exterior_derivative(allocator, state.velocity);
     defer derivative.deinit(allocator);
-    var density = try wedge_product.wedge(allocator, state.velocity, derivative);
+    const velocity_space = feec.WhitneySpace(Mesh3D, 1).init(&mesh);
+    const vorticity_space = feec.WhitneySpace(Mesh3D, 2).init(&mesh);
+    var density = try wedge_product.wedge(allocator, velocity_space.view(&velocity), vorticity_space.view(&derivative));
     defer density.deinit(allocator);
 
     var expected: f64 = 0.0;
-    for (density.values) |value| {
+    for (density.coefficientsConst().values) |value| {
         expected += value;
     }
 
@@ -463,9 +472,11 @@ test "manual wedge for helicity produces a top form" {
 
     var derivative = try exterior_derivative.exterior_derivative(allocator, velocity);
     defer derivative.deinit(allocator);
-    var density = try wedge_product.wedge(allocator, velocity, derivative);
+    const velocity_space = feec.WhitneySpace(Mesh3D, 1).init(&mesh);
+    const vorticity_space = feec.WhitneySpace(Mesh3D, 2).init(&mesh);
+    var density = try wedge_product.wedge(allocator, velocity_space.view(&velocity), vorticity_space.view(&derivative));
     defer density.deinit(allocator);
 
-    try testing.expectEqual(@as(usize, mesh.num_tets()), density.values.len);
+    try testing.expectEqual(@as(usize, mesh.num_tets()), density.coefficientsConst().values.len);
     _ = Primal2_2D;
 }

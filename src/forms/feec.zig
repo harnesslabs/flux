@@ -22,7 +22,7 @@ pub fn Space(comptime MeshType: type, comptime k: comptime_int, comptime Family:
             return .{ .mesh = mesh };
         }
 
-        pub fn view(self: Self, coefficients: *Storage) Form(Self) {
+        pub fn view(self: Self, coefficients: *const Storage) Form(Self) {
             std.debug.assert(coefficients.mesh == self.mesh);
             return .{
                 .space = self,
@@ -47,7 +47,7 @@ pub fn Form(comptime SpaceType: type) type {
         pub const degree = SpaceType.degree;
 
         pub const StorageHandle = union(enum) {
-            borrowed: *Storage,
+            borrowed: *const Storage,
             owned: Storage,
         };
 
@@ -68,16 +68,16 @@ pub fn Form(comptime SpaceType: type) type {
             }
         }
 
-        pub fn coefficients(self: *Self) *Storage {
+        pub fn coefficientsConst(self: *const Self) *const Storage {
             return switch (self.storage) {
                 .borrowed => |borrowed| borrowed,
                 .owned => |*owned| owned,
             };
         }
 
-        pub fn coefficientsConst(self: *const Self) *const Storage {
+        pub fn coefficientsMut(self: *Self) *Storage {
             return switch (self.storage) {
-                .borrowed => |borrowed| borrowed,
+                .borrowed => @panic("cannot mutably borrow coefficients from a FEEC view"),
                 .owned => |*owned| owned,
             };
         }
