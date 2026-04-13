@@ -73,7 +73,7 @@ pub const operators = struct {
         pub const laplacian = @import("operators/laplacian.zig");
         pub const whitney_mass = @import("operators/whitney_mass.zig");
     };
-    pub const bridges = struct {};
+    pub const bridges = @import("operators/bridges.zig");
     pub const boundary_conditions = @import("operators/boundary_conditions.zig");
     pub const codifferential = @import("operators/codifferential.zig");
     pub const compose = @import("operators/compose.zig");
@@ -134,6 +134,13 @@ test "forms API exposes FEEC spaces while keeping Cochain storage-only" {
     try testing.expect(!@hasDecl(C1, "interpolate"));
     try testing.expect(!@hasDecl(C1, "project"));
     try testing.expect(!@hasDecl(C1, "space"));
+}
+
+test "operators API exposes explicit DEC/FEEC bridge operators" {
+    const testing = @import("std").testing;
+
+    try testing.expect(@hasDecl(@This().operators.bridges, "WhitneyInterpolation"));
+    try testing.expect(@hasDecl(@This().operators.bridges, "DeRhamProjection"));
 }
 
 test {

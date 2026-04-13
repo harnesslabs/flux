@@ -271,6 +271,32 @@ all basis families.
 
 **Source:** PR #199, issue #129
 
+## 2026-04-13: DEC/FEEC bridge operators borrow on interpolation and move-or-copy on projection
+
+**Decision:** Represent the explicit bridge seam with operator values in
+`operators.bridges`: `WhitneyInterpolation` borrows simplicial cochain storage
+into a FEEC Whitney form view, while `DeRhamProjection` consumes a FEEC form and
+returns simplicial storage by moving owned coefficients or cloning borrowed
+coefficients when necessary.
+
+**Alternatives considered:**
+1. Make both bridges pure views with no owned projection result: rejected
+   because downstream DEC operators consume raw cochain values, not references
+   tied to a FEEC form's lifetime.
+2. Make both bridges allocate unconditionally: rejected because interpolation is
+   structurally just a semantic reinterpretation in the current lowest-order
+   FEEC layer, so forcing allocation there would obscure the real ownership
+   story and add avoidable cost.
+
+**Rationale:** This keeps the bridge layer honest about what changes and what
+does not. Whitney interpolation changes semantics but not storage, so borrowing
+is correct. De Rham projection returns the caller to the DEC storage path, so it
+must yield an ordinary cochain value with a stable lifetime. The move-or-copy
+rule gives that result without forcing unnecessary duplication when the FEEC
+form already owns its coefficients.
+
+**Source:** PR #200, issue #128
+
 ## 2026-04-11: Canonical geometry constructors stay honest about supported mesh types
 
 **Decision:** Add `Mesh(3, 2).sphere(allocator, radius, refinement)` as the

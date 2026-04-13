@@ -81,5 +81,16 @@ pub fn Form(comptime SpaceType: type) type {
                 .owned => |*owned| owned,
             };
         }
+
+        pub fn intoCoefficients(self: Self, allocator: std.mem.Allocator) !Storage {
+            return switch (self.storage) {
+                .borrowed => |borrowed| blk: {
+                    const owned = try Storage.init(allocator, self.space.mesh);
+                    @memcpy(owned.values, borrowed.values);
+                    break :blk owned;
+                },
+                .owned => |owned| owned,
+            };
+        }
     };
 }

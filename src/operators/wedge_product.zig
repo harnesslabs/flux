@@ -16,6 +16,7 @@ const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const feec = @import("../forms/feec.zig");
 const topology = @import("../topology/mesh.zig");
+const bridges = @import("bridges.zig");
 const exterior_derivative = @import("exterior_derivative.zig");
 
 fn WedgeResult(comptime LeftType: type, comptime RightType: type) type {
@@ -240,9 +241,7 @@ const C3D3 = cochain.Cochain(Mesh3D, 3, cochain.Primal);
 
 fn whitneyView(coefficients: anytype) feec.Form(feec.WhitneySpace(@TypeOf(coefficients.*).MeshT, @TypeOf(coefficients.*).degree)) {
     const CochainType = @TypeOf(coefficients.*);
-    const WhitneySpaceType = feec.WhitneySpace(CochainType.MeshT, CochainType.degree);
-    const space = WhitneySpaceType.init(coefficients.mesh);
-    return space.view(coefficients);
+    return bridges.WhitneyInterpolation(CochainType.MeshT, CochainType.degree).init(coefficients.mesh).apply(coefficients);
 }
 
 test "compile-time: wedge degree arithmetic yields the sum degree" {
@@ -292,7 +291,6 @@ test "wedge operates on FEEC Whitney forms instead of bare cochains" {
     var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    const Whitney1 = @import("../forms/feec.zig").WhitneySpace(Mesh2D, 1);
     var alpha_coefficients = try C1.init(allocator, &mesh);
     defer alpha_coefficients.deinit(allocator);
     var beta_coefficients = try C1.init(allocator, &mesh);
@@ -305,9 +303,9 @@ test "wedge operates on FEEC Whitney forms instead of bare cochains" {
         value.* = @floatFromInt(2 * i + 1);
     }
 
-    const edge_space = Whitney1.init(&mesh);
-    const alpha = edge_space.view(&alpha_coefficients);
-    const beta = edge_space.view(&beta_coefficients);
+    const interpolate = bridges.WhitneyInterpolation(Mesh2D, 1).init(&mesh);
+    const alpha = interpolate.apply(&alpha_coefficients);
+    const beta = interpolate.apply(&beta_coefficients);
 
     var product = try wedge(allocator, alpha, beta);
     defer product.deinit(allocator);
