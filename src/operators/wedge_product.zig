@@ -261,6 +261,35 @@ test "wedge of 0-forms is pointwise multiplication" {
     }
 }
 
+test "wedge operates on FEEC Whitney forms instead of bare cochains" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const Whitney1 = @import("../forms/feec.zig").WhitneySpace(Mesh2D, 1);
+    var alpha_coefficients = try C1.init(allocator, &mesh);
+    defer alpha_coefficients.deinit(allocator);
+    var beta_coefficients = try C1.init(allocator, &mesh);
+    defer beta_coefficients.deinit(allocator);
+
+    for (alpha_coefficients.values, 0..) |*value, i| {
+        value.* = @floatFromInt(i + 1);
+    }
+    for (beta_coefficients.values, 0..) |*value, i| {
+        value.* = @floatFromInt(2 * i + 1);
+    }
+
+    const edge_space = Whitney1.init(&mesh);
+    const alpha = edge_space.view(&alpha_coefficients);
+    const beta = edge_space.view(&beta_coefficients);
+
+    var product = try wedge(allocator, alpha, beta);
+    defer product.deinit(allocator);
+
+    try testing.expect(@TypeOf(product).SpaceT.degree == 2);
+    try testing.expect(product.coefficients().mesh == &mesh);
+}
+
 test "wedge of 0-form and 1-form averages the endpoint values" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);

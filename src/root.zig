@@ -124,6 +124,18 @@ test "FEEC context only exposes FEEC-family operators" {
     try testing.expect(!@hasDecl(FeecContext, "exteriorDerivative"));
 }
 
+test "forms API exposes FEEC spaces while keeping Cochain storage-only" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const C1 = @This().forms.Cochain(Mesh2D, 1, @This().forms.Primal);
+
+    try testing.expect(@hasDecl(@This().forms, "feec"));
+    try testing.expect(@hasDecl(@This().forms.feec, "WhitneySpace"));
+    try testing.expect(!@hasDecl(C1, "interpolate"));
+    try testing.expect(!@hasDecl(C1, "project"));
+    try testing.expect(!@hasDecl(C1, "space"));
+}
+
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
 }
