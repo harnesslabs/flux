@@ -4,12 +4,12 @@ const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
 const linear_system = flux.math.linear_system;
-const operator_context_mod = flux.operators.context;
+const feec_context_mod = flux.operators.feec.context;
 const evolution_mod = flux.integrators.evolution;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
-const SurfaceOperatorContext = operator_context_mod.OperatorContext(SurfaceMesh);
+const SurfaceOperatorContext = feec_context_mod.OperatorContext(SurfaceMesh);
 
 pub const ConfigImpl = struct {
     refinement: u32 = 0,

@@ -4,7 +4,7 @@ const common = @import("examples_common");
 
 const poisson = flux.operators.poisson;
 const flux_io = flux.io;
-const operator_context_mod = flux.operators.context;
+const feec_context_mod = flux.operators.feec.context;
 const evolution_mod = flux.integrators.evolution;
 
 pub const Mesh = flux.topology.Mesh(2, 2);
@@ -46,7 +46,7 @@ pub const StateImpl = struct {
     };
 
     mesh: *const Mesh,
-    operators: *operator_context_mod.OperatorContext(Mesh),
+    feec_operators: *feec_context_mod.OperatorContext(Mesh),
     stream_function: VertexVorticity,
     vorticity: FaceVorticity,
     tracer: FaceTracer,
@@ -63,9 +63,9 @@ pub const StateImpl = struct {
         var tracer = try FaceTracer.init(allocator, mesh);
         errdefer tracer.deinit(allocator);
 
-        const operators = try operator_context_mod.OperatorContext(Mesh).init(allocator, mesh);
-        errdefer operators.deinit();
-        _ = try operators.laplacian(0);
+        const feec_operators = try feec_context_mod.OperatorContext(Mesh).init(allocator, mesh);
+        errdefer feec_operators.deinit();
+        _ = try feec_operators.laplacian(0);
 
         const face_velocity = try allocator.alloc(Vec2, mesh.num_faces());
         errdefer allocator.free(face_velocity);
@@ -76,7 +76,7 @@ pub const StateImpl = struct {
 
         return .{
             .mesh = mesh,
-            .operators = operators,
+            .feec_operators = feec_operators,
             .stream_function = stream_function,
             .vorticity = vorticity,
             .tracer = tracer,
@@ -91,7 +91,7 @@ pub const StateImpl = struct {
         self.tracer.deinit(allocator);
         self.vorticity.deinit(allocator);
         self.stream_function.deinit(allocator);
-        self.operators.deinit();
+        self.feec_operators.deinit();
     }
 };
 
@@ -312,7 +312,7 @@ fn recoverStreamFunction(allocator: std.mem.Allocator, state: *StateImpl) !void 
         forcing_value.* /= weight;
     }
 
-    var solve = try poisson.solve_zero_form_dirichlet(Mesh, allocator, state.operators, forcing, boundary, .{});
+    var solve = try poisson.solve_zero_form_dirichlet(Mesh, allocator, state.feec_operators, forcing, boundary, .{});
     defer solve.deinit(allocator);
     @memcpy(state.stream_function.values, solve.solution);
 }

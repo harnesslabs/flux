@@ -3,7 +3,8 @@ const flux = @import("flux");
 
 const cochain = flux.forms;
 const topology = flux.topology;
-const operator_context_mod = flux.operators.context;
+const dec_context_mod = flux.operators.dec.context;
+const feec_context_mod = flux.operators.feec.context;
 
 pub const Mesh2D = topology.Mesh(2, 2);
 pub const Mesh3D = topology.Mesh(3, 3);
@@ -20,7 +21,8 @@ fn MaxwellCore(comptime MeshType: type, comptime Hooks: type) type {
             B: TwoForm,
             J: OneForm,
             mesh: *const MeshType,
-            operators: *operator_context_mod.OperatorContext(MeshType),
+            dec_operators: *dec_context_mod.OperatorContext(MeshType),
+            feec_operators: *feec_context_mod.OperatorContext(MeshType),
             timestep: u64,
 
             pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
@@ -33,22 +35,26 @@ fn MaxwellCore(comptime MeshType: type, comptime Hooks: type) type {
                 var current = try OneForm.init(allocator, mesh);
                 errdefer current.deinit(allocator);
 
-                const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
-                errdefer operators.deinit();
-                try Hooks.primeOperators(operators);
+                const dec_operators = try dec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
+                errdefer dec_operators.deinit();
+                const feec_operators = try feec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
+                errdefer feec_operators.deinit();
+                try Hooks.primeOperators(dec_operators, feec_operators);
 
                 return .{
                     .E = electric,
                     .B = magnetic,
                     .J = current,
                     .mesh = mesh,
-                    .operators = operators,
+                    .dec_operators = dec_operators,
+                    .feec_operators = feec_operators,
                     .timestep = 0,
                 };
             }
 
             pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-                self.operators.deinit();
+                self.feec_operators.deinit();
+                self.dec_operators.deinit();
                 self.J.deinit(allocator);
                 self.B.deinit(allocator);
                 self.E.deinit(allocator);
@@ -56,7 +62,7 @@ fn MaxwellCore(comptime MeshType: type, comptime Hooks: type) type {
         };
 
         pub fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-            var derivative = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
+            var derivative = try (try state.dec_operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
             defer derivative.deinit(allocator);
             derivative.scale(dt);
             state.B.sub(derivative);
@@ -85,18 +91,21 @@ fn hooks2d(comptime MeshType: type) type {
     return struct {
         pub const apply_boundary_in_leapfrog = false;
 
-        pub fn primeOperators(operators: *operator_context_mod.OperatorContext(MeshType)) !void {
-            _ = try operators.exteriorDerivative(cochain.Primal, 1);
-            _ = try operators.exteriorDerivative(cochain.Dual, 0);
-            _ = try operators.hodgeStar(1);
-            _ = try operators.hodgeStar(2);
+        pub fn primeOperators(
+            dec_operators: *dec_context_mod.OperatorContext(MeshType),
+            feec_operators: *feec_context_mod.OperatorContext(MeshType),
+        ) !void {
+            _ = try dec_operators.exteriorDerivative(cochain.Primal, 1);
+            _ = try dec_operators.exteriorDerivative(cochain.Dual, 0);
+            _ = try feec_operators.hodgeStar(1);
+            _ = try feec_operators.hodgeStar(2);
         }
 
         pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-            var star_B = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
+            var star_B = try (try state.feec_operators.hodgeStar(2)).apply(allocator, state.B);
             defer star_B.deinit(allocator);
 
-            var d_star_B = try (try state.operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_B);
+            var d_star_B = try (try state.dec_operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_B);
             defer d_star_B.deinit(allocator);
 
             const edge_volumes = state.mesh.simplices(1).items(.volume);
@@ -113,22 +122,25 @@ fn hooks3d(comptime MeshType: type) type {
     return struct {
         pub const apply_boundary_in_leapfrog = true;
 
-        pub fn primeOperators(operators: *operator_context_mod.OperatorContext(MeshType)) !void {
-            _ = try operators.exteriorDerivative(cochain.Primal, 1);
-            _ = try operators.exteriorDerivative(cochain.Primal, 2);
-            _ = try operators.exteriorDerivative(cochain.Dual, 1);
-            _ = try operators.hodgeStar(2);
-            _ = try operators.hodgeStarInverse(1);
+        pub fn primeOperators(
+            dec_operators: *dec_context_mod.OperatorContext(MeshType),
+            feec_operators: *feec_context_mod.OperatorContext(MeshType),
+        ) !void {
+            _ = try dec_operators.exteriorDerivative(cochain.Primal, 1);
+            _ = try dec_operators.exteriorDerivative(cochain.Primal, 2);
+            _ = try dec_operators.exteriorDerivative(cochain.Dual, 1);
+            _ = try feec_operators.hodgeStar(2);
+            _ = try feec_operators.hodgeStarInverse(1);
         }
 
         pub fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-            var star_b = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
+            var star_b = try (try state.feec_operators.hodgeStar(2)).apply(allocator, state.B);
             defer star_b.deinit(allocator);
 
-            var derivative = try (try state.operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
+            var derivative = try (try state.dec_operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
             defer derivative.deinit(allocator);
 
-            var curl_b = try (try state.operators.hodgeStarInverse(1)).apply(allocator, derivative);
+            var curl_b = try (try state.feec_operators.hodgeStarInverse(1)).apply(allocator, derivative);
             defer curl_b.deinit(allocator);
 
             for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
@@ -190,9 +202,9 @@ pub fn leapfrog_step_3d(allocator: std.mem.Allocator, state: anytype, dt: f64) !
 }
 
 pub fn electromagnetic_energy(allocator: std.mem.Allocator, state: anytype) !f64 {
-    var star_E = try (try state.operators.hodgeStar(1)).apply(allocator, state.E);
+    var star_E = try (try state.feec_operators.hodgeStar(1)).apply(allocator, state.E);
     defer star_E.deinit(allocator);
-    var star_B = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
+    var star_B = try (try state.feec_operators.hodgeStar(2)).apply(allocator, state.B);
     defer star_B.deinit(allocator);
 
     var e_energy: f64 = 0.0;
