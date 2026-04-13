@@ -13,14 +13,14 @@
 //! // Build a mesh
 //! const Mesh2D = flux.topology.Mesh(2, 2);
 //! var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
-//! const operators = try flux.operators.context.OperatorContext(Mesh2D).init(allocator, &mesh);
-//! defer operators.deinit();
+//! const dec = try flux.operators.dec.context.OperatorContext(Mesh2D).init(allocator, &mesh);
+//! defer dec.deinit();
 //!
 //! // Create a 0-cochain (scalar field on vertices)
 //! var omega = try flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal).init(allocator, &mesh);
 //!
 //! // Apply operators with compile-time type safety
-//! var d_omega = try (try operators.exteriorDerivative(flux.forms.Primal, 0)).apply(allocator, omega);
+//! var d_omega = try (try dec.exteriorDerivative(flux.forms.Primal, 0)).apply(allocator, omega);
 //! ```
 //!
 //! ## Modules
@@ -62,10 +62,21 @@ pub const math = struct {
     pub const linear_system = @import("math/linear_system.zig");
 };
 pub const operators = struct {
+    pub const dec = struct {
+        pub const context = @import("operators/dec_context.zig");
+        pub const exterior_derivative = @import("operators/exterior_derivative.zig");
+    };
+    pub const feec = struct {
+        pub const context = @import("operators/feec_context.zig");
+        pub const codifferential = @import("operators/codifferential.zig");
+        pub const hodge_star = @import("operators/hodge_star.zig");
+        pub const laplacian = @import("operators/laplacian.zig");
+        pub const whitney_mass = @import("operators/whitney_mass.zig");
+    };
+    pub const bridges = struct {};
     pub const boundary_conditions = @import("operators/boundary_conditions.zig");
     pub const codifferential = @import("operators/codifferential.zig");
     pub const compose = @import("operators/compose.zig");
-    pub const context = @import("operators/context.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
     pub const laplacian = @import("operators/laplacian.zig");
@@ -84,6 +95,34 @@ pub const integrators = struct {
 pub const concepts = struct {
     pub const mesh = @import("concepts/mesh.zig");
 };
+
+test "public API exposes explicit DEC and FEEC operator families" {
+    const testing = @import("std").testing;
+
+    try testing.expect(@hasDecl(@This().operators, "dec"));
+    try testing.expect(@hasDecl(@This().operators, "feec"));
+    try testing.expect(!@hasDecl(@This().operators, "context"));
+}
+
+test "DEC context only exposes DEC-family operators" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const DecContext = @This().operators.dec.context.OperatorContext(Mesh2D);
+
+    try testing.expect(@hasDecl(DecContext, "exteriorDerivative"));
+    try testing.expect(!@hasDecl(DecContext, "hodgeStar"));
+    try testing.expect(!@hasDecl(DecContext, "laplacian"));
+}
+
+test "FEEC context only exposes FEEC-family operators" {
+    const testing = @import("std").testing;
+    const Mesh2D = topology.Mesh(2, 2);
+    const FeecContext = @This().operators.feec.context.OperatorContext(Mesh2D);
+
+    try testing.expect(@hasDecl(FeecContext, "hodgeStar"));
+    try testing.expect(@hasDecl(FeecContext, "laplacian"));
+    try testing.expect(!@hasDecl(FeecContext, "exteriorDerivative"));
+}
 
 test {
     @import("std").testing.refAllDeclsRecursive(@This());

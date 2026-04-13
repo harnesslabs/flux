@@ -4,7 +4,7 @@ const common = @import("examples_common");
 
 const sparse = flux.math.sparse;
 const linear_system = flux.math.linear_system;
-const operator_context_mod = flux.operators.context;
+const feec_context_mod = flux.operators.feec.context;
 const evolution_mod = flux.integrators.evolution;
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
@@ -51,7 +51,7 @@ const HeatSystem = struct {
     pub fn init(
         allocator: std.mem.Allocator,
         mesh: *const Mesh2D,
-        operator_context: *operator_context_mod.OperatorContext(Mesh2D),
+        operator_context: *feec_context_mod.OperatorContext(Mesh2D),
         dt: f64,
     ) !HeatSystem {
         const laplacian = try operator_context.laplacian(0);
@@ -140,7 +140,7 @@ fn simulateCase(
     var mesh = try Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
-    const operator_context = try operator_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
+    const operator_context = try feec_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
     defer operator_context.deinit();
 
     const total_time = final_time_override orelse (@as(f64, @floatFromInt(config.steps)) * config.dt());

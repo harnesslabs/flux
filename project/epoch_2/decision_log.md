@@ -218,6 +218,33 @@ operators until the benchmark shows a real SpMV win.
    the packed path proves it helps the hot loop. The issue explicitly allows
    not shipping the optimization if decode overhead erases the cache benefit.
 
+## 2026-04-12: Expose explicit DEC and FEEC operator families before splitting internal caches
+
+**Decision:** Make the public operator API explicit with family namespaces
+under `flux.operators.dec` and `flux.operators.feec`, and migrate examples and
+benchmarks to name the family they use. Keep the current shared internal
+`operators/context.zig` cache as an implementation detail for now, wrapped by
+family-specific public contexts.
+
+**Alternatives considered:**
+1. Keep a single public `OperatorContext` until DEC and FEEC internals are
+   fully separated: rejected because it preserves the current mathematical
+   ambiguity in exactly the place users learn the library surface.
+2. Fully split the internal caches in the same issue: rejected because this
+   issue is about public API honesty first. Forcing a complete backend split
+   here would blur the milestone sequencing and make it harder to review the
+   public-noun decision on its own.
+
+**Rationale:** The milestone goal is explicit DEC/FEEC separation with
+principled composition, and examples are a first-class API consumer. Public
+names must therefore become explicit immediately, even if the implementation
+temporarily shares cache ownership behind the scenes. This keeps the user-facing
+math honest, makes mixed examples declare both families explicitly, and leaves
+follow-on issues to split FEEC form-space and weak-form assembly without
+reintroducing another transitional public API.
+
+**Source:** PR #198, issue #193
+
 ## 2026-04-11: Canonical geometry constructors stay honest about supported mesh types
 
 **Decision:** Add `Mesh(3, 2).sphere(allocator, radius, refinement)` as the
