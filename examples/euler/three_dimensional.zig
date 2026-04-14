@@ -3,7 +3,7 @@ const flux = @import("flux");
 const common = @import("examples_common");
 
 const poisson = flux.operators.poisson;
-const feec_forms = flux.forms.feec;
+const bridges = flux.operators.bridges;
 const dec_context_mod = flux.operators.dec.context;
 const feec_context_mod = flux.operators.feec.context;
 const observers = flux.operators.observers;
@@ -158,16 +158,18 @@ pub fn stepImpl(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void 
     defer vorticity.deinit(allocator);
     @memcpy(state.vorticity.values, vorticity.values);
 
-    const velocity_space = feec_forms.WhitneySpace(Mesh, 1).init(state.mesh);
-    const vorticity_space = feec_forms.WhitneySpace(Mesh, 2).init(state.mesh);
-    var advection_density = try wedge_product.wedge(
+    const interpolate_velocity = bridges.WhitneyInterpolation(Mesh, 1).init(state.mesh);
+    const interpolate_vorticity = bridges.WhitneyInterpolation(Mesh, 2).init(state.mesh);
+    const advection_density = try wedge_product.wedge(
         allocator,
-        velocity_space.view(&state.velocity),
-        vorticity_space.view(&state.vorticity),
+        interpolate_velocity.apply(&state.velocity),
+        interpolate_vorticity.apply(&state.vorticity),
     );
-    defer advection_density.deinit(allocator);
+    const project_density = bridges.DeRhamProjection(@TypeOf(advection_density).SpaceT).init(@TypeOf(advection_density).SpaceT.init(state.mesh));
+    var projected_density = try project_density.apply(allocator, advection_density);
+    defer projected_density.deinit(allocator);
 
-    var transport = try (try state.feec_operators.codifferential(3)).apply(allocator, advection_density.coefficientsConst().*);
+    var transport = try (try state.feec_operators.codifferential(3)).apply(allocator, projected_density);
     defer transport.deinit(allocator);
 }
 
