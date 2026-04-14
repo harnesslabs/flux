@@ -239,11 +239,6 @@ const C3D1 = cochain.Cochain(Mesh3D, 1, cochain.Primal);
 const C3D2 = cochain.Cochain(Mesh3D, 2, cochain.Primal);
 const C3D3 = cochain.Cochain(Mesh3D, 3, cochain.Primal);
 
-fn whitneyView(coefficients: anytype) feec.Form(feec.WhitneySpace(@TypeOf(coefficients.*).MeshT, @TypeOf(coefficients.*).degree)) {
-    const CochainType = @TypeOf(coefficients.*);
-    return bridges.WhitneyInterpolation(CochainType.MeshT, CochainType.degree).init(coefficients.mesh).apply(coefficients);
-}
-
 test "compile-time: wedge degree arithmetic yields the sum degree" {
     comptime {
         const Whitney2D1 = feec.Form(feec.WhitneySpace(Mesh2D, 1));
@@ -278,7 +273,8 @@ test "wedge of 0-forms is pointwise multiplication" {
         value.* = 2.0 * @as(f64, @floatFromInt(i + 3));
     }
 
-    var product = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
+    const interpolate = bridges.WhitneyInterpolation(Mesh2D, 0).init(&mesh);
+    var product = try wedge(allocator, interpolate.apply(&alpha), interpolate.apply(&beta));
     defer product.deinit(allocator);
 
     for (product.coefficientsConst().values, 0..) |value, i| {
@@ -332,7 +328,13 @@ test "wedge of 0-form and 1-form averages the endpoint values" {
         value.* = @as(f64, @floatFromInt(i + 1));
     }
 
-    var product = try wedge(allocator, whitneyView(&scalar), whitneyView(&one_form));
+    const interpolate_scalar = bridges.WhitneyInterpolation(Mesh2D, 0).init(&mesh);
+    const interpolate_one_form = bridges.WhitneyInterpolation(Mesh2D, 1).init(&mesh);
+    var product = try wedge(
+        allocator,
+        interpolate_scalar.apply(&scalar),
+        interpolate_one_form.apply(&one_form),
+    );
     defer product.deinit(allocator);
 
     const edges = mesh.simplices(1).items(.vertices);
@@ -357,9 +359,11 @@ test "graded commutativity holds on random 3D 1- and 2-forms" {
         for (alpha.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
         for (beta.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
 
-        var left = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
+        const interpolate_one = bridges.WhitneyInterpolation(Mesh3D, 1).init(&mesh);
+        const interpolate_two = bridges.WhitneyInterpolation(Mesh3D, 2).init(&mesh);
+        var left = try wedge(allocator, interpolate_one.apply(&alpha), interpolate_two.apply(&beta));
         defer left.deinit(allocator);
-        var right = try wedge(allocator, whitneyView(&beta), whitneyView(&alpha));
+        var right = try wedge(allocator, interpolate_two.apply(&beta), interpolate_one.apply(&alpha));
         defer right.deinit(allocator);
 
         for (left.coefficientsConst().values, right.coefficientsConst().values) |lhs, rhs| {
@@ -393,14 +397,15 @@ test "associativity holds for random closed 1-forms on tetrahedral meshes" {
         var gamma = try exterior_derivative.exterior_derivative(allocator, potential_c);
         defer gamma.deinit(allocator);
 
-        var alpha_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
+        const interpolate_one = bridges.WhitneyInterpolation(Mesh3D, 1).init(&mesh);
+        var alpha_beta = try wedge(allocator, interpolate_one.apply(&alpha), interpolate_one.apply(&beta));
         defer alpha_beta.deinit(allocator);
-        var left = try wedge(allocator, alpha_beta, whitneyView(&gamma));
+        var left = try wedge(allocator, alpha_beta, interpolate_one.apply(&gamma));
         defer left.deinit(allocator);
 
-        var beta_gamma = try wedge(allocator, whitneyView(&beta), whitneyView(&gamma));
+        var beta_gamma = try wedge(allocator, interpolate_one.apply(&beta), interpolate_one.apply(&gamma));
         defer beta_gamma.deinit(allocator);
-        var right = try wedge(allocator, whitneyView(&alpha), beta_gamma);
+        var right = try wedge(allocator, interpolate_one.apply(&alpha), beta_gamma);
         defer right.deinit(allocator);
 
         for (left.coefficientsConst().values, right.coefficientsConst().values) |lhs, rhs| {
@@ -424,19 +429,21 @@ test "Leibniz rule holds on random 2D 0- and 1-forms" {
         for (alpha.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
         for (beta.values) |*value| value.* = rng.random().float(f64) * 2.0 - 1.0;
 
-        var alpha_wedge_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&beta));
+        const interpolate_zero = bridges.WhitneyInterpolation(Mesh2D, 0).init(&mesh);
+        const interpolate_one = bridges.WhitneyInterpolation(Mesh2D, 1).init(&mesh);
+        var alpha_wedge_beta = try wedge(allocator, interpolate_zero.apply(&alpha), interpolate_one.apply(&beta));
         defer alpha_wedge_beta.deinit(allocator);
         var left = try exterior_derivative.exterior_derivative(allocator, alpha_wedge_beta.coefficientsConst().*);
         defer left.deinit(allocator);
 
         var d_alpha = try exterior_derivative.exterior_derivative(allocator, alpha);
         defer d_alpha.deinit(allocator);
-        var d_alpha_wedge_beta = try wedge(allocator, whitneyView(&d_alpha), whitneyView(&beta));
+        var d_alpha_wedge_beta = try wedge(allocator, interpolate_one.apply(&d_alpha), interpolate_one.apply(&beta));
         defer d_alpha_wedge_beta.deinit(allocator);
 
         var d_beta = try exterior_derivative.exterior_derivative(allocator, beta);
         defer d_beta.deinit(allocator);
-        var alpha_wedge_d_beta = try wedge(allocator, whitneyView(&alpha), whitneyView(&d_beta));
+        var alpha_wedge_d_beta = try wedge(allocator, interpolate_zero.apply(&alpha), bridges.WhitneyInterpolation(Mesh2D, 2).init(&mesh).apply(&d_beta));
         defer alpha_wedge_d_beta.deinit(allocator);
 
         for (left.values, d_alpha_wedge_beta.coefficientsConst().values, alpha_wedge_d_beta.coefficientsConst().values) |lhs, rhs_a, rhs_b| {
