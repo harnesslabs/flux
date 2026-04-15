@@ -13,7 +13,8 @@ If no epoch number is given, use the most recent epoch (highest N in `project/ep
 
 1. Read the epoch's `roadmap.md` to understand what was planned.
 2. Read the epoch's `decision_log.md` to see what was explicitly logged.
-3. Get the full history of work done in the epoch:
+3. Read the relevant canonical architecture notes in `project/docs/architecture_*.md` and any targeted design notes in `project/docs/` that the epoch touched.
+4. Get the full history of work done in the epoch:
    ```sh
    # All closed issues for each milestone in the epoch
    gh milestone list --state all --json title,number
@@ -21,11 +22,11 @@ If no epoch number is given, use the most recent epoch (highest N in `project/ep
    gh issue list --state closed --milestone "<milestone>" --json number,title,labels,closedAt
    gh issue list --state open --milestone "<milestone>" --json number,title,labels
    ```
-4. Get the PR history:
+5. Get the PR history:
    ```sh
    gh pr list --state merged --json number,title,mergedAt,additions,deletions,commits
    ```
-5. Read the git log for the epoch's timeframe to understand the actual sequence of work:
+6. Read the git log for the epoch's timeframe to understand the actual sequence of work:
    ```sh
    git log --oneline --since="<epoch start date>" --until="<epoch end date or now>"
    ```
@@ -102,6 +103,10 @@ Duration: <actual time from first commit to last merge>
 
 Present the draft to the user for review. The retrospective is a shared document — the agent writes it, the user edits and approves it.
 
+Alongside the retrospective, propose the canonical doc updates that should be
+made to `project/docs/` so the enduring architecture is not trapped only in the
+epoch journal.
+
 ## Phase 3.5: Close milestones
 
 After the retrospective is written, close all milestones belonging to the epoch on GitHub:
@@ -122,6 +127,7 @@ Based on the retrospective, propose specific changes:
 - Skills that should be removed or merged
 - Changes to issue templates, labels, or GitHub configuration
 - Horizon entries that should be added or updated based on what was learned
+- Canonical architecture notes that should be created, updated, merged, or retired
 
 These proposals are input to the next `/epoch` session. Do not make the changes directly — present them for discussion.
 

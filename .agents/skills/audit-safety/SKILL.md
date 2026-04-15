@@ -9,6 +9,11 @@ Usage: /audit-safety [component]
 
 If a component is specified (e.g., `operators`), scope to that component per `project/components.md`. Otherwise, audit the full `src/` tree.
 
+Read the relevant canonical architecture note in `project/docs/architecture_*.md`
+when the audited area has an explicit ownership, execution, or abstraction
+boundary. Safety findings are stronger when they reference the intended design,
+not only the current implementation.
+
 ## What to look for
 
 ### Assertion coverage
@@ -63,3 +68,7 @@ For each critical or warning finding, propose whether it should be:
 - **Filed as an issue** (requires design thought or touches multiple files)
 
 Ask the user which findings to act on before creating any issues.
+
+If a safety finding exposes stale shared docs, missing invariant documentation,
+or a drift between the code and the canonical architecture notes, call that out
+explicitly.

@@ -14,7 +14,8 @@ Before responding:
 2. Read `project/horizons.md` to know what future directions are already validated.
 3. Read the current epoch's `roadmap.md` (find the latest `project/epoch_N/`) to understand what's already planned.
 4. Read the current epoch's `decision_log.md` to know what's already been decided.
-5. Skim the codebase structure (`src/`) to understand what exists today.
+5. Read any relevant canonical architecture notes in `project/docs/architecture_*.md` and targeted design notes in `project/docs/` that touch the ideas under discussion.
+6. Skim the codebase structure (`src/`) to understand what exists today.
 
 Do NOT dump all of this back at the user. Internalize it silently so your responses are informed.
 
@@ -97,6 +98,13 @@ Date: YYYY-MM-DD
 
 Create the `project/ideation/` directory if it doesn't exist.
 
+If the discussion produces a durable change to the project's architecture
+language, ownership model, or recurring design patterns, say so explicitly and
+recommend the relevant next write target:
+- `project/docs/architecture_*.md` for canonical current design
+- `project/horizons.md` for validated but unscheduled future direction
+- `project/epoch_N/decision_log.md` for a concrete active decision
+
 ## Guidelines
 
 - **Be honest, not encouraging.** If an idea doesn't fit, say so directly. "This is interesting but it's a different project" is a valid and helpful response.
@@ -104,3 +112,8 @@ Create the `project/ideation/` directory if it doesn't exist.
 - **Think in types.** Many of these ideas (dimensionful equations, k-form safety) have natural `comptime` expressions in Zig. When an idea maps to a type-level guarantee, say so — that's a strong signal it belongs.
 - **No commitments.** This skill produces analysis, not plans. The output is input to `/epoch`, not a substitute for it.
 - **Follow the user's energy.** If they're excited about one idea, go deep on it. Don't mechanically march through the list.
+- **Keep the canon alive.** If an architecture note or pattern doc is clearly stale relative to the discussion, name that explicitly rather than leaving the drift implicit.
+- **Close the loop when obvious.** The skill is still analysis-first, but if the
+  user clearly endorses a low-risk documentation or issue-scope update that
+  falls directly out of the discussion, make that update instead of stopping one
+  step short.

@@ -22,11 +22,13 @@ Structure your review accordingly: lead with the implementation-detail findings 
    gh pr view <number> --json number,title,body,labels,headRefName,additions,deletions,files
    ```
 2. Extract the linked issue number from `Closes #N` in the PR body.
-3. Read the full issue: `gh issue view <N>` — get the acceptance criterion and references.
-4. Read the epoch roadmap to understand where this fits: `project/epoch_*/roadmap.md`.
-5. Read `project/components.md` to map the changed files to their expected component scope. Flag if the PR touches files outside that scope without justification.
-6. Read only the changed files and the direct dependency files required to review them.
-7. Fetch targeted diff context for the touched files. Avoid reading the full PR diff unless the PR is small enough that the broad diff is itself the smallest sufficient context.
+3. Read the full issue and its comments: `gh issue view <N> --comments` — get the acceptance criterion, references, and any later clarifications.
+4. Read PR comments and review comments when present; thread context is part of the review contract, not optional background.
+5. Read the epoch roadmap to understand where this fits: `project/epoch_*/roadmap.md`.
+6. Read any relevant canonical architecture note in `project/docs/architecture_*.md` when the PR touches public abstractions, ownership boundaries, or recurring patterns.
+7. Read `project/components.md` to map the changed files to their expected component scope. Flag if the PR touches files outside that scope without justification.
+8. Read only the changed files and the direct dependency files required to review them.
+9. Fetch targeted diff context for the touched files. Avoid reading the full PR diff unless the PR is small enough that the broad diff is itself the smallest sufficient context.
 
 ## Review lenses
 
@@ -66,6 +68,11 @@ These are the findings the user is least likely to catch:
 - Redundant computation that could be hoisted or cached
 - Unnecessary allocations in hot paths
 - Code that duplicates logic existing elsewhere in the component
+- Weak abstractions introduced under implementation pressure: wrapper nouns,
+  builder layers, policy-shaped types, or convenience paths that should have
+  been a stronger verb or a direct concept boundary instead
+- Cross-component leaks where example or benchmark code is compensating for a
+  library seam instead of exercising a coherent public language
 
 ### 6. Process
 - PR body has `Closes #N`?
@@ -75,10 +82,16 @@ These are the findings the user is least likely to catch:
 - If benchmark methodology did not change, did the PR preserve base-vs-PR comparability instead of hiding behind a version bump?
 - If the claimed perf win comes from a new benchmark with no base counterpart, is there an explicit same-run comparison showing the win?
 - Were any non-obvious architectural decisions made? If yes, are they in the decision log?
+- If the PR changes the current intended architecture, was the relevant
+  canonical note in `project/docs/architecture_*.md` updated?
+- Does the PR reveal that a canonical note, design note, or skill definition is
+  now stale even if the code change itself is acceptable?
 - Labels correct: `type/`, `domain/`, `priority/` all set?
 - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
 - Do the public names form a coherent abstraction language: stable nouns,
   meaningful verbs, and qualifiers/adjectives in the right place?
+- Did this PR miss a chance to remove a weak abstraction that became obvious
+  while the seam was already open?
 - Are there follow-on issues that should be opened before this merges?
 - If review exposes **non-blocking but real** follow-on work that should not bloat the current PR:
   - Check whether it is already tracked

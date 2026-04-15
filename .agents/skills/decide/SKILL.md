@@ -21,11 +21,12 @@ This skill is primarily **agent-invoked during `/tackle`** when a non-obvious de
 
 1. Identify the current epoch by reading `project/` directory structure.
 2. Read the existing `project/epoch_N/decision_log.md` to understand what's already been logged and to avoid duplication.
-3. If the context is not already clear (e.g., the user invoked this directly without prior discussion), ask for:
+3. Read any relevant canonical architecture note in `project/docs/architecture_*.md` when the decision touches a durable public abstraction, ownership boundary, or recurring pattern.
+4. If the context is not already clear (e.g., the user invoked this directly without prior discussion), ask for:
    - The decision made (what was chosen)
    - Alternatives that were considered (at least one)
    - The rationale — why this option over the alternatives
-4. Append the decision to `project/epoch_N/decision_log.md` in this format:
+5. Append the decision to `project/epoch_N/decision_log.md` in this format:
 
 ```
 ## YYYY-MM-DD: <short imperative title>
@@ -46,3 +47,8 @@ Today's date is available in the system context. Use it.
 Do not editorialize or second-guess the decision. Record it faithfully. The log is a historical record, not a critique.
 
 When invoked during `/tackle`, commit the decision log update alongside the code it pertains to — don't make a separate commit just for the log entry.
+
+If the decision changes the *current intended architecture* rather than only the
+local implementation path, update the relevant canonical note in
+`project/docs/architecture_*.md` in the same change when practical. If no such
+note exists yet, say so explicitly and recommend creating or updating one.

@@ -17,11 +17,18 @@ Read in this order:
 3. Only the artifact that matches the current assignment:
    - implementation: the current issue/PR, then only the relevant component files
    - planning: the latest `project/epoch_*/roadmap.md`
-   - design alignment: `project/vision.md` and `project/horizons.md`
+   - design alignment: `project/vision.md`, `project/horizons.md`, and any
+     relevant canonical architecture note in `project/docs/architecture_*.md`
    - decision logging: the current `project/epoch_N/decision_log.md`
 4. Expand scope only when the current artifact proves you need more context.
 
 Default rule: before any exploratory tool call, ask what the **smallest sufficient document or file set** is for the current task.
+
+When GitHub artifacts are involved, "the artifact" includes its discussion
+thread, not just the top-level body. Read relevant issue comments, PR comments,
+and review comments when they may contain design clarifications, follow-up
+constraints, or scope changes. Do not assume the issue body alone is the full
+current contract.
 
 Do not read unrelated `src/` files "just to learn the repo". Learn the repo through `project/components.md`, then open only the component and direct dependencies that the task actually touches.
 
@@ -29,6 +36,38 @@ When designing APIs, prefer **one obvious way** to do something. Do not keep
 parallel convenience and "real" APIs unless there is a concrete current need.
 The project is pre-release; correctness and coherence matter more than
 backward compatibility with transitional interfaces.
+
+Prefer **concept-only boundaries** over concept-plus-wrapper designs when the
+wrapper only re-validates the same interface and forwards calls. A wrapper must
+earn its existence by adding owned state, caching, a stronger invariant, or a
+real representation boundary. Otherwise, validate the comptime concept at the
+consumer boundary and pass the conforming type directly.
+
+Default cleanup instinct: **delete or consolidate before adding**. When a seam
+looks weak, first ask what can cease to exist. Do not add a wrapper, alias,
+builder, or helper layer if removing or collapsing the existing weak shape
+would produce a cleaner API.
+
+Strike while the iron is hot. If you are already working in a part of the
+codebase and discover a clear local abstraction improvement, stop and surface
+it immediately instead of silently paving over it with another layer. Prefer a
+short explicit proposal such as: "I found a weaker API seam here; I can remove
+or consolidate it as part of this change if you want."
+
+Keep the shared agent memory synchronized. Durable architecture belongs in
+`project/docs/architecture_*.md`, active local decisions belong in the current
+epoch `decision_log.md`, and targeted forward-looking threads belong in scoped
+notes under `project/docs/`. If work exposes stale skills, stale docs, or a
+missing canonical note, update them when the fix is small and clearly correct;
+otherwise open or recommend a follow-on issue instead of leaving the drift
+implicit.
+
+Complete the obvious follow-through. If the right next action is clear and
+low-risk — for example updating a canonical doc, extending an existing issue,
+or aligning a skill definition with the conclusion just reached — do it by
+default and report it. Only stop to ask when the next action is materially
+ambiguous, high-cost to unwind, or changes project direction in a nontrivial
+way.
 
 When extracting an abstraction from an issue or a duplicated example pattern,
 do **not** stop at the nearest working seam. Pressure-test the candidate API

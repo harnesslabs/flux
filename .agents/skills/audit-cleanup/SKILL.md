@@ -11,6 +11,11 @@ If a component is specified, scope to that component per `project/components.md`
 
 Before proposing new issues, check the current open GitHub issues for overlapping cleanup/refactor work. Prefer extending or linking existing issues over filing duplicates.
 
+Read the relevant canonical architecture note in `project/docs/architecture_*.md`
+before concluding that a cleanup is worthwhile. Cleanup should move the tree
+toward the intended language and ownership boundaries, not just reduce local
+mess.
+
 ## What to look for
 
 ### Public API compression
@@ -115,3 +120,7 @@ For each finding, classify it as one of:
 - **Keep intentionally** — a layer that looks redundant but currently enforces a real invariant; explain why
 
 Prefer findings that materially simplify the consumer experience or delete maintenance burden. Avoid low-signal nits that belong in `/audit-style`.
+
+If a cleanup finding reveals a stale canonical note, targeted design note, or
+skill definition, call that out explicitly. Shared doc/process drift is part of
+maintainability.
