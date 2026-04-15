@@ -9,6 +9,10 @@ Usage: /audit-tests [component]
 
 If a component is specified, scope to that component per `project/components.md`. Otherwise, audit the full `src/` tree.
 
+Read the relevant canonical architecture note in `project/docs/architecture_*.md`
+before auditing generic or pattern-heavy test surfaces. The question is not only
+what the code does today, but what the API claims to be.
+
 ## What to look for
 
 ### Coverage gaps
@@ -79,6 +83,10 @@ For each finding, propose whether it should be:
 - **Filed as an issue** (new property test, convergence test, coverage expansion)
 
 Convergence tests and property tests should always be filed as issues — they require careful mathematical thought, not quick fixes.
+
+If a cluster of weak or redundant tests exists only because a wrapper or stale
+shared pattern exists, call that out explicitly and cross-link the abstraction
+or cleanup issue rather than treating the tests in isolation.
 
 If an API presents itself as a generic noun with adjective parameters, ask
 whether the tests actually exercise more than one meaningful adjective

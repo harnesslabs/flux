@@ -9,6 +9,10 @@ Usage: /audit-style [component]
 
 If a component is specified, scope to that component per `project/components.md`. Otherwise, audit the full `src/` tree.
 
+Read the relevant canonical architecture note in `project/docs/architecture_*.md`
+for the audited area so naming and structural-consistency findings are judged
+against the intended language, not only the local code.
+
 ## What to look for
 
 ### Naming
@@ -86,3 +90,6 @@ For each finding, propose whether it should be:
 - **Filed as an issue** (duplication that needs a shared abstraction, structural inconsistency)
 
 Ask the user which findings to act on before making changes or creating issues.
+
+If naming or comment drift reflects stale shared docs or skill language rather
+than only local style, say so explicitly.

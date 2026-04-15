@@ -9,6 +9,10 @@ Usage: /audit-perf [component]
 
 If a component is specified, scope to that component per `project/components.md`. Otherwise, audit the full `src/` tree.
 
+Read the relevant canonical architecture note in `project/docs/architecture_*.md`
+and benchmark-policy guidance in `AGENTS.md` before recommending structural perf
+changes. Performance advice should reinforce the intended execution model.
+
 ## What to look for
 
 ### Memory layout
@@ -81,3 +85,7 @@ Benchmark hygiene is part of the audit:
 - Prefer durable evidence: unchanged benchmark rows for base-vs-PR comparisons, plus same-run comparison benchmarks when a new benchmark is introduced.
 
 Ask the user which findings warrant issues.
+
+If the hot paths the audit identifies contradict the project's current setup or
+execution language, say so explicitly and name the canonical note that should be
+updated.

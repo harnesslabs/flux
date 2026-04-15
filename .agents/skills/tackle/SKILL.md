@@ -11,13 +11,14 @@ Find and work the highest-priority open issue to completion — one issue, one b
 2. Read `project/epoch_*/roadmap.md` for the current epoch to understand milestone priorities and acceptance criteria.
 3. Read `project/horizons.md` — before writing any interface, check that it does not preclude a known future direction.
 4. Read `project/vision.md` when the work introduces or reshapes a public abstraction. Treat issue wording as the local symptom, not automatically as the correct abstraction boundary.
-5. Get live state:
+5. Read any relevant canonical architecture notes in `project/docs/architecture_*.md` when the issue touches public nouns, ownership boundaries, execution patterns, or recurring design rules.
+6. Get live state:
    ```sh
    gh milestone list --state open
    gh issue list --state open --label "priority/high" --json number,title,labels,milestone
    gh issue list --state open --label "status/blocked" --json number,title,labels,milestone
    ```
-6. Select the best issue to work next using this priority order:
+7. Select the best issue to work next using this priority order:
    - On the current milestone (check which milestone is earliest in the roadmap)
    - `type/invariant` preferred — these are on the critical path for acceptance criteria
    - `priority/high` over `priority/medium`
@@ -25,13 +26,19 @@ Find and work the highest-priority open issue to completion — one issue, one b
    - Skip `status/blocked` issues (they can't be worked until unblocked)
    - Non-epoch bugs (`type/bug`) may take priority if they are breaking something
 
-7. Present the chosen issue to the user: number, title, acceptance criterion, and a one-sentence rationale for why this one. Ask for confirmation or redirection.
+8. Present the chosen issue to the user: number, title, acceptance criterion, and a one-sentence rationale for why this one. Ask for confirmation or redirection.
 
 ## Scope the work
 
 On confirmation:
 
 1. Read the full issue body: `gh issue view <number>`
+   Then read the issue comments as part of the active contract:
+   ```sh
+   gh issue view <number> --comments
+   ```
+   If there is an open PR already associated with the issue or prior review
+   context that materially affects scope, read that thread too.
 2. Identify the **component scope** from `project/components.md` based on the issue's `domain/` label. Name the component and direct dependencies explicitly before opening source files.
 3. State the deeper structural concept you expect the issue to touch. If the issue title/body names a policy or one example family, ask whether that is the real abstraction or only the current manifestation.
 4. Create a branch and immediately open a draft PR:
@@ -112,6 +119,8 @@ Design the public interface before implementing internals.
 8. If a non-obvious design choice was made (struct layout, ownership model, comptime parameter choice), log it immediately:
    - Read the current epoch's `decision_log.md`
    - Append the decision in the standard format (see `/decide`)
+   - If the decision changes durable architecture, update the relevant
+     `project/docs/architecture_*.md` note in the same change when practical
    - Commit the decision log alongside the stubs
 9. Commit and push:
    ```sh
@@ -141,6 +150,7 @@ Fill in the stubs until tests pass.
    - Do **not** expand the current PR to include these unless they are required to finish the issue correctly
    - Before creating anything, check whether the follow-on is already tracked
    - If it is real, untracked, and worth doing later, open a **non-milestone** GitHub issue with the normal labels (`type/`, `domain/`, `priority/`) and explicitly leave milestone unset
+   - If the follow-on is really a stale shared doc, pattern note, or skill definition, update it directly when the fix is small and clearly correct; otherwise open a docs/refactor issue instead of leaving the drift implicit
 
 10. If the implementation solves the issue by introducing a narrow policy-shaped abstraction, stop and redesign before finalizing. The goal is to remove the symptom by exposing the deeper reusable concept, not by wrapping today's special case in a new public type.
 
@@ -155,10 +165,13 @@ The rhythm is: **write → test → commit → push → repeat**.
    - Add a "## Limitations" section for known gaps
 3. Answer the molecule checklist:
    - Does this introduce an interface that conflicts with a known horizon in `project/horizons.md`?
+   - Does this change the current intended architecture recorded in `project/docs/architecture_*.md`?
    - Does existing documentation need updating?
    - Does this change the public API in a way that affects other modules?
    - Are there follow-on issues that should be opened?
 4. If you discovered real follow-on work during implementation and it is not already tracked, open the non-milestone issue(s) now and mention them in the PR description.
+   If existing issue comments or PR discussion already capture the follow-on
+   precisely, prefer updating or linking that thread over opening a duplicate.
 5. Mark the PR as ready for review:
    ```sh
    gh pr ready <number>

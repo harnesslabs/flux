@@ -12,10 +12,11 @@ Before saying anything else:
 2. Read the most recent `project/epoch_*/retrospective.md` — its recommendations feed directly into this planning session.
 3. Read `project/initial.md` as the reference architecture.
 4. Read `project/horizons.md` to know which future directions must not be precluded by this epoch's work.
-5. Read `project/components.md` to understand the current codebase structure.
-6. Run `gh api "repos/harnesslabs/flux/milestones?state=all"` and `gh issue list --state open --repo harnesslabs/flux` to see live GitHub state.
-7. Present a brief, direct summary of current state (what epoch we're on, what's done, what's open).
-8. Ask the user: what should this epoch accomplish? What is the north star?
+5. Read relevant canonical architecture notes in `project/docs/architecture_*.md` to understand the current intended design, not only the historical plan.
+6. Read `project/components.md` to understand the current codebase structure.
+7. Run `gh api "repos/harnesslabs/flux/milestones?state=all"` and `gh issue list --state open --repo harnesslabs/flux` to see live GitHub state.
+8. Present a brief, direct summary of current state (what epoch we're on, what's done, what's open).
+9. Ask the user: what should this epoch accomplish? What is the north star?
 
 ## During the conversation
 
@@ -53,6 +54,7 @@ Ask about the direction beyond the current epoch — architecture decisions made
    - `project/epoch_N/roadmap.md` — structured list of milestones with goals, acceptance criteria, issue lists, and ordering. Include a one-paragraph epoch goal at the top.
    - `project/epoch_N/decision_log.md` — empty template with header only.
    - `project/epoch_N/retrospective.md` — empty template (filled at epoch end via `/retro`).
+   - If the epoch introduces a new durable architectural thread not already covered by the canon, create or update the relevant note in `project/docs/`.
 3. Create a GitHub issue to track the planning artifact:
    ```sh
    gh issue create \
@@ -80,6 +82,10 @@ Ask about the direction beyond the current epoch — architecture decisions made
    ```
 7. Report the epoch document paths, issue URL, and draft PR URL.
 8. Tell the user to run `/milestone` for each milestone when ready to create GitHub Milestones and issues.
+
+Planning should cross-pollinate with the canon:
+- If the epoch depends on a stable architecture language or recurring pattern, cite the relevant `project/docs/architecture_*.md` note.
+- If planning exposes a missing canonical note, say so explicitly rather than leaving the gap implicit.
 
 ## Templates
 
