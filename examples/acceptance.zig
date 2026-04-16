@@ -112,7 +112,7 @@ test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     const results = try diffusion.runConvergenceStudy(.plane, allocator, &grids);
     defer allocator.free(results);
     const errors = [_]f64{ results[0].l2_error, results[1].l2_error };
-    const rates = try flux.integrators.evolution.empiricalRates(allocator, &errors, 2.0);
+    const rates = try flux.evolution.empiricalRates(allocator, &errors, 2.0);
     defer allocator.free(rates);
 
     try testing.expectEqual(grids.len, results.len);

@@ -5,7 +5,7 @@ const runtime = @import("runtime.zig");
 const reference = @import("reference.zig");
 
 const flux_io = flux.io;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 const Demo = enum { dipole, cavity };
 

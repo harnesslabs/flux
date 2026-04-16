@@ -8,7 +8,7 @@ const dec_context_mod = flux.operators.dec.context;
 const feec_context_mod = flux.operators.feec.context;
 const observers = flux.operators.observers;
 const wedge_product = flux.operators.wedge_product;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const Mesh = flux.topology.Mesh(3, 3);
 pub const Velocity = flux.forms.Cochain(Mesh, 1, flux.forms.Primal);

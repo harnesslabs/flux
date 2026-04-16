@@ -5,7 +5,7 @@ const common = @import("examples_common");
 const sparse = flux.math.sparse;
 const linear_system = flux.math.linear_system;
 const feec_context_mod = flux.operators.feec.context;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
@@ -141,8 +141,7 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    const stepper_builder = SurfaceStepperBuilder{ .system = &system };
-    const stepper = try stepper_builder.initStepper(allocator, state.values);
+    const stepper = SurfaceStepper.init(&system, state.values);
     const aux = try SurfaceReferenceAux.init(
         allocator,
         &mesh,
@@ -218,6 +217,14 @@ const SurfaceStepper = struct {
     system: *SurfaceSystem,
     state_values: []f64,
 
+    pub fn init(system: *SurfaceSystem, state_values: []f64) @This() {
+        system.linear_system.seedSolution(state_values);
+        return .{
+            .system = system,
+            .state_values = state_values,
+        };
+    }
+
     pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
         _ = allocator;
         try stepBackwardEuler(self.system, self.state_values);
@@ -226,21 +233,6 @@ const SurfaceStepper = struct {
     pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         _ = self;
         _ = allocator;
-    }
-};
-
-const SurfaceStepperBuilder = struct {
-    pub const Stepper = SurfaceStepper;
-
-    system: *SurfaceSystem,
-
-    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
-        _ = allocator;
-        self.system.linear_system.seedSolution(state_values);
-        return .{
-            .system = self.system,
-            .state_values = state_values,
-        };
     }
 };
 

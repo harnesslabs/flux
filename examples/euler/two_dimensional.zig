@@ -5,7 +5,7 @@ const common = @import("examples_common");
 const poisson = flux.operators.poisson;
 const flux_io = flux.io;
 const feec_context_mod = flux.operators.feec.context;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const Mesh = flux.topology.Mesh(2, 2);
 pub const VertexVorticity = flux.forms.Cochain(Mesh, 0, flux.forms.Primal);

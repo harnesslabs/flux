@@ -20,13 +20,12 @@
 //!     pub fn first_half_step(alloc: Allocator, state: *State, dt: f64) !void { ... }
 //!     pub fn second_half_step(alloc: Allocator, state: *State, dt: f64) !void { ... }
 //! };
-//! const Stepper = Leapfrog(MySystem); // satisfies TimeStepStrategy
+//! const Stepper = Leapfrog(MySystem);
 //! try Stepper.step(allocator, &state, dt);
 //! ```
 
 const std = @import("std");
 const testing = std.testing;
-const time_stepper = @import("../time_stepper.zig");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Leapfrog — generic integrator
@@ -42,9 +41,6 @@ const time_stepper = @import("../time_stepper.zig");
 /// The two half-steps encode the symplectic splitting: the first advances
 /// the staggered variable (e.g., B in Maxwell), the second advances the
 /// integer-time variable (e.g., E in Maxwell).
-///
-/// The returned type satisfies `TimeStepStrategy`, so it can be wrapped
-/// by `TimeStepper` and used by simulation runners.
 ///
 /// The integrator does not track timestep counts — that is the caller's
 /// responsibility (typically via a field on State or the runner loop).
@@ -193,11 +189,6 @@ test "Leapfrog rejects system missing second_half_step" {
 
 // ── Behavioral tests ────────────────────────────────────────────────────
 
-test "Leapfrog satisfies TimeStepStrategy" {
-    const Stepper = Leapfrog(MockLeapfrogSystem);
-    comptime time_stepper.TimeStepStrategy(Stepper);
-}
-
 test "Leapfrog composes first_half_step then second_half_step" {
     const Stepper = Leapfrog(MockLeapfrogSystem);
     var state = MockLeapfrogSystem.State{ .position = 0.0, .velocity = 1.0 };
@@ -231,14 +222,6 @@ test "Leapfrog preserves energy for harmonic oscillator (symplecticity)" {
     // Hamiltonian differs from the true one by O(dt²). The oscillation
     // amplitude is small but we use a conservative tolerance.
     try testing.expectApproxEqAbs(initial_energy, final_energy, 5e-3);
-}
-
-test "Leapfrog works through TimeStepper wrapper" {
-    const Stepper = time_stepper.TimeStepper(Leapfrog(MockLeapfrogSystem));
-    var state = MockLeapfrogSystem.State{ .position = 0.0, .velocity = 1.0 };
-
-    try Stepper.step(testing.allocator, &state, 0.1);
-    try testing.expectApproxEqAbs(0.1, state.position, 1e-15);
 }
 
 test "Leapfrog on zero state is a no-op" {

@@ -19,13 +19,12 @@
 //!         // Compute f(state) and advance: state += dt * f(state)
 //!     }
 //! };
-//! const Stepper = ForwardEuler(MySystem); // satisfies TimeStepStrategy
+//! const Stepper = ForwardEuler(MySystem);
 //! try Stepper.step(allocator, &state, dt);
 //! ```
 
 const std = @import("std");
 const testing = std.testing;
-const time_stepper = @import("../time_stepper.zig");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ForwardEuler — generic integrator
@@ -41,7 +40,6 @@ const time_stepper = @import("../time_stepper.zig");
 /// `state += dt * f(state)`. The system owns both derivative evaluation
 /// and state update, giving it full control over intermediate allocations.
 ///
-/// The returned type satisfies `TimeStepStrategy`.
 pub fn ForwardEuler(comptime System: type) type {
     comptime validateSystem(System);
 
@@ -163,11 +161,6 @@ test "ForwardEuler rejects system missing forward_step" {
 
 // ── Behavioral tests ────────────────────────────────────────────────────
 
-test "ForwardEuler satisfies TimeStepStrategy" {
-    const Stepper = ForwardEuler(MockExplicitSystem);
-    comptime time_stepper.TimeStepStrategy(Stepper);
-}
-
 test "ForwardEuler advances state by one explicit step" {
     const Stepper = ForwardEuler(MockExplicitSystem);
     var state = MockExplicitSystem.State{ .value = 1.0 };
@@ -199,14 +192,6 @@ test "ForwardEuler converges to exact solution for exponential decay" {
     const exact = @exp(-t_final);
     // First-order method: error ~ O(dt) ~ 1e-3.
     try testing.expectApproxEqAbs(exact, state.value, 1e-2);
-}
-
-test "ForwardEuler works through TimeStepper wrapper" {
-    const Stepper = time_stepper.TimeStepper(ForwardEuler(MockExplicitSystem));
-    var state = MockExplicitSystem.State{ .value = 1.0 };
-
-    try Stepper.step(testing.allocator, &state, 0.1);
-    try testing.expectApproxEqAbs(0.9, state.value, 1e-15);
 }
 
 test "ForwardEuler on zero state is a no-op" {

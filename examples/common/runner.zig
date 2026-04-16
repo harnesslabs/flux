@@ -189,24 +189,11 @@ pub fn runStepLoop(
     stepper: anytype,
     capturer: anytype,
 ) !RunLoopResult {
-    const StepperWrapper = struct {
-        inner: @TypeOf(stepper),
-
-        pub fn step(self: *@This(), inner_allocator: std.mem.Allocator) !void {
-            try self.inner.step(inner_allocator);
-        }
-
-        pub fn deinit(self: *@This(), inner_allocator: std.mem.Allocator) void {
-            _ = self;
-            _ = inner_allocator;
-        }
-    };
-
-    const EvolutionType = flux.integrators.evolution.Evolution(void, StepperWrapper, void);
+    const EvolutionType = flux.evolution.Evolution(void, @TypeOf(stepper), void);
     var evolution = EvolutionType.init(
         allocator,
         {},
-        .{ .inner = stepper },
+        stepper,
         {},
     );
     return runCapturedLoop(allocator, &evolution, config, capturer);
@@ -281,10 +268,10 @@ pub fn runExactEvolutionLoop(
         }
     };
 
-    const result = try runStepLoop(
+    const result = try runCapturedLoop(
         allocator,
-        config,
         evolution,
+        config,
         Capturer{
             .mesh_ptr = mesh,
             .evolution_ptr = evolution,
