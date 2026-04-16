@@ -63,34 +63,26 @@ A wrapper type should exist only if it adds at least one of:
 
 If none of those are present, the wrapper is probably dead weight.
 
-## Case study: `TimeStepStrategy` and `TimeStepper`
+## Case study: execution stepper cleanup
 
-The current `src/time_stepper.zig` shape likely violates the rule above.
+Flux previously carried a split between a stepper concept and a pure forwarding
+wrapper. That shape was removed because it violated the rule above.
 
-Today:
+The old shape:
 
-- `TimeStepStrategy(S)` validates the required `State` and `step` declarations
-- `TimeStepper(S)` re-validates the same concept and forwards `State` and `step`
+- re-validated the same contract in multiple layers
+- taught wrapper-oriented tests
+- leaked adapter and builder boilerplate into examples
 
-That means the wrapper adds no owned state, no caching, and no stronger
-interface. It is just another noun around the same contract.
+The current preferred pattern is:
 
-This then leaks outward:
+- keep one direct stepper concept at the execution boundary
+- let `Evolution` validate that concept directly
+- pass the conforming stepper value directly
+- expose an inferred value constructor for ordinary call sites
 
-- tests end up proving that the forwarding wrapper forwards
-- examples and helpers start growing indirect “builder to stepper to step”
-  structures
-- the user-facing language becomes more ceremonial than structural
-
-The stronger default pattern would be:
-
-- keep the concept
-- require that concept where a system, runner, or evolution type accepts a
-  stepper
-- pass the conforming stepper directly
-
-In other words, the interface boundary should be the concept check, not the
-wrapper.
+In other words, the interface boundary is the concept check, not a wrapper
+around the concept.
 
 ## Pattern: test the behavior or the invariant, not the forwarding layer
 
@@ -130,6 +122,75 @@ If a builder only:
 
 then it is probably an API smell rather than a useful pattern.
 
+## Pattern: keep type factories available, but do not teach them as the default constructor path
+
+Many flux nouns are legitimately parameterized at comptime. That means a
+type-level factory such as:
+
+- `Mesh(2, 2)`
+- `Cochain(MeshType, k, Duality)`
+- `Evolution(StateType, StepperType, AuxType)`
+
+may still be the right implementation tool.
+
+But the existence of a type factory does **not** mean ordinary callers should
+be forced to construct values through:
+
+- `Foo(T, U, V).init(...)`
+
+when the needed type parameters can be inferred from the value arguments.
+
+The preferred public construction pattern is:
+
+- keep the type factory for type-position use
+- expose one value-level constructor or helper when callers mainly want a value
+- teach the value-level path as the default usage
+
+### Why
+
+If a caller writes:
+
+- `var evolution = flux.evolution.init(allocator, state, stepper, aux);`
+
+the resulting value still has the full concrete type. We have not lost type
+information. We have only stopped making the caller spell the same structure
+twice.
+
+This preserves the one-obvious-way rule better than teaching both:
+
+- `const EvolutionType = flux.evolution.Evolution(State, Stepper, Aux);`
+- `var evolution = EvolutionType.init(...)`
+
+as equally normal construction patterns.
+
+The explicit type factory remains useful in known type-position cases:
+
+- return types
+- field types
+- comptime reflection
+- nested declarations such as event payload types
+
+Those are real use cases. They are not a reason to make the explicit type
+constructor the default value-construction story.
+
+### Anonymous literal caution
+
+When a value-level constructor relies on type inference, callers should avoid
+passing anonymous struct literals when a named runtime type is semantically
+important.
+
+Weak:
+
+- `evolution.init(allocator, state, .{ .state = &state, .dt = dt }, aux)`
+
+Stronger:
+
+- `const stepper = EulerStepper{ .state = &state, .dt = dt };`
+- `var evolution = evolution.init(allocator, state, stepper, aux);`
+
+This keeps the call site explicit about the intended noun while still avoiding
+manual `@TypeOf(...)` plumbing.
+
 ## Pattern: examples should reveal the pattern, not compensate for it
 
 Examples are one of the fastest ways to detect a weak standard pattern.
@@ -156,17 +217,14 @@ Before introducing a new public or semi-public type, ask:
 
 If the answers are weak, do not add the type.
 
-## Current likely follow-up
+## Current implication
 
-The `TimeStepStrategy` / `TimeStepper` split should be revisited with this note
-in mind. The likely end state is:
+This note records the preferred pattern for future API work:
 
-- keep the concept
-- remove the pure forwarding wrapper
-- validate the concept at consumer boundaries such as evolution or system setup
-
-This note does not itself change the implementation. It defines the preferred
-pattern so future cleanup and refactors converge toward one consistent shape.
+- do not reintroduce wrapper-only execution layers
+- do not teach type-factory-plus-`init` as the default value-construction path
+  when a direct constructor can infer the type parameters
+- keep examples pointed at the direct concept and value-construction seams
 
 ## Pattern: separate model nouns from execution nouns
 
