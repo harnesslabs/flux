@@ -117,7 +117,7 @@ pub fn runImpl(
         .state = &state,
         .dt = dt,
     };
-    var evolution = evolution_mod.init(
+    var evolution = evolution_mod.Evolution(*StateImpl, Euler2DStepper, void).init(
         allocator,
         &state,
         stepper,

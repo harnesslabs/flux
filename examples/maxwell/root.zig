@@ -55,7 +55,7 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
         .state = state,
         .dt = dt,
     };
-    var evolution = evolution_mod.init(
+    var evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D, void).init(
         allocator,
         state,
         stepper,
@@ -165,7 +165,7 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         .state = &state,
         .dt = config.dt,
     };
-    var evolution = evolution_mod.init(
+    var evolution = evolution_mod.Evolution(*runtime.MaxwellState3D, Maxwell3DStepper, void).init(
         allocator,
         &state,
         stepper,

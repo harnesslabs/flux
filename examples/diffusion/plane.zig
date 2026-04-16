@@ -161,7 +161,7 @@ fn simulateCase(
         HeatErrorMeasure{},
     );
 
-    var evolution = evolution_mod.init(
+    var evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatReferenceAux).init(
         allocator,
         state.values,
         stepper,

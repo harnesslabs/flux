@@ -109,7 +109,7 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
         .state = &state,
         .dt = config.dt,
     };
-    var evolution = evolution_mod.init(
+    var evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void).init(
         allocator,
         &state,
         stepper,

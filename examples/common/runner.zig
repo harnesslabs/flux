@@ -189,7 +189,7 @@ pub fn runStepLoop(
     stepper: anytype,
     capturer: anytype,
 ) !RunLoopResult {
-    var evolution = flux.evolution.init(allocator, {}, stepper, {});
+    var evolution = flux.evolution.Evolution(void, @TypeOf(stepper), void).init(allocator, {}, stepper, {});
     return runCapturedLoop(allocator, &evolution, config, capturer);
 }
 
