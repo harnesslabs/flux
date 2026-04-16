@@ -282,6 +282,20 @@ pub fn Evolution(
     };
 }
 
+pub fn init(
+    allocator: std.mem.Allocator,
+    state: anytype,
+    stepper: anytype,
+    aux: anytype,
+) Evolution(@TypeOf(state), @TypeOf(stepper), @TypeOf(aux)) {
+    return Evolution(@TypeOf(state), @TypeOf(stepper), @TypeOf(aux)).init(
+        allocator,
+        state,
+        stepper,
+        aux,
+    );
+}
+
 const MockMesh = struct {};
 
 const MockStepper = struct {
@@ -370,11 +384,11 @@ const MockExactAux = struct {
 };
 
 test "Evolution owns direct stepper state" {
-    const TestEvolution = Evolution([]f64, MockStepper, void);
     const allocator = testing.allocator;
     var state = [_]f64{ 1.0, 2.0, 3.0 };
-    const stepper = try initMockStepper(allocator, state[0..]);
-    var evolution = TestEvolution.init(allocator, state[0..], stepper, {});
+    const state_values: []f64 = state[0..];
+    const stepper = try initMockStepper(allocator, state_values);
+    var evolution = init(allocator, state_values, stepper, {});
     defer evolution.deinit();
 
     try testing.expectEqual(state.len, evolution.stepper.rhs.len);
@@ -389,7 +403,6 @@ test "Evolution owns direct stepper state" {
 }
 
 test "Evolution owns exact buffer through auxiliary state" {
-    const TestEvolution = Evolution([]f64, MockStepper, MockExactAux);
     const allocator = testing.allocator;
     var mesh = MockMesh{};
     var state = [_]f64{ 1.0, 2.0, 3.0 };
@@ -402,7 +415,7 @@ test "Evolution owns exact buffer through auxiliary state" {
         MockErrorMeasure{},
     );
 
-    var evolution = TestEvolution.init(
+    var evolution = init(
         allocator,
         state[0..],
         stepper,
@@ -416,7 +429,6 @@ test "Evolution owns exact buffer through auxiliary state" {
 }
 
 test "Evolution computes error against the current exact field" {
-    const TestEvolution = Evolution([]f64, MockStepper, MockExactAux);
     const allocator = testing.allocator;
     var mesh = MockMesh{};
     var state = [_]f64{ 1.0, 2.0 };
@@ -429,7 +441,7 @@ test "Evolution computes error against the current exact field" {
         MockErrorMeasure{},
     );
 
-    var evolution = TestEvolution.init(
+    var evolution = init(
         allocator,
         state[0..],
         stepper,
@@ -477,8 +489,9 @@ test "Evolution run notifies listeners at begin, each step, and end" {
     const TestEvolution = Evolution([]f64, MockStepper, void);
     const allocator = testing.allocator;
     var state = [_]f64{ 1.0, 2.0 };
-    const stepper = try initMockStepper(allocator, state[0..]);
-    var evolution = TestEvolution.init(allocator, state[0..], stepper, {});
+    const state_values: []f64 = state[0..];
+    const stepper = try initMockStepper(allocator, state_values);
+    var evolution = init(allocator, state_values, stepper, {});
     defer evolution.deinit();
 
     const Listener = struct {

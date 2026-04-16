@@ -50,15 +50,15 @@ const Maxwell2DRenderer = struct {
 
 fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
     const dt = config.dt();
-    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D, void);
-    var evolution = Evolution.init(
+    const stepper = runtime.DrivenLeapfrog2D{
+        .source = source,
+        .state = state,
+        .dt = dt,
+    };
+    var evolution = evolution_mod.init(
         allocator,
         state,
-        .{
-            .source = source,
-            .state = state,
-            .dt = dt,
-        },
+        stepper,
         {},
     );
     defer evolution.deinit();
@@ -161,14 +161,14 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
     });
 
-    const Evolution = evolution_mod.Evolution(*runtime.MaxwellState3D, Maxwell3DStepper, void);
-    var evolution = Evolution.init(
+    const stepper = Maxwell3DStepper{
+        .state = &state,
+        .dt = config.dt,
+    };
+    var evolution = evolution_mod.init(
         allocator,
         &state,
-        .{
-            .state = &state,
-            .dt = config.dt,
-        },
+        stepper,
         {},
     );
     defer evolution.deinit();

@@ -113,14 +113,14 @@ pub fn runImpl(
 
     const circulation_initial = totalCirculation(&state);
     const dt = config.dt();
-    const Evolution = evolution_mod.Evolution(*StateImpl, Euler2DStepper, void);
-    var evolution = Evolution.init(
+    const stepper = Euler2DStepper{
+        .state = &state,
+        .dt = dt,
+    };
+    var evolution = evolution_mod.init(
         allocator,
         &state,
-        .{
-            .state = &state,
-            .dt = dt,
-        },
+        stepper,
         {},
     );
     defer evolution.deinit();

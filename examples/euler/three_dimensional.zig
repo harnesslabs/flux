@@ -105,14 +105,14 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try conservedQuantity(allocator, &state);
-    const Evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void);
-    var evolution = Evolution.init(
+    const stepper = Euler3DStepper{
+        .state = &state,
+        .dt = config.dt,
+    };
+    var evolution = evolution_mod.init(
         allocator,
         &state,
-        .{
-            .state = &state,
-            .dt = config.dt,
-        },
+        stepper,
         {},
     );
     defer evolution.deinit();

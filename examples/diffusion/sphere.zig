@@ -150,8 +150,7 @@ fn simulateCase(
         SurfaceErrorMeasure{},
     );
 
-    const Evolution = evolution_mod.Evolution([]f64, SurfaceStepper, SurfaceReferenceAux);
-    var evolution = Evolution.init(
+    var evolution = evolution_mod.init(
         allocator,
         state.values,
         stepper,
