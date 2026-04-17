@@ -161,23 +161,35 @@ pub fn StateForMesh3D(comptime MeshType: type) type {
 pub const MaxwellState2D = StateForMesh2D(Mesh2D);
 pub const MaxwellState3D = StateForMesh3D(Mesh3D);
 
-pub const DrivenLeapfrog2D = struct {
-    state: *MaxwellState2D,
-    source: ?PointDipole(Mesh2D),
-    dt: f64,
-    next_step_index: u32 = 0,
+pub const DrivenLeapfrog2DMethod = struct {
+    pub const Options = struct {
+        source: ?PointDipole(Mesh2D) = null,
+    };
 
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        const time = @as(f64, @floatFromInt(self.next_step_index)) * self.dt;
-        if (self.source) |dipole| dipole.apply(&self.state.J, time);
-        try leapfrog_step(allocator, self.state, self.dt);
-        apply_pec_boundary(self.state);
-        self.next_step_index += 1;
+    pub fn defaultOptions() Options {
+        return .{};
     }
 
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state: *MaxwellState2D,
+        dt: f64,
+        options: Options,
+    ) !void {
+        const time = @as(f64, @floatFromInt(state.timestep)) * dt;
+        if (options.source) |dipole| dipole.apply(&state.J, time);
+        try leapfrog_step(allocator, state, dt);
+        apply_pec_boundary(state);
+    }
+};
+
+pub const Leapfrog3DMethod = struct {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state: *MaxwellState3D,
+        dt: f64,
+    ) !void {
+        try leapfrog_step_3d(allocator, state, dt);
     }
 };
 

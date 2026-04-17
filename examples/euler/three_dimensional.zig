@@ -105,16 +105,9 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try conservedQuantity(allocator, &state);
-    const stepper = Euler3DStepper{
-        .state = &state,
-        .dt = config.dt,
-    };
-    var evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void).init(
-        allocator,
-        &state,
-        stepper,
-        {},
-    );
+    var evolution = try evolution_mod.Evolution(*StateImpl, Euler3DMethod, void).config()
+        .dt(config.dt)
+        .init(allocator, &state, {});
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -122,7 +115,6 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
         &evolution,
         .{
             .steps = config.steps,
-            .dt = config.dt,
             .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
             .frames = 0,
             .output_dir = config.output_dir orelse "",
@@ -216,17 +208,9 @@ pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const StateImpl) 
     return observer.evaluate(allocator, state, 0);
 }
 
-const Euler3DStepper = struct {
-    state: *StateImpl,
-    dt: f64,
-
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        try stepImpl(allocator, self.state, self.dt);
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+const Euler3DMethod = struct {
+    pub fn advance(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+        try stepImpl(allocator, state, dt);
     }
 };
 

@@ -152,7 +152,6 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, initial_condition, 0.0);
 
-    const stepper = HeatStepper.init(&mesh, &heat_system, state.values);
     const aux = try HeatReferenceAux.init(
         allocator,
         &mesh,
@@ -161,12 +160,13 @@ fn simulateCase(
         HeatErrorMeasure{},
     );
 
-    var evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatReferenceAux).init(
-        allocator,
-        state.values,
-        stepper,
-        aux,
-    );
+    var evolution = try evolution_mod.Evolution([]f64, HeatBackwardEulerMethod, HeatReferenceAux).config()
+        .dt(dt)
+        .methodOptions(.{
+            .mesh = &mesh,
+            .heat_system = &heat_system,
+        })
+        .init(allocator, state.values, aux);
     defer evolution.deinit();
 
     const loop_result = try common.runExactEvolutionLoop(
@@ -176,7 +176,6 @@ fn simulateCase(
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = total_time,
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -207,32 +206,28 @@ fn convergenceConfig(grid: u32) ConfigImpl {
     };
 }
 
-const HeatStepper = struct {
-    mesh: *const Mesh2D,
-    heat_system: *HeatSystem,
-    state_values: []f64,
+const HeatBackwardEulerMethod = struct {
+    pub const Options = struct {
+        mesh: *const Mesh2D,
+        heat_system: *HeatSystem,
+    };
 
-    pub fn init(mesh: *const Mesh2D, heat_system: *HeatSystem, state_values: []f64) @This() {
-        heat_system.linear_system.seedSolutionFromFull(state_values);
-        return .{
-            .mesh = mesh,
-            .heat_system = heat_system,
-            .state_values = state_values,
-        };
+    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
+        options.heat_system.linear_system.seedSolutionFromFull(state_values);
     }
 
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state_values: []f64,
+        _: f64,
+        options: Options,
+    ) !void {
         try stepBackwardEuler(
             allocator,
-            self.mesh,
-            self.heat_system,
-            self.state_values,
+            options.mesh,
+            options.heat_system,
+            state_values,
         );
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
     }
 };
 

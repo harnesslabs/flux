@@ -113,16 +113,9 @@ pub fn runImpl(
 
     const circulation_initial = totalCirculation(&state);
     const dt = config.dt();
-    const stepper = Euler2DStepper{
-        .state = &state,
-        .dt = dt,
-    };
-    var evolution = evolution_mod.Evolution(*StateImpl, Euler2DStepper, void).init(
-        allocator,
-        &state,
-        stepper,
-        {},
-    );
+    var evolution = try evolution_mod.Evolution(*StateImpl, Euler2DMethod, void).config()
+        .dt(dt)
+        .init(allocator, &state, {});
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -130,7 +123,6 @@ pub fn runImpl(
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = dt * @as(f64, @floatFromInt(config.steps)),
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -174,17 +166,9 @@ pub fn conservedQuantity(state: *const StateImpl) f64 {
     return totalCirculation(state);
 }
 
-const Euler2DStepper = struct {
-    state: *StateImpl,
-    dt: f64,
-
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        try stepImpl(allocator, self.state, self.dt);
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+const Euler2DMethod = struct {
+    pub fn advance(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+        try stepImpl(allocator, state, dt);
     }
 };
 

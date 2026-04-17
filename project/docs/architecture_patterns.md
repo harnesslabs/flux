@@ -76,13 +76,13 @@ The old shape:
 
 The current preferred pattern is:
 
-- keep one direct stepper concept at the execution boundary
-- let `Evolution` validate that concept directly
-- pass the conforming stepper value directly
-- expose an inferred value constructor for ordinary call sites
+- keep one direct method concept at the execution boundary
+- let `Evolution` validate the chosen method directly
+- let `Evolution` own `dt`, time, and run bookkeeping
+- route method-specific configuration through `Evolution.Config`
 
-In other words, the interface boundary is the concept check, not a wrapper
-around the concept.
+In other words, the interface boundary is the concept check plus the execution
+owner, not a wrapper around the concept.
 
 ## Pattern: test the behavior or the invariant, not the forwarding layer
 
@@ -122,74 +122,69 @@ If a builder only:
 
 then it is probably an API smell rather than a useful pattern.
 
-## Pattern: keep type factories available, but do not teach them as the default constructor path
+## Pattern: type factories remain nouns; initialization lives on the returned type
 
 Many flux nouns are legitimately parameterized at comptime. That means a
 type-level factory such as:
 
 - `Mesh(2, 2)`
 - `Cochain(MeshType, k, Duality)`
-- `Evolution(StateType, StepperType, AuxType)`
+- `Evolution(StateType, MethodType, AuxType)`
 
-may still be the right implementation tool.
+may still be the right implementation tool and the right public noun.
 
-But the existence of a type factory does **not** mean ordinary callers should
-be forced to construct values through:
+The preferred construction pattern is:
 
-- `Foo(T, U, V).init(...)`
-
-when the needed type parameters can be inferred from the value arguments.
-
-The preferred public construction pattern is:
-
-- keep the type factory for type-position use
-- expose one value-level constructor or helper when callers mainly want a value
-- teach the value-level path as the default usage
+- keep the noun as the type factory
+- put staged configuration and initialization on the returned type
+- avoid module-level `init(...)` helpers that make the namespace pretend to be
+  the noun
 
 ### Why
 
-If a caller writes:
+This matches the mesh pattern cleanly:
 
-- `var evolution = flux.evolution.init(allocator, state, stepper, aux);`
+- `Mesh(...).plane(...)`
+- `Evolution(...).config().dt(...).init(...)`
 
-the resulting value still has the full concrete type. We have not lost type
-information. We have only stopped making the caller spell the same structure
-twice.
+Both read as:
 
-This preserves the one-obvious-way rule better than teaching both:
+- name the structural noun
+- choose construction/configuration on that noun
+- produce the runtime value
 
-- `const EvolutionType = flux.evolution.Evolution(State, Stepper, Aux);`
-- `var evolution = EvolutionType.init(...)`
+The anti-pattern is:
 
-as equally normal construction patterns.
+- `module.init(...)`
 
-The explicit type factory remains useful in known type-position cases:
+because it weakens the package language and makes the namespace, rather than
+the noun, look like the constructor surface.
 
-- return types
-- field types
-- comptime reflection
-- nested declarations such as event payload types
+Examples should also avoid redundant type aliases such as:
 
-Those are real use cases. They are not a reason to make the explicit type
-constructor the default value-construction story.
+- `const EvolutionType = Evolution(...);`
+- `var evolution = try EvolutionType.config()...init(...);`
 
-### Anonymous literal caution
+unless the type name is genuinely needed in type position.
 
-When a value-level constructor relies on type inference, callers should avoid
-passing anonymous struct literals when a named runtime type is semantically
-important.
+## Pattern: avoid fake runtime nouns when a method is really type-level
+
+If an execution method has no independent runtime identity, keep it as a type.
 
 Weak:
 
-- `evolution.init(allocator, state, .{ .state = &state, .dt = dt }, aux)`
+- runtime `Stepper` object stores `state`
+- runtime `Stepper` object stores `dt`
+- `Evolution` also stores `state` or run counters
 
 Stronger:
 
-- `const stepper = EulerStepper{ .state = &state, .dt = dt };`
-- `var evolution = evolution.init(allocator, state, stepper, aux);`
+- `Method` is a comptime type with `advance(...)`
+- `Evolution` owns `dt`, time, and run bookkeeping
+- method-specific settings flow through `Evolution.Config`
 
-This keeps the call site explicit about the intended noun while still avoiding
-manual `@TypeOf(...)` plumbing.
+This keeps the execution language flat and avoids double ownership of the same
+idea.
 
 ## Pattern: examples should reveal the pattern, not compensate for it
 
@@ -222,9 +217,9 @@ If the answers are weak, do not add the type.
 This note records the preferred pattern for future API work:
 
 - do not reintroduce wrapper-only execution layers
-- do not teach type-factory-plus-`init` as the default value-construction path
-  when a direct constructor can infer the type parameters
-- keep examples pointed at the direct concept and value-construction seams
+- keep construction on the structural noun rather than on the module
+- keep execution methods type-level unless they own real runtime state
+- keep examples pointed at the direct `State` / `Method` / `Evolution` seams
 
 ## Pattern: separate model nouns from execution nouns
 

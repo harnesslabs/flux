@@ -50,17 +50,10 @@ const Maxwell2DRenderer = struct {
 
 fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
     const dt = config.dt();
-    const stepper = runtime.DrivenLeapfrog2D{
-        .source = source,
-        .state = state,
-        .dt = dt,
-    };
-    var evolution = evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2D, void).init(
-        allocator,
-        state,
-        stepper,
-        {},
-    );
+    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2DMethod, void).config()
+        .dt(dt)
+        .methodOptions(.{ .source = source })
+        .init(allocator, state, {});
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -68,7 +61,6 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = dt * @as(f64, @floatFromInt(config.steps)),
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -161,16 +153,9 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
     });
 
-    const stepper = Maxwell3DStepper{
-        .state = &state,
-        .dt = config.dt,
-    };
-    var evolution = evolution_mod.Evolution(*runtime.MaxwellState3D, Maxwell3DStepper, void).init(
-        allocator,
-        &state,
-        stepper,
-        {},
-    );
+    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState3D, runtime.Leapfrog3DMethod, void).config()
+        .dt(config.dt)
+        .init(allocator, &state, {});
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -178,7 +163,6 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
         &evolution,
         .{
             .steps = config.steps,
-            .dt = config.dt,
             .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
             .frames = 0,
             .output_dir = config.output_dir orelse "",
@@ -227,20 +211,6 @@ pub fn State(comptime dim: u8) type {
         else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
-
-const Maxwell3DStepper = struct {
-    state: *runtime.MaxwellState3D,
-    dt: f64,
-
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        try runtime.leapfrog_step_3d(allocator, self.state, self.dt);
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
-    }
-};
 
 pub fn run(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim), writer: anytype) !RunResult(dim) {
     return switch (dim) {

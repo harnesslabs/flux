@@ -141,7 +141,6 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    const stepper = SurfaceStepper.init(&system, state.values);
     const aux = try SurfaceReferenceAux.init(
         allocator,
         &mesh,
@@ -150,12 +149,10 @@ fn simulateCase(
         SurfaceErrorMeasure{},
     );
 
-    var evolution = evolution_mod.Evolution([]f64, SurfaceStepper, SurfaceReferenceAux).init(
-        allocator,
-        state.values,
-        stepper,
-        aux,
-    );
+    var evolution = try evolution_mod.Evolution([]f64, SurfaceBackwardEulerMethod, SurfaceReferenceAux).config()
+        .dt(dt)
+        .methodOptions(.{ .system = &system })
+        .init(allocator, state.values, aux);
     defer evolution.deinit();
 
     const loop_result = try common.runExactEvolutionLoop(
@@ -165,7 +162,6 @@ fn simulateCase(
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = config.final_time,
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -212,26 +208,23 @@ fn stepBackwardEuler(
     @memcpy(state_values, solution);
 }
 
-const SurfaceStepper = struct {
-    system: *SurfaceSystem,
-    state_values: []f64,
+const SurfaceBackwardEulerMethod = struct {
+    pub const Options = struct {
+        system: *SurfaceSystem,
+    };
 
-    pub fn init(system: *SurfaceSystem, state_values: []f64) @This() {
-        system.linear_system.seedSolution(state_values);
-        return .{
-            .system = system,
-            .state_values = state_values,
-        };
+    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
+        options.system.linear_system.seedSolution(state_values);
     }
 
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state_values: []f64,
+        _: f64,
+        options: Options,
+    ) !void {
         _ = allocator;
-        try stepBackwardEuler(self.system, self.state_values);
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+        try stepBackwardEuler(options.system, state_values);
     }
 };
 

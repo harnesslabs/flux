@@ -1,68 +1,141 @@
 //! Library-side evolution mechanics for reusable state-stepping systems.
 //!
-//! This module exposes the direct execution contract for steppers and the
-//! orchestration object that owns repeated stepping, listeners, and
-//! exact/reference auxiliary state.
+//! `Evolution` is the execution noun: it owns time-step policy, run counters,
+//! listeners, and optional exact/reference auxiliary state. The integration
+//! method is a comptime type parameter. Method-specific setup flows through
+//! `Evolution.Config`, not through a separate runtime "stepper" object that
+//! redundantly owns state or dt.
 
 const std = @import("std");
 const testing = std.testing;
 
-pub fn TimeStepper(comptime StepperType: type) void {
-    if (!@hasDecl(StepperType, "step")) {
-        @compileError("TimeStepper requires `pub fn step(self: *Stepper, allocator: std.mem.Allocator) !void`");
-    }
-    if (!@hasDecl(StepperType, "deinit")) {
-        @compileError("TimeStepper requires `pub fn deinit(self: *Stepper, allocator: std.mem.Allocator) void`");
+pub fn Method(
+    comptime StateType: type,
+    comptime MethodType: type,
+) void {
+    const MethodOptionsType = methodOptionsType(MethodType);
+
+    if (!@hasDecl(MethodType, "advance")) {
+        @compileError("Method requires `pub fn advance(allocator, state, dt[, options]) !void`");
     }
 
-    const step_info = @typeInfo(@TypeOf(StepperType.step));
-    if (step_info != .@"fn") {
-        @compileError("TimeStepper: `step` must be a function");
-    }
-    const step_fn_info = step_info.@"fn";
-    if (step_fn_info.params.len != 2) {
-        @compileError("TimeStepper: `step` must take (self: *Stepper, allocator)");
-    }
-    if (step_fn_info.params[0].type != *StepperType) {
-        @compileError("TimeStepper: `step` receiver must be *Stepper");
-    }
-    if (step_fn_info.params[1].type != std.mem.Allocator) {
-        @compileError("TimeStepper: `step` allocator parameter must be std.mem.Allocator");
+    const advance_info = @typeInfo(@TypeOf(MethodType.advance));
+    if (advance_info != .@"fn") {
+        @compileError("Method: `advance` must be a function");
     }
 
-    const step_return = step_fn_info.return_type orelse
-        @compileError("TimeStepper: `step` must have a known return type");
-    const step_return_info = @typeInfo(step_return);
-    if (step_return_info != .error_union or step_return_info.error_union.payload != void) {
-        @compileError("TimeStepper: `step` must return !void");
+    const advance_fn_info = advance_info.@"fn";
+    const expected_param_len: usize = if (MethodOptionsType == void) 3 else 4;
+    if (advance_fn_info.params.len != expected_param_len) {
+        @compileError("Method: `advance` must take (allocator, state, dt[, options])");
+    }
+    if (advance_fn_info.params[0].type != std.mem.Allocator) {
+        @compileError("Method: `advance` allocator parameter must be std.mem.Allocator");
+    }
+    if (advance_fn_info.params[1].type != StateType) {
+        @compileError("Method: `advance` state parameter must match Evolution state type");
+    }
+    if (advance_fn_info.params[2].type != f64) {
+        @compileError("Method: `advance` timestep parameter must be f64");
+    }
+    if (MethodOptionsType != void and advance_fn_info.params[3].type != MethodOptionsType) {
+        @compileError("Method: `advance` options parameter must match `pub const Options`");
     }
 
-    const deinit_info = @typeInfo(@TypeOf(StepperType.deinit));
-    if (deinit_info != .@"fn") {
-        @compileError("TimeStepper: `deinit` must be a function");
+    const advance_return = advance_fn_info.return_type orelse
+        @compileError("Method: `advance` must have a known return type");
+    const advance_return_info = @typeInfo(advance_return);
+    if (advance_return_info != .error_union or advance_return_info.error_union.payload != void) {
+        @compileError("Method: `advance` must return !void");
     }
-    const deinit_fn_info = deinit_info.@"fn";
-    if (deinit_fn_info.params.len != 2) {
-        @compileError("TimeStepper: `deinit` must take (self: *Stepper, allocator)");
-    }
-    if (deinit_fn_info.params[0].type != *StepperType) {
-        @compileError("TimeStepper: `deinit` receiver must be *Stepper");
-    }
-    if (deinit_fn_info.params[1].type != std.mem.Allocator) {
-        @compileError("TimeStepper: `deinit` allocator parameter must be std.mem.Allocator");
-    }
-    const deinit_return = deinit_fn_info.return_type orelse
-        @compileError("TimeStepper: `deinit` must have a known return type");
-    if (deinit_return != void) {
-        @compileError("TimeStepper: `deinit` must return void");
+
+    if (@hasDecl(MethodType, "initialize")) {
+        const initialize_info = @typeInfo(@TypeOf(MethodType.initialize));
+        if (initialize_info != .@"fn") {
+            @compileError("Method: `initialize` must be a function");
+        }
+
+        const initialize_fn_info = initialize_info.@"fn";
+        const expected_initialize_params: usize = if (MethodOptionsType == void) 3 else 4;
+        if (initialize_fn_info.params.len != expected_initialize_params) {
+            @compileError("Method: `initialize` must take (allocator, state, dt[, options])");
+        }
+        if (initialize_fn_info.params[0].type != std.mem.Allocator) {
+            @compileError("Method: `initialize` allocator parameter must be std.mem.Allocator");
+        }
+        if (initialize_fn_info.params[1].type != StateType) {
+            @compileError("Method: `initialize` state parameter must match Evolution state type");
+        }
+        if (initialize_fn_info.params[2].type != f64) {
+            @compileError("Method: `initialize` timestep parameter must be f64");
+        }
+        if (MethodOptionsType != void and initialize_fn_info.params[3].type != MethodOptionsType) {
+            @compileError("Method: `initialize` options parameter must match `pub const Options`");
+        }
+
+        const initialize_return = initialize_fn_info.return_type orelse
+            @compileError("Method: `initialize` must have a known return type");
+        if (initialize_return != void) {
+            const initialize_return_info = @typeInfo(initialize_return);
+            if (initialize_return_info != .error_union or initialize_return_info.error_union.payload != void) {
+                @compileError("Method: `initialize` must return void or !void");
+            }
+        }
     }
 }
 
-fn listenerDeclType(comptime ListenerValueType: type) type {
-    return switch (@typeInfo(ListenerValueType)) {
-        .pointer => |pointer| pointer.child,
-        else => ListenerValueType,
-    };
+fn methodOptionsType(comptime MethodType: type) type {
+    if (@hasDecl(MethodType, "Options")) {
+        const Options = MethodType.Options;
+        if (@TypeOf(Options) != type) {
+            @compileError("Method: `Options` must be a type");
+        }
+        return Options;
+    }
+    return void;
+}
+
+fn defaultMethodOptions(comptime MethodType: type) methodOptionsType(MethodType) {
+    const MethodOptionsType = methodOptionsType(MethodType);
+    if (MethodOptionsType == void) return {};
+    if (@hasDecl(MethodType, "defaultOptions")) {
+        return MethodType.defaultOptions();
+    }
+    return .{};
+}
+
+fn resolvedMethodOptions(
+    comptime MethodType: type,
+    maybe_options: if (methodOptionsType(MethodType) == void) void else ?methodOptionsType(MethodType),
+) methodOptionsType(MethodType) {
+    if (methodOptionsType(MethodType) == void) return {};
+    if (maybe_options) |options| return options;
+    if (@hasDecl(MethodType, "defaultOptions")) {
+        return MethodType.defaultOptions();
+    }
+    @panic("Evolution.Config.init requires `.methodOptions(...)` for methods without default options");
+}
+
+fn requireOptionField(
+    comptime MethodType: type,
+    comptime field_name: []const u8,
+) void {
+    const MethodOptionsType = methodOptionsType(MethodType);
+    if (MethodOptionsType == void or !@hasField(MethodOptionsType, field_name)) {
+        @compileError("Evolution.Config: chosen method does not support `" ++ field_name ++ "`");
+    }
+}
+
+fn setOptionField(
+    comptime MethodType: type,
+    options: methodOptionsType(MethodType),
+    comptime field_name: []const u8,
+    value: anytype,
+) methodOptionsType(MethodType) {
+    requireOptionField(MethodType, field_name);
+    var next = options;
+    @field(next, field_name) = value;
+    return next;
 }
 
 fn invokeListeners(
@@ -71,11 +144,55 @@ fn invokeListeners(
     event: anytype,
 ) !void {
     inline for (listeners) |listener| {
-        const ListenerType = comptime listenerDeclType(@TypeOf(listener));
-        if (@hasDecl(ListenerType, method_name)) {
-            try @field(ListenerType, method_name)(listener, event);
+        const ListenerDeclType = switch (@typeInfo(@TypeOf(listener))) {
+            .pointer => |pointer| pointer.child,
+            else => @TypeOf(listener),
+        };
+        if (@hasDecl(ListenerDeclType, method_name)) {
+            try @field(ListenerDeclType, method_name)(listener, event);
         }
     }
+}
+
+fn maybeInitializeMethod(
+    comptime StateType: type,
+    comptime MethodType: type,
+    allocator: std.mem.Allocator,
+    state: StateType,
+    time_step: f64,
+    options: methodOptionsType(MethodType),
+) !void {
+    _ = comptime StateType;
+    if (!@hasDecl(MethodType, "initialize")) return;
+
+    if (methodOptionsType(MethodType) == void) {
+        const result = MethodType.initialize(allocator, state, time_step);
+        const ResultType = @TypeOf(result);
+        if (ResultType == void) return;
+        try result;
+        return;
+    }
+
+    const result = MethodType.initialize(allocator, state, time_step, options);
+    const ResultType = @TypeOf(result);
+    if (ResultType == void) return;
+    try result;
+}
+
+fn advanceMethod(
+    comptime StateType: type,
+    comptime MethodType: type,
+    allocator: std.mem.Allocator,
+    state: StateType,
+    time_step: f64,
+    options: methodOptionsType(MethodType),
+) !void {
+    _ = comptime StateType;
+    if (methodOptionsType(MethodType) == void) {
+        try MethodType.advance(allocator, state, time_step);
+        return;
+    }
+    try MethodType.advance(allocator, state, time_step, options);
 }
 
 pub fn ReferenceAux(
@@ -149,27 +266,33 @@ pub fn empiricalRates(
 
 /// Evolution object for reusable state stepping.
 ///
-/// The caller owns the primary state storage. The evolution object owns the
-/// stepper instance, including any scratch that stepper embeds.
+/// The caller owns the primary state storage. `Evolution` owns execution state:
+/// timestep, current time, step count, listeners, and optional exact/reference
+/// auxiliary state. The method type is a comptime parameter and method-specific
+/// configuration flows through `Config`.
 pub fn Evolution(
     comptime StateType: type,
-    comptime StepperType: type,
+    comptime MethodType: type,
     comptime AuxType: type,
 ) type {
     comptime {
-        TimeStepper(StepperType);
+        Method(StateType, MethodType);
     }
+
+    const MethodOptionsType = methodOptionsType(MethodType);
 
     return struct {
         const Self = @This();
+
         pub const RunConfig = struct {
             steps: u32,
-            dt: f64,
             final_time: f64,
         };
+
         pub const RunResult = struct {
             elapsed_s: f64,
         };
+
         pub const Event = struct {
             evolution: *Self,
             step_index: u32,
@@ -177,37 +300,108 @@ pub fn Evolution(
             final_time: f64,
         };
 
+        pub const Config = struct {
+            time_step: ?f64 = null,
+            method_options: if (MethodOptionsType == void) void else ?MethodOptionsType = if (MethodOptionsType == void) {} else null,
+
+            pub fn dt(self: Config, value: f64) Config {
+                std.debug.assert(value > 0.0);
+                var next = self;
+                next.time_step = value;
+                return next;
+            }
+
+            pub fn methodOptions(self: Config, value: MethodOptionsType) Config {
+                if (MethodOptionsType == void) {
+                    @compileError("Evolution.Config: chosen method does not expose `Options`");
+                }
+                var next = self;
+                next.method_options = value;
+                return next;
+            }
+
+            pub fn minStepSize(self: Config, value: f64) Config {
+                std.debug.assert(value > 0.0);
+                var next = self;
+                next.method_options = setOptionField(
+                    MethodType,
+                    resolvedMethodOptions(MethodType, self.method_options),
+                    "min_step_size",
+                    value,
+                );
+                return next;
+            }
+
+            pub fn maxStepSize(self: Config, value: f64) Config {
+                std.debug.assert(value > 0.0);
+                var next = self;
+                next.method_options = setOptionField(
+                    MethodType,
+                    resolvedMethodOptions(MethodType, self.method_options),
+                    "max_step_size",
+                    value,
+                );
+                return next;
+            }
+
+            pub fn tolerance(self: Config, value: f64) Config {
+                std.debug.assert(value > 0.0);
+                var next = self;
+                next.method_options = setOptionField(
+                    MethodType,
+                    resolvedMethodOptions(MethodType, self.method_options),
+                    "tolerance",
+                    value,
+                );
+                return next;
+            }
+
+            pub fn init(
+                self: Config,
+                allocator: std.mem.Allocator,
+                state: StateType,
+                aux: AuxType,
+            ) !Self {
+                const time_step = self.time_step orelse
+                    @panic("Evolution.Config.init requires `.dt(...)` before construction");
+                const method_options = resolvedMethodOptions(MethodType, self.method_options);
+
+                const evolution = Self{
+                    .allocator = allocator,
+                    .state = state,
+                    .aux = aux,
+                    .time_step = time_step,
+                    .current_time = 0.0,
+                    .step_count = 0,
+                    .method_options = method_options,
+                };
+                try maybeInitializeMethod(StateType, MethodType, allocator, state, time_step, method_options);
+                return evolution;
+            }
+        };
+
         allocator: std.mem.Allocator,
         state: StateType,
-        stepper: StepperType,
         aux: AuxType,
+        time_step: f64,
+        current_time: f64,
         step_count: u32,
+        method_options: MethodOptionsType,
 
-        pub fn init(
-            allocator: std.mem.Allocator,
-            state: StateType,
-            stepper: StepperType,
-            aux: AuxType,
-        ) Self {
-            return .{
-                .allocator = allocator,
-                .state = state,
-                .stepper = stepper,
-                .aux = aux,
-                .step_count = 0,
-            };
+        pub fn config() Config {
+            return .{};
         }
 
         pub fn deinit(self: *Self) void {
-            self.stepper.deinit(self.allocator);
             if (AuxType != void) {
                 self.aux.deinit(self.allocator);
             }
         }
 
         pub fn step(self: *Self, allocator: std.mem.Allocator) !void {
-            try self.stepper.step(allocator);
+            try advanceMethod(StateType, MethodType, allocator, self.state, self.time_step, self.method_options);
             self.step_count += 1;
+            self.current_time += self.time_step;
         }
 
         pub fn currentState(self: *const Self) StateType {
@@ -216,6 +410,14 @@ pub fn Evolution(
 
         pub fn stateValues(self: *const Self) StateType {
             return self.state;
+        }
+
+        pub fn timeStep(self: *const Self) f64 {
+            return self.time_step;
+        }
+
+        pub fn currentTime(self: *const Self) f64 {
+            return self.current_time;
         }
 
         pub fn fillExact(self: *Self, time: f64) void {
@@ -243,27 +445,29 @@ pub fn Evolution(
             return self.step_count;
         }
 
-        pub fn run(self: *Self, allocator: std.mem.Allocator, config: RunConfig, listeners: anytype) !RunResult {
-            std.debug.assert(config.steps > 0);
-            std.debug.assert(config.dt > 0.0);
-            std.debug.assert(config.final_time > 0.0);
+        pub fn run(self: *Self, allocator: std.mem.Allocator, run_config: RunConfig, listeners: anytype) !RunResult {
+            std.debug.assert(run_config.steps > 0);
+            std.debug.assert(self.time_step > 0.0);
+
+            const expected_final_time = self.current_time + self.time_step * @as(f64, @floatFromInt(run_config.steps));
+            std.debug.assert(std.math.approxEqAbs(f64, expected_final_time, run_config.final_time, 1e-12) or
+                std.math.approxEqRel(f64, expected_final_time, run_config.final_time, 1e-12));
 
             try invokeListeners("onRunBegin", listeners, Event{
                 .evolution = self,
-                .step_index = 0,
-                .time = 0.0,
-                .final_time = config.final_time,
+                .step_index = self.step_count,
+                .time = self.current_time,
+                .final_time = run_config.final_time,
             });
 
             const start_ns = std.time.nanoTimestamp();
-            for (0..config.steps) |step_idx| {
+            for (0..run_config.steps) |_| {
                 try self.step(allocator);
-                const time = config.dt * @as(f64, @floatFromInt(step_idx + 1));
                 try invokeListeners("onStep", listeners, Event{
                     .evolution = self,
-                    .step_index = @intCast(step_idx + 1),
-                    .time = time,
-                    .final_time = config.final_time,
+                    .step_index = self.step_count,
+                    .time = self.current_time,
+                    .final_time = run_config.final_time,
                 });
             }
             const elapsed_ns = std.time.nanoTimestamp() - start_ns;
@@ -271,8 +475,8 @@ pub fn Evolution(
             try invokeListeners("onRunEnd", listeners, Event{
                 .evolution = self,
                 .step_index = self.step_count,
-                .time = config.final_time,
-                .final_time = config.final_time,
+                .time = self.current_time,
+                .final_time = run_config.final_time,
             });
 
             return .{
@@ -284,34 +488,46 @@ pub fn Evolution(
 
 const MockMesh = struct {};
 
-const MockStepper = struct {
-    state_values: []f64,
-    rhs: []f64,
-    solution: []f64,
+const MockMethod = struct {
+    pub const Options = struct {
+        increment: f64 = 1.0,
+    };
 
-    pub fn step(self: *@This(), _: std.mem.Allocator) !void {
-        for (self.state_values, self.rhs, self.solution) |*state_value, *rhs_value, *solution_value| {
-            rhs_value.* = state_value.*;
-            solution_value.* = rhs_value.* + 1.0;
-            state_value.* = solution_value.*;
+    pub fn defaultOptions() Options {
+        return .{};
+    }
+
+    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, _: Options) void {
+        for (state_values, 0..) |*value, idx| {
+            value.* = 1.0 + @as(f64, @floatFromInt(idx));
         }
     }
 
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(self.solution);
-        allocator.free(self.rhs);
+    pub fn advance(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) !void {
+        for (state_values) |*state_value| {
+            state_value.* += options.increment;
+        }
     }
 };
 
-fn initMockStepper(allocator: std.mem.Allocator, state_values: []f64) !MockStepper {
-    const stepper = MockStepper{
-        .state_values = state_values,
-        .rhs = try allocator.alloc(f64, state_values.len),
-        .solution = try allocator.alloc(f64, state_values.len),
+const MockAdaptiveMethod = struct {
+    pub const Options = struct {
+        min_step_size: f64 = 1.0e-4,
+        max_step_size: f64 = 1.0,
+        tolerance: f64 = 1.0e-6,
     };
-    @memcpy(stepper.solution, state_values);
-    return stepper;
-}
+
+    pub fn defaultOptions() Options {
+        return .{};
+    }
+
+    pub fn advance(_: std.mem.Allocator, state_values: []f64, dt: f64, options: Options) !void {
+        const bounded_dt = @min(options.max_step_size, @max(options.min_step_size, dt));
+        for (state_values) |*state_value| {
+            state_value.* += bounded_dt + options.tolerance;
+        }
+    }
+};
 
 const MockExactInitializer = struct {
     pub fn fill(_: @This(), _: *const MockMesh, values: []f64, time: f64) void {
@@ -369,30 +585,48 @@ const MockExactAux = struct {
     }
 };
 
-test "Evolution owns direct stepper state" {
+test "Evolution config owns dt and method options" {
     const allocator = testing.allocator;
-    var state = [_]f64{ 1.0, 2.0, 3.0 };
-    const state_values: []f64 = state[0..];
-    const stepper = try initMockStepper(allocator, state_values);
-    var evolution = Evolution([]f64, MockStepper, void).init(allocator, state_values, stepper, {});
+    var state = [_]f64{ 0.0, 0.0, 0.0 };
+    var evolution = try Evolution([]f64, MockMethod, void).config()
+        .dt(0.25)
+        .methodOptions(.{ .increment = 2.0 })
+        .init(allocator, state[0..], {});
     defer evolution.deinit();
 
-    try testing.expectEqual(state.len, evolution.stepper.rhs.len);
-    try testing.expectEqual(state.len, evolution.stepper.solution.len);
+    try testing.expectApproxEqAbs(0.25, evolution.timeStep(), 1e-15);
     try testing.expectEqual(@as(u32, 0), evolution.stepCount());
+    try testing.expectApproxEqAbs(1.0, state[0], 1e-15);
+    try testing.expectApproxEqAbs(2.0, state[1], 1e-15);
+    try testing.expectApproxEqAbs(3.0, state[2], 1e-15);
 
     try evolution.step(allocator);
     try testing.expectEqual(@as(u32, 1), evolution.stepCount());
-    try testing.expectApproxEqAbs(2.0, state[0], 1e-15);
-    try testing.expectApproxEqAbs(3.0, state[1], 1e-15);
-    try testing.expectApproxEqAbs(4.0, state[2], 1e-15);
+    try testing.expectApproxEqAbs(3.0, state[0], 1e-15);
+    try testing.expectApproxEqAbs(4.0, state[1], 1e-15);
+    try testing.expectApproxEqAbs(5.0, state[2], 1e-15);
+    try testing.expectApproxEqAbs(0.25, evolution.currentTime(), 1e-15);
+}
+
+test "Evolution config forwards adaptive method settings through builder methods" {
+    const allocator = testing.allocator;
+    var state = [_]f64{0.0};
+    var evolution = try Evolution([]f64, MockAdaptiveMethod, void).config()
+        .dt(2.0)
+        .minStepSize(0.2)
+        .maxStepSize(0.5)
+        .tolerance(1.0e-3)
+        .init(allocator, state[0..], {});
+    defer evolution.deinit();
+
+    try evolution.step(allocator);
+    try testing.expectApproxEqAbs(0.501, state[0], 1e-15);
 }
 
 test "Evolution owns exact buffer through auxiliary state" {
     const allocator = testing.allocator;
     var mesh = MockMesh{};
     var state = [_]f64{ 1.0, 2.0, 3.0 };
-    const stepper = try initMockStepper(allocator, state[0..]);
     const aux = try MockExactAux.init(
         allocator,
         &mesh,
@@ -401,24 +635,18 @@ test "Evolution owns exact buffer through auxiliary state" {
         MockErrorMeasure{},
     );
 
-    var evolution = Evolution([]f64, MockStepper, MockExactAux).init(
-        allocator,
-        state[0..],
-        stepper,
-        aux,
-    );
+    var evolution = try Evolution([]f64, MockMethod, MockExactAux).config()
+        .dt(0.1)
+        .init(allocator, state[0..], aux);
     defer evolution.deinit();
 
     try testing.expectEqual(state.len, evolution.exactValues().len);
-    try testing.expectEqual(state.len, evolution.stepper.rhs.len);
-    try testing.expectEqual(state.len, evolution.stepper.solution.len);
 }
 
 test "Evolution computes error against the current exact field" {
     const allocator = testing.allocator;
     var mesh = MockMesh{};
     var state = [_]f64{ 1.0, 2.0 };
-    const stepper = try initMockStepper(allocator, state[0..]);
     const aux = try MockExactAux.init(
         allocator,
         &mesh,
@@ -427,12 +655,9 @@ test "Evolution computes error against the current exact field" {
         MockErrorMeasure{},
     );
 
-    var evolution = Evolution([]f64, MockStepper, MockExactAux).init(
-        allocator,
-        state[0..],
-        stepper,
-        aux,
-    );
+    var evolution = try Evolution([]f64, MockMethod, MockExactAux).config()
+        .dt(0.1)
+        .init(allocator, state[0..], aux);
     defer evolution.deinit();
 
     evolution.fillExact(0.0);
@@ -472,12 +697,12 @@ test "empiricalRates returns pairwise convergence rates" {
 }
 
 test "Evolution run notifies listeners at begin, each step, and end" {
-    const TestEvolution = Evolution([]f64, MockStepper, void);
+    const TestEvolution = Evolution([]f64, MockMethod, void);
     const allocator = testing.allocator;
-    var state = [_]f64{ 1.0, 2.0 };
-    const state_values: []f64 = state[0..];
-    const stepper = try initMockStepper(allocator, state_values);
-    var evolution = Evolution([]f64, MockStepper, void).init(allocator, state_values, stepper, {});
+    var state = [_]f64{ 0.0, 0.0 };
+    var evolution = try TestEvolution.config()
+        .dt(0.5)
+        .init(allocator, state[0..], {});
     defer evolution.deinit();
 
     const Listener = struct {
@@ -509,7 +734,6 @@ test "Evolution run notifies listeners at begin, each step, and end" {
     var listener = Listener{};
     const result = try evolution.run(allocator, .{
         .steps = 2,
-        .dt = 0.5,
         .final_time = 1.0,
     }, .{&listener});
 
