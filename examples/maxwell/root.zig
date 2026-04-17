@@ -40,20 +40,59 @@ const RunResult2D = struct {
     snapshot_count: u32,
 };
 
-const Maxwell2DRenderer = struct {
-    state: *const runtime.MaxwellState2D,
+pub const System2D = struct {
+    state: runtime.MaxwellState2D,
+    source: ?runtime.PointDipole(runtime.Mesh2D) = null,
 
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        try flux_io.write_fields(allocator, writer, self.state.mesh.*, self.state.E.values, self.state.B.values);
+    pub fn init(allocator: std.mem.Allocator, mesh: *const runtime.Mesh2D) !System2D {
+        return .{
+            .state = try runtime.MaxwellState2D.init(allocator, mesh),
+        };
+    }
+
+    pub fn deinit(self: *System2D, allocator: std.mem.Allocator) void {
+        self.state.deinit(allocator);
     }
 };
 
-fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
+const Maxwell2DRenderer = struct {
+    system: *const System2D,
+
+    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
+        try flux_io.write_fields(
+            allocator,
+            writer,
+            self.system.state.mesh.*,
+            self.system.state.E.values,
+            self.system.state.B.values,
+        );
+    }
+};
+
+const DrivenLeapfrog2DMethod = struct {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        system: *System2D,
+        dt: f64,
+    ) !void {
+        const time = @as(f64, @floatFromInt(system.state.timestep)) * dt;
+        if (system.source) |dipole| dipole.apply(&system.state.J, time);
+        try runtime.leapfrog_step(allocator, &system.state, dt);
+        runtime.apply_pec_boundary(&system.state);
+    }
+};
+
+fn simulate2D(
+    allocator: std.mem.Allocator,
+    system: *System2D,
+    config: Config2D,
+    base_name: []const u8,
+    writer: anytype,
+) !RunResult2D {
     const dt = config.dt();
-    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2DMethod, void).config()
+    var evolution = try evolution_mod.Evolution(*System2D, DrivenLeapfrog2DMethod).config()
         .dt(dt)
-        .methodOptions(.{ .source = source })
-        .init(allocator, state, {});
+        .init(allocator, system);
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -67,12 +106,12 @@ fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, sour
             .output_base_name = base_name,
             .progress_writer = writer,
         },
-        Maxwell2DRenderer{ .state = state },
+        Maxwell2DRenderer{ .system = system },
     );
 
     return .{
         .elapsed_s = loop_result.elapsed_s,
-        .energy_final = try runtime.electromagnetic_energy(allocator, state),
+        .energy_final = try runtime.electromagnetic_energy(allocator, &system.state),
         .snapshot_count = loop_result.snapshot_count,
     };
 }
@@ -82,27 +121,43 @@ fn run2D(allocator: std.mem.Allocator, config: Config2D, writer: anytype) !RunRe
     const dt = config.dt();
     var mesh = try runtime.Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
-    var state = try runtime.MaxwellState2D.init(allocator, &mesh);
-    defer state.deinit(allocator);
+
+    var system = try System2D.init(allocator, &mesh);
+    defer system.deinit(allocator);
 
     switch (config.demo) {
         .dipole => {
             const frequency = config.sourceFrequency();
             try writer.writeAll("\n  ── Dipole Simulation ───────────────────────\n\n");
             try writer.print("  domain    [0, {d:.2}]²\n  grid      {d}×{d} ({d} triangles)\n  spacing   h = {d:.6}\n  timestep  dt = {d:.6} (Courant {d:.2})\n  source    f = {d:.4} Hz, A = {d:.2}\n\n", .{
-                config.domain, config.grid, config.grid, 2 * @as(u64, config.grid) * config.grid, h, dt, config.courant, frequency, config.amplitude,
+                config.domain,
+                config.grid,
+                config.grid,
+                2 * @as(u64, config.grid) * config.grid,
+                h,
+                dt,
+                config.courant,
+                frequency,
+                config.amplitude,
             });
             const center = [2]f64{ config.domain / 2.0, config.domain / 2.0 };
-            const dipole = runtime.PointDipole(runtime.Mesh2D).init(&mesh, frequency, config.amplitude, center);
-            return simulate2D(allocator, &state, dipole, config, "dipole", writer);
+            system.source = runtime.PointDipole(runtime.Mesh2D).init(&mesh, frequency, config.amplitude, center);
+            return simulate2D(allocator, &system, config, "dipole", writer);
         },
         .cavity => {
             try writer.writeAll("\n  ── TE₁₀ Cavity Resonance ──────────────────\n\n");
             try writer.print("  domain    [0, {d:.2}]²\n  grid      {d}×{d} ({d} triangles)\n  spacing   h = {d:.6}\n  timestep  dt = {d:.6} (Courant {d:.2})\n\n", .{
-                config.domain, config.grid, config.grid, 2 * @as(u64, config.grid) * config.grid, h, dt, config.courant,
+                config.domain,
+                config.grid,
+                config.grid,
+                2 * @as(u64, config.grid) * config.grid,
+                h,
+                dt,
+                config.courant,
             });
-            reference.project_te10_b(&mesh, state.B.values, -dt / 2.0, config.domain);
-            return simulate2D(allocator, &state, null, config, "cavity", writer);
+            reference.project_te10_b(&mesh, system.state.B.values, -dt / 2.0, config.domain);
+            system.source = null;
+            return simulate2D(allocator, &system, config, "cavity", writer);
         },
     }
 }
@@ -120,7 +175,13 @@ const Config3D = struct {
     output_interval: u32 = 0,
 
     fn gridSpacingMin(self: Config3D) f64 {
-        return @min(self.width / @as(f64, @floatFromInt(self.nx)), @min(self.height / @as(f64, @floatFromInt(self.ny)), self.depth / @as(f64, @floatFromInt(self.nz))));
+        return @min(
+            self.width / @as(f64, @floatFromInt(self.nx)),
+            @min(
+                self.height / @as(f64, @floatFromInt(self.ny)),
+                self.depth / @as(f64, @floatFromInt(self.nz)),
+            ),
+        );
     }
 };
 
@@ -129,33 +190,75 @@ const RunResult3D = struct {
     snapshot_count: u32,
 };
 
+pub const System3D = struct {
+    state: runtime.MaxwellState3D,
+
+    pub fn init(allocator: std.mem.Allocator, mesh: *const runtime.Mesh3D) !System3D {
+        return .{
+            .state = try runtime.MaxwellState3D.init(allocator, mesh),
+        };
+    }
+
+    pub fn deinit(self: *System3D, allocator: std.mem.Allocator) void {
+        self.state.deinit(allocator);
+    }
+};
+
 const Maxwell3DRenderer = struct {
-    state: *const runtime.MaxwellState3D,
+    system: *const System3D,
 
     pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        try reference.writeSnapshot(allocator, writer, self.state);
+        try reference.writeSnapshot(allocator, writer, &self.system.state);
+    }
+};
+
+const Leapfrog3DMethod = struct {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        system: *System3D,
+        dt: f64,
+    ) !void {
+        try runtime.leapfrog_step_3d(allocator, &system.state, dt);
     }
 };
 
 fn makeCavityMesh(allocator: std.mem.Allocator, config: Config3D) !runtime.Mesh3D {
-    return runtime.Mesh3D.uniform_tetrahedral_grid(allocator, config.nx, config.ny, config.nz, config.width, config.height, config.depth);
+    return runtime.Mesh3D.uniform_tetrahedral_grid(
+        allocator,
+        config.nx,
+        config.ny,
+        config.nz,
+        config.width,
+        config.height,
+        config.depth,
+    );
 }
 
 fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunResult3D {
     var mesh = try makeCavityMesh(allocator, config);
     defer mesh.deinit(allocator);
-    var state = try runtime.MaxwellState3D.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    try reference.seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
+
+    var system = try System3D.init(allocator, &mesh);
+    defer system.deinit(allocator);
+    try reference.seedTm110Mode(allocator, &system.state, config.dt, config.width, config.height);
 
     const omega = reference.tm110AngularFrequency(config.width, config.height);
     try writer.print("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n  grid      {d}×{d}×{d} ({d} tetrahedra)\n  spacing   h_min = {d:.6}\n  timestep  dt = {d:.6}\n  mode      TM₁₁₀  (ω = {d:.6})\n\n", .{
-        config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
+        config.width,
+        config.height,
+        config.depth,
+        config.nx,
+        config.ny,
+        config.nz,
+        mesh.num_tets(),
+        config.gridSpacingMin(),
+        config.dt,
+        omega,
     });
 
-    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState3D, runtime.Leapfrog3DMethod, void).config()
+    var evolution = try evolution_mod.Evolution(*System3D, Leapfrog3DMethod).config()
         .dt(config.dt)
-        .init(allocator, &state, {});
+        .init(allocator, &system);
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -173,10 +276,10 @@ fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunRe
                 common.Plan.disabled(),
             .progress_writer = writer,
         },
-        Maxwell3DRenderer{ .state = &state },
+        Maxwell3DRenderer{ .system = &system },
     );
 
-    _ = try reference.divergenceNorm3D(allocator, &state);
+    _ = try reference.divergenceNorm3D(allocator, &system.state);
     return .{ .elapsed_s = loop_result.elapsed_s, .snapshot_count = loop_result.snapshot_count };
 }
 
@@ -204,10 +307,10 @@ pub fn RunResult(comptime dim: u8) type {
     };
 }
 
-pub fn State(comptime dim: u8) type {
+pub fn System(comptime dim: u8) type {
     return switch (dim) {
-        2 => runtime.MaxwellState2D,
-        3 => runtime.MaxwellState3D,
+        2 => System2D,
+        3 => System3D,
         else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
@@ -228,27 +331,31 @@ pub fn makeMesh(comptime dim: u8, allocator: std.mem.Allocator, config: Config(d
     };
 }
 
-pub fn step(comptime dim: u8, allocator: std.mem.Allocator, state: *State(dim), dt: f64) !void {
+pub fn step(comptime dim: u8, allocator: std.mem.Allocator, system: *System(dim), dt: f64) !void {
     switch (dim) {
-        2 => {
-            try runtime.leapfrog_step(allocator, state, dt);
-            runtime.apply_pec_boundary(state);
-        },
-        3 => try runtime.leapfrog_step_3d(allocator, state, dt),
+        2 => try DrivenLeapfrog2DMethod.advance(allocator, system, dt),
+        3 => try Leapfrog3DMethod.advance(allocator, system, dt),
         else => unreachable,
     }
 }
 
-pub fn seedReferenceMode(comptime dim: u8, allocator: std.mem.Allocator, state: *State(dim), dt: f64, width: f64, height: f64) !void {
+pub fn seedReferenceMode(
+    comptime dim: u8,
+    allocator: std.mem.Allocator,
+    system: *System(dim),
+    dt: f64,
+    width: f64,
+    height: f64,
+) !void {
     switch (dim) {
-        2 => reference.project_te10_b(state.mesh, state.B.values, -dt / 2.0, width),
-        3 => try reference.seedTm110Mode(allocator, state, dt, width, height),
+        2 => reference.project_te10_b(system.state.mesh, system.state.B.values, -dt / 2.0, width),
+        3 => try reference.seedTm110Mode(allocator, &system.state, dt, width, height),
         else => unreachable,
     }
 }
 
-pub fn divergenceNorm(allocator: std.mem.Allocator, state: *const State(3)) !f64 {
-    return reference.divergenceNorm3D(allocator, state);
+pub fn divergenceNorm(allocator: std.mem.Allocator, system: *const System(3)) !f64 {
+    return reference.divergenceNorm3D(allocator, &system.state);
 }
 
 test {

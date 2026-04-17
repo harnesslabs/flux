@@ -9,6 +9,7 @@ const evolution_mod = flux.evolution;
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
 pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
+const ReferenceStudy = evolution_mod.reference.ReferenceStudy(Mesh2D, HeatExactInitializer, HeatErrorMeasure);
 
 const convergence_time = 0.02;
 
@@ -45,7 +46,7 @@ pub const ConvergenceResultImpl = struct {
     l2_error: f64,
 };
 
-const HeatSystem = struct {
+const HeatSolveRuntime = struct {
     linear_system: linear_system.LinearSystem,
 
     pub fn init(
@@ -53,7 +54,7 @@ const HeatSystem = struct {
         mesh: *const Mesh2D,
         operator_context: *feec_context_mod.OperatorContext(Mesh2D),
         dt: f64,
-    ) !HeatSystem {
+    ) !HeatSolveRuntime {
         const laplacian = try operator_context.laplacian(0);
         const stiffness = laplacian.stiffness;
         const masses = mesh.vertices.slice().items(.dual_volume);
@@ -89,8 +90,47 @@ const HeatSystem = struct {
         };
     }
 
-    pub fn deinit(self: *HeatSystem, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *HeatSolveRuntime, allocator: std.mem.Allocator) void {
         self.linear_system.deinit(allocator);
+    }
+};
+
+pub const SystemImpl = struct {
+    mesh: *const Mesh2D,
+    operator_context: *feec_context_mod.OperatorContext(Mesh2D),
+    heat_runtime: HeatSolveRuntime,
+    temperature: VertexField,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const Mesh2D,
+        dt: f64,
+    ) !SystemImpl {
+        const operator_context = try feec_context_mod.OperatorContext(Mesh2D).init(allocator, mesh);
+        errdefer operator_context.deinit();
+
+        var heat_runtime = try HeatSolveRuntime.init(allocator, mesh, operator_context, dt);
+        errdefer heat_runtime.deinit(allocator);
+
+        var temperature = try VertexField.init(allocator, mesh);
+        errdefer temperature.deinit(allocator);
+
+        return .{
+            .mesh = mesh,
+            .operator_context = operator_context,
+            .heat_runtime = heat_runtime,
+            .temperature = temperature,
+        };
+    }
+
+    pub fn deinit(self: *SystemImpl, allocator: std.mem.Allocator) void {
+        self.temperature.deinit(allocator);
+        self.heat_runtime.deinit(allocator);
+        self.operator_context.deinit();
+    }
+
+    pub fn values(self: *const SystemImpl) []const f64 {
+        return self.temperature.values;
     }
 };
 
@@ -140,40 +180,32 @@ fn simulateCase(
     var mesh = try Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
-    const operator_context = try feec_context_mod.OperatorContext(Mesh2D).init(allocator, &mesh);
-    defer operator_context.deinit();
-
     const total_time = final_time_override orelse (@as(f64, @floatFromInt(config.steps)) * config.dt());
     const dt = total_time / @as(f64, @floatFromInt(config.steps));
-    var heat_system = try HeatSystem.init(allocator, &mesh, operator_context, dt);
-    defer heat_system.deinit(allocator);
+    var system = try SystemImpl.init(allocator, &mesh, dt);
+    defer system.deinit(allocator);
+    initializeState(&mesh, system.temperature.values, initial_condition, 0.0);
 
-    var state = try VertexField.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    initializeState(&mesh, state.values, initial_condition, 0.0);
-
-    const aux = try HeatReferenceAux.init(
+    var study = try ReferenceStudy.init(
         allocator,
         &mesh,
-        state.values.len,
+        system.values(),
         HeatExactInitializer{ .initial_condition = initial_condition },
         HeatErrorMeasure{},
     );
+    defer study.deinit(allocator);
 
-    var evolution = try evolution_mod.Evolution([]f64, HeatBackwardEulerMethod, HeatReferenceAux).config()
+    var evolution = try evolution_mod.Evolution(*SystemImpl, HeatBackwardEulerMethod).config()
         .dt(dt)
-        .methodOptions(.{
-            .mesh = &mesh,
-            .heat_system = &heat_system,
-        })
-        .init(allocator, state.values, aux);
+        .init(allocator, &system);
     defer evolution.deinit();
 
-    const loop_result = try common.runExactEvolutionLoop(
+    const loop_result = try common.runReferenceEvolutionLoop(
         Mesh2D,
         allocator,
         &mesh,
         &evolution,
+        &study,
         .{
             .steps = config.steps,
             .final_time = total_time,
@@ -188,7 +220,7 @@ fn simulateCase(
         .elapsed_s = loop_result.elapsed_s,
         .steps = config.steps,
         .snapshot_count = loop_result.snapshot_count,
-        .l2_error = evolution.l2Error(),
+        .l2_error = study.l2Error(),
     };
 }
 
@@ -207,26 +239,18 @@ fn convergenceConfig(grid: u32) ConfigImpl {
 }
 
 const HeatBackwardEulerMethod = struct {
-    pub const Options = struct {
-        mesh: *const Mesh2D,
-        heat_system: *HeatSystem,
-    };
-
-    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
-        options.heat_system.linear_system.seedSolutionFromFull(state_values);
+    pub fn initialize(_: std.mem.Allocator, system: *SystemImpl, _: f64) void {
+        system.heat_runtime.linear_system.seedSolutionFromFull(system.temperature.values);
     }
 
     pub fn advance(
         allocator: std.mem.Allocator,
-        state_values: []f64,
+        system: *SystemImpl,
         _: f64,
-        options: Options,
     ) !void {
         try stepBackwardEuler(
             allocator,
-            options.mesh,
-            options.heat_system,
-            state_values,
+            system,
         );
     }
 };
@@ -244,24 +268,20 @@ const HeatExactInitializer = struct {
         initializeState(mesh, values, self.initial_condition, time);
     }
 };
-const HeatReferenceAux = evolution_mod.ReferenceAux(Mesh2D, HeatExactInitializer, HeatErrorMeasure);
-
 fn stepBackwardEuler(
     allocator: std.mem.Allocator,
-    mesh: *const Mesh2D,
-    heat_system: *HeatSystem,
-    state_values: []f64,
+    system: *SystemImpl,
 ) !void {
     _ = allocator;
-    const masses = mesh.vertices.slice().items(.dual_volume);
-    const full_rhs = heat_system.linear_system.fullRhsValues();
-    std.debug.assert(full_rhs.len == state_values.len);
+    const masses = system.mesh.vertices.slice().items(.dual_volume);
+    const full_rhs = system.heat_runtime.linear_system.fullRhsValues();
+    std.debug.assert(full_rhs.len == system.temperature.values.len);
 
-    for (full_rhs, masses, state_values) |*rhs_value, mass, state_value| {
+    for (full_rhs, masses, system.temperature.values) |*rhs_value, mass, state_value| {
         rhs_value.* = mass * state_value;
     }
 
-    _ = try heat_system.linear_system.solveHomogeneous(state_values);
+    _ = try system.heat_runtime.linear_system.solveHomogeneous(system.temperature.values);
 }
 
 fn initializeState(

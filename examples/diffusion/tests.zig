@@ -25,7 +25,7 @@ test "heat convergence study reaches second-order spatial rate" {
     for (results, 0..) |result, idx| {
         errors[idx] = result.l2_error;
     }
-    const rates = try flux.evolution.empiricalRates(allocator, &errors, 2.0);
+    const rates = try flux.evolution.reference.empiricalRates(allocator, &errors, 2.0);
     defer allocator.free(rates);
 
     try testing.expectEqual(grids.len, results.len);

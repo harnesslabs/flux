@@ -34,7 +34,7 @@ pub const RunResultImpl = struct {
     snapshot_count: u32,
 };
 
-pub const StateImpl = struct {
+pub const SystemImpl = struct {
     mesh: *const Mesh,
     dec_operators: *dec_context_mod.OperatorContext(Mesh),
     feec_operators: *feec_context_mod.OperatorContext(Mesh),
@@ -43,7 +43,7 @@ pub const StateImpl = struct {
     boundary_velocity: []f64,
     velocity_forcing: []f64,
 
-    pub fn init(allocator: std.mem.Allocator, mesh: *const Mesh) !StateImpl {
+    pub fn init(allocator: std.mem.Allocator, mesh: *const Mesh) !SystemImpl {
         var velocity = try Velocity.init(allocator, mesh);
         errdefer velocity.deinit(allocator);
 
@@ -78,7 +78,7 @@ pub const StateImpl = struct {
         };
     }
 
-    pub fn deinit(self: *StateImpl, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *SystemImpl, allocator: std.mem.Allocator) void {
         allocator.free(self.velocity_forcing);
         allocator.free(self.boundary_velocity);
         self.vorticity.deinit(allocator);
@@ -100,14 +100,14 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     );
     defer mesh.deinit(allocator);
 
-    var state = try StateImpl.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    try seedReferenceMode(allocator, &state);
+    var system = try SystemImpl.init(allocator, &mesh);
+    defer system.deinit(allocator);
+    try seedReferenceMode(allocator, &system);
 
-    const helicity_initial = try conservedQuantity(allocator, &state);
-    var evolution = try evolution_mod.Evolution(*StateImpl, Euler3DMethod, void).config()
+    const helicity_initial = try conservedQuantity(allocator, &system);
+    var evolution = try evolution_mod.Evolution(*SystemImpl, Euler3DMethod).config()
         .dt(config.dt)
-        .init(allocator, &state, {});
+        .init(allocator, &system);
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -125,10 +125,10 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
                 common.Plan.disabled(),
             .progress_writer = writer,
         },
-        Renderer{ .state = &state },
+        Renderer{ .state = &system },
     );
 
-    const helicity_final = try conservedQuantity(allocator, &state);
+    const helicity_final = try conservedQuantity(allocator, &system);
     try writer.print(
         "euler_3d: grid={d}x{d}x{d} steps={d} dt={d:.6} helicity={d:.12} -> {d:.12}\n",
         .{ config.nx, config.ny, config.nz, config.steps, config.dt, helicity_initial, helicity_final },
@@ -142,7 +142,7 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     };
 }
 
-pub fn stepImpl(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+pub fn stepImpl(allocator: std.mem.Allocator, state: *SystemImpl, dt: f64) !void {
     _ = dt;
     try recoverVelocityFromVorticity(allocator, state);
 
@@ -165,7 +165,7 @@ pub fn stepImpl(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void 
     defer transport.deinit(allocator);
 }
 
-pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *StateImpl) !void {
+pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *SystemImpl) !void {
     const edge_vertices = state.mesh.simplices(1).items(.vertices);
     const coords = state.mesh.vertices.slice().items(.coords);
     for (state.velocity.values, edge_vertices) |*value, edge| {
@@ -202,23 +202,23 @@ pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *StateImpl) !void 
     @memcpy(state.velocity_forcing, forcing.values);
 }
 
-pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const StateImpl) !f64 {
-    const Helicity = observers.HelicityObserver(StateImpl, Velocity, selectVelocity);
+pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const SystemImpl) !f64 {
+    const Helicity = observers.HelicityObserver(SystemImpl, Velocity, selectVelocity);
     const observer = Helicity{ .name = "helicity" };
     return observer.evaluate(allocator, state, 0);
 }
 
 const Euler3DMethod = struct {
-    pub fn advance(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+    pub fn advance(allocator: std.mem.Allocator, state: *SystemImpl, dt: f64) !void {
         try stepImpl(allocator, state, dt);
     }
 };
 
-fn selectVelocity(state: *const StateImpl) *const Velocity {
+fn selectVelocity(state: *const SystemImpl) *const Velocity {
     return &state.velocity;
 }
 
-fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *StateImpl) !void {
+fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *SystemImpl) !void {
     var solve = try poisson.solve_one_form_dirichlet(
         Mesh,
         allocator,
@@ -236,7 +236,7 @@ fn recoverVelocityFromVorticity(allocator: std.mem.Allocator, state: *StateImpl)
 }
 
 const Renderer = struct {
-    state: *const StateImpl,
+    state: *const SystemImpl,
 
     pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
         try common.viz.writeProjectedTetFields(

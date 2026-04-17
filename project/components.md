@@ -42,9 +42,11 @@ imported meshes, n-dimensional meshes) are guaranteed compatible with the operat
 **Dependencies:** none (generic — parameterized on system types at comptime)
 **Description:** Execution and time-integration patterns: `Evolution` owns
 runtime time management and listeners, while integrator methods such as
-leapfrog and forward Euler are parameterized at comptime on state/system types.
-Concrete physics modules provide the update functions; the execution layer
-configures and applies them without wrapper-only runtime steppers.
+leapfrog and forward Euler are parameterized at comptime on system types.
+Reference studies are separate higher-order helpers rather than built into
+`Evolution`. Concrete physics modules provide the update functions; the
+execution layer configures and applies them without wrapper-only runtime
+steppers.
 
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)

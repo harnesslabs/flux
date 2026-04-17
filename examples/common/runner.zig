@@ -1,6 +1,6 @@
-//! Shared run-loop helpers for examples with optional exact/reference fields.
+//! Shared run-loop helpers for examples with optional reference-study capture.
 //!
-//! This owns the time loop, snapshot cadence, exact-field visualization, and
+//! This owns the time loop, snapshot cadence, reference-field visualization, and
 //! convergence-study bookkeeping. Mesh assembly, state evolution, and physics
 //! invariants stay in the family modules.
 
@@ -29,7 +29,7 @@ pub const RunLoopResult = struct {
     snapshot_count: u32,
 };
 
-pub fn ExactFieldRenderer(comptime MeshType: type) type {
+pub fn ReferenceFieldRenderer(comptime MeshType: type) type {
     return struct {
         mesh: *const MeshType,
         state: []const f64,
@@ -180,25 +180,24 @@ pub fn runEvolutionLoop(
     );
 }
 
-pub fn runExactEvolutionLoop(
+pub fn runReferenceEvolutionLoop(
     comptime MeshType: type,
     allocator: std.mem.Allocator,
     mesh: *const MeshType,
     evolution: anytype,
+    study: anytype,
     config: RunLoopConfig,
 ) !RunLoopResult {
-    const EvolutionType = @TypeOf(evolution.*);
-
     const Capturer = struct {
         mesh_ptr: *const MeshType,
-        evolution_ptr: *EvolutionType,
+        study_value: @TypeOf(study),
 
         pub fn capture(self: @This(), series: anytype, time: f64) !void {
-            self.evolution_ptr.fillExact(time);
-            try series.capture(time, ExactFieldRenderer(MeshType){
+            self.study_value.fillExact(time);
+            try series.capture(time, ReferenceFieldRenderer(MeshType){
                 .mesh = self.mesh_ptr,
-                .state = self.evolution_ptr.stateValues(),
-                .exact = self.evolution_ptr.exactValues(),
+                .state = self.study_value.stateValues(),
+                .exact = self.study_value.exactValues(),
             });
         }
     };
@@ -209,10 +208,10 @@ pub fn runExactEvolutionLoop(
         config,
         Capturer{
             .mesh_ptr = mesh,
-            .evolution_ptr = evolution,
+            .study_value = study,
         },
     );
-    evolution.fillExact(config.final_time);
+    study.fillExact(config.final_time);
     return result;
 }
 

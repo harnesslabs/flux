@@ -40,7 +40,7 @@ pub const RunResultImpl = struct {
     snapshot_count: u32,
 };
 
-pub const StateImpl = struct {
+pub const SystemImpl = struct {
     const EdgeAdjacency = struct {
         faces: [2]?u32 = .{ null, null },
     };
@@ -53,7 +53,7 @@ pub const StateImpl = struct {
     face_velocity: []Vec2,
     edge_adjacency: []EdgeAdjacency,
 
-    pub fn init(allocator: std.mem.Allocator, mesh: *const Mesh) !StateImpl {
+    pub fn init(allocator: std.mem.Allocator, mesh: *const Mesh) !SystemImpl {
         var stream_function = try VertexVorticity.init(allocator, mesh);
         errdefer stream_function.deinit(allocator);
 
@@ -85,7 +85,7 @@ pub const StateImpl = struct {
         };
     }
 
-    pub fn deinit(self: *StateImpl, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *SystemImpl, allocator: std.mem.Allocator) void {
         allocator.free(self.edge_adjacency);
         allocator.free(self.face_velocity);
         self.tracer.deinit(allocator);
@@ -103,19 +103,19 @@ pub fn runImpl(
     var mesh = try Mesh.plane(allocator, config.grid, config.grid, config.domain, config.domain);
     defer mesh.deinit(allocator);
 
-    var state = try StateImpl.init(allocator, &mesh);
-    defer state.deinit(allocator);
+    var system = try SystemImpl.init(allocator, &mesh);
+    defer system.deinit(allocator);
     switch (config.demo) {
-        .gaussian => initializeGaussianVortex(&state),
-        .dipole => initializeVortexDipole(&state),
+        .gaussian => initializeGaussianVortex(&system),
+        .dipole => initializeVortexDipole(&system),
     }
-    try refreshDerivedFields(allocator, &state);
+    try refreshDerivedFields(allocator, &system);
 
-    const circulation_initial = totalCirculation(&state);
+    const circulation_initial = totalCirculation(&system);
     const dt = config.dt();
-    var evolution = try evolution_mod.Evolution(*StateImpl, Euler2DMethod, void).config()
+    var evolution = try evolution_mod.Evolution(*SystemImpl, Euler2DMethod).config()
         .dt(dt)
-        .init(allocator, &state, {});
+        .init(allocator, &system);
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -129,10 +129,10 @@ pub fn runImpl(
             .output_base_name = baseName(config.demo),
             .progress_writer = writer,
         },
-        Renderer{ .state = &state },
+        Renderer{ .state = &system },
     );
 
-    const circulation_final = totalCirculation(&state);
+    const circulation_final = totalCirculation(&system);
     try writer.print(
         "euler_2d[{s}]: grid={d} steps={d} dt={d:.6} circulation={d:.12} -> {d:.12}\n",
         .{ @tagName(config.demo), config.grid, config.steps, dt, circulation_initial, circulation_final },
@@ -148,7 +148,7 @@ pub fn runImpl(
 
 pub fn stepImpl(
     allocator: std.mem.Allocator,
-    state: *StateImpl,
+    state: *SystemImpl,
     dt: f64,
 ) !void {
     try refreshDerivedFields(allocator, state);
@@ -157,22 +157,22 @@ pub fn stepImpl(
     try refreshDerivedFields(allocator, state);
 }
 
-pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *StateImpl) !void {
+pub fn seedReferenceMode(allocator: std.mem.Allocator, state: *SystemImpl) !void {
     _ = allocator;
     initializeVortexDipole(state);
 }
 
-pub fn conservedQuantity(state: *const StateImpl) f64 {
+pub fn conservedQuantity(state: *const SystemImpl) f64 {
     return totalCirculation(state);
 }
 
 const Euler2DMethod = struct {
-    pub fn advance(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+    pub fn advance(allocator: std.mem.Allocator, state: *SystemImpl, dt: f64) !void {
         try stepImpl(allocator, state, dt);
     }
 };
 
-fn initializeGaussianVortex(state: *StateImpl) void {
+fn initializeGaussianVortex(state: *SystemImpl) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);
     const sigma = 0.12;
 
@@ -182,7 +182,7 @@ fn initializeGaussianVortex(state: *StateImpl) void {
     }
 }
 
-fn initializeVortexDipole(state: *StateImpl) void {
+fn initializeVortexDipole(state: *SystemImpl) void {
     const face_centers = state.mesh.simplices(2).items(.barycenter);
     const sigma = 0.075;
 
@@ -194,7 +194,7 @@ fn initializeVortexDipole(state: *StateImpl) void {
     }
 }
 
-fn totalCirculation(state: *const StateImpl) f64 {
+fn totalCirculation(state: *const SystemImpl) f64 {
     const areas = state.mesh.simplices(2).items(.volume);
     var circulation: f64 = 0.0;
     for (state.vorticity.values, areas) |omega, area| {
@@ -208,7 +208,7 @@ fn stableDt(config: ConfigImpl) f64 {
 }
 
 const Renderer = struct {
-    state: *const StateImpl,
+    state: *const SystemImpl,
 
     pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
         const velocity_values = try allocator.alloc(f64, self.state.mesh.num_faces() * 3);
@@ -240,8 +240,8 @@ fn baseName(demo: Demo) []const u8 {
     };
 }
 
-fn buildEdgeAdjacency(allocator: std.mem.Allocator, mesh: *const Mesh) ![]StateImpl.EdgeAdjacency {
-    const adjacency = try allocator.alloc(StateImpl.EdgeAdjacency, mesh.num_edges());
+fn buildEdgeAdjacency(allocator: std.mem.Allocator, mesh: *const Mesh) ![]SystemImpl.EdgeAdjacency {
+    const adjacency = try allocator.alloc(SystemImpl.EdgeAdjacency, mesh.num_edges());
     @memset(adjacency, .{ .faces = .{ null, null } });
 
     const boundary_2 = mesh.boundary(2);
@@ -262,12 +262,12 @@ fn buildEdgeAdjacency(allocator: std.mem.Allocator, mesh: *const Mesh) ![]StateI
     return adjacency;
 }
 
-fn refreshDerivedFields(allocator: std.mem.Allocator, state: *StateImpl) !void {
+fn refreshDerivedFields(allocator: std.mem.Allocator, state: *SystemImpl) !void {
     try recoverStreamFunction(allocator, state);
     reconstructFaceVelocity(state);
 }
 
-fn recoverStreamFunction(allocator: std.mem.Allocator, state: *StateImpl) !void {
+fn recoverStreamFunction(allocator: std.mem.Allocator, state: *SystemImpl) !void {
     const vertex_count = state.mesh.num_vertices();
     const forcing = try allocator.alloc(f64, vertex_count);
     defer allocator.free(forcing);
@@ -301,7 +301,7 @@ fn recoverStreamFunction(allocator: std.mem.Allocator, state: *StateImpl) !void 
     @memcpy(state.stream_function.values, solve.solution);
 }
 
-fn reconstructFaceVelocity(state: *StateImpl) void {
+fn reconstructFaceVelocity(state: *SystemImpl) void {
     const coords = state.mesh.vertices.slice().items(.coords);
     const face_vertices = state.mesh.simplices(2).items(.vertices);
 
@@ -331,7 +331,7 @@ fn reconstructFaceVelocity(state: *StateImpl) void {
 
 fn advectVorticity(
     allocator: std.mem.Allocator,
-    state: *StateImpl,
+    state: *SystemImpl,
     dt: f64,
 ) !void {
     try advectScalar(allocator, state, state.vorticity.values, dt);
@@ -339,7 +339,7 @@ fn advectVorticity(
 
 fn advectScalar(
     allocator: std.mem.Allocator,
-    state: *const StateImpl,
+    state: *const SystemImpl,
     values: []f64,
     dt: f64,
 ) !void {

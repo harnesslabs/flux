@@ -10,6 +10,7 @@ const evolution_mod = flux.evolution;
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
 const SurfaceOperatorContext = feec_context_mod.OperatorContext(SurfaceMesh);
+const ReferenceStudy = evolution_mod.reference.ReferenceStudy(SurfaceMesh, ExactInitializer, SurfaceErrorMeasure);
 
 pub const ConfigImpl = struct {
     refinement: u32 = 0,
@@ -37,7 +38,7 @@ pub const ConvergenceResultImpl = struct {
     l2_error: f64,
 };
 
-pub const SurfaceSystem = struct {
+const SurfaceSolveRuntime = struct {
     operator_context: *SurfaceOperatorContext,
     linear_system: linear_system.LinearSystem,
     masses: []f64,
@@ -46,7 +47,7 @@ pub const SurfaceSystem = struct {
         allocator: std.mem.Allocator,
         mesh: *const SurfaceMesh,
         dt: f64,
-    ) !SurfaceSystem {
+    ) !SurfaceSolveRuntime {
         const operator_context = try SurfaceOperatorContext.init(allocator, mesh);
         errdefer operator_context.deinit();
         const stiffness = (try operator_context.laplacian(0)).stiffness;
@@ -83,10 +84,43 @@ pub const SurfaceSystem = struct {
         };
     }
 
-    pub fn deinit(self: *SurfaceSystem, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *SurfaceSolveRuntime, allocator: std.mem.Allocator) void {
         self.linear_system.deinit(allocator);
         allocator.free(self.masses);
         self.operator_context.deinit();
+    }
+};
+
+pub const SystemImpl = struct {
+    mesh: *const SurfaceMesh,
+    diffusion_runtime: SurfaceSolveRuntime,
+    temperature: VertexField,
+
+    pub fn init(
+        allocator: std.mem.Allocator,
+        mesh: *const SurfaceMesh,
+        dt: f64,
+    ) !SystemImpl {
+        var diffusion_runtime = try SurfaceSolveRuntime.init(allocator, mesh, dt);
+        errdefer diffusion_runtime.deinit(allocator);
+
+        var temperature = try VertexField.init(allocator, mesh);
+        errdefer temperature.deinit(allocator);
+
+        return .{
+            .mesh = mesh,
+            .diffusion_runtime = diffusion_runtime,
+            .temperature = temperature,
+        };
+    }
+
+    pub fn deinit(self: *SystemImpl, allocator: std.mem.Allocator) void {
+        self.temperature.deinit(allocator);
+        self.diffusion_runtime.deinit(allocator);
+    }
+
+    pub fn values(self: *const SystemImpl) []const f64 {
+        return self.temperature.values;
     }
 };
 
@@ -134,32 +168,30 @@ fn simulateCase(
     defer mesh.deinit(allocator);
 
     const dt = config.timeStep();
-    var system = try SurfaceSystem.init(allocator, &mesh, dt);
+    var system = try SystemImpl.init(allocator, &mesh, dt);
     defer system.deinit(allocator);
+    initializeState(&mesh, system.temperature.values, 0.0);
 
-    var state = try VertexField.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    initializeState(&mesh, state.values, 0.0);
-
-    const aux = try SurfaceReferenceAux.init(
+    var study = try ReferenceStudy.init(
         allocator,
         &mesh,
-        state.values.len,
+        system.values(),
         ExactInitializer{},
         SurfaceErrorMeasure{},
     );
+    defer study.deinit(allocator);
 
-    var evolution = try evolution_mod.Evolution([]f64, SurfaceBackwardEulerMethod, SurfaceReferenceAux).config()
+    var evolution = try evolution_mod.Evolution(*SystemImpl, SurfaceBackwardEulerMethod).config()
         .dt(dt)
-        .methodOptions(.{ .system = &system })
-        .init(allocator, state.values, aux);
+        .init(allocator, &system);
     defer evolution.deinit();
 
-    const loop_result = try common.runExactEvolutionLoop(
+    const loop_result = try common.runReferenceEvolutionLoop(
         SurfaceMesh,
         allocator,
         &mesh,
         &evolution,
+        &study,
         .{
             .steps = config.steps,
             .final_time = config.final_time,
@@ -174,7 +206,7 @@ fn simulateCase(
         .elapsed_s = loop_result.elapsed_s,
         .steps = config.steps,
         .snapshot_count = loop_result.snapshot_count,
-        .l2_error = evolution.l2Error(),
+        .l2_error = study.l2Error(),
     };
 }
 
@@ -191,40 +223,34 @@ fn convergenceConfig(refinement: u32) ConfigImpl {
 }
 
 fn stepBackwardEuler(
-    system: *SurfaceSystem,
-    state_values: []f64,
+    system: *SystemImpl,
 ) !void {
-    const rhs = system.linear_system.rhsValues();
-    const solution = system.linear_system.solutionValues();
-    std.debug.assert(rhs.len == state_values.len);
-    std.debug.assert(solution.len == state_values.len);
+    const rhs = system.diffusion_runtime.linear_system.rhsValues();
+    const solution = system.diffusion_runtime.linear_system.solutionValues();
+    std.debug.assert(rhs.len == system.temperature.values.len);
+    std.debug.assert(solution.len == system.temperature.values.len);
 
-    for (rhs, state_values, system.masses) |*rhs_value, state_value, mass| {
+    for (rhs, system.temperature.values, system.diffusion_runtime.masses) |*rhs_value, state_value, mass| {
         rhs_value.* = mass * state_value;
     }
 
-    _ = try system.linear_system.solve();
+    _ = try system.diffusion_runtime.linear_system.solve();
 
-    @memcpy(state_values, solution);
+    @memcpy(system.temperature.values, solution);
 }
 
 const SurfaceBackwardEulerMethod = struct {
-    pub const Options = struct {
-        system: *SurfaceSystem,
-    };
-
-    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
-        options.system.linear_system.seedSolution(state_values);
+    pub fn initialize(_: std.mem.Allocator, system: *SystemImpl, _: f64) void {
+        system.diffusion_runtime.linear_system.seedSolution(system.temperature.values);
     }
 
     pub fn advance(
         allocator: std.mem.Allocator,
-        state_values: []f64,
+        system: *SystemImpl,
         _: f64,
-        options: Options,
     ) !void {
         _ = allocator;
-        try stepBackwardEuler(options.system, state_values);
+        try stepBackwardEuler(system);
     }
 };
 
@@ -239,8 +265,6 @@ const SurfaceErrorMeasure = struct {
         return weightedL2Error(mesh, approx, exact);
     }
 };
-const SurfaceReferenceAux = evolution_mod.ReferenceAux(SurfaceMesh, ExactInitializer, SurfaceErrorMeasure);
-
 fn assembleLumpedSurfaceMasses(
     allocator: std.mem.Allocator,
     mesh: *const SurfaceMesh,

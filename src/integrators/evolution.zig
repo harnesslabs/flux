@@ -1,22 +1,23 @@
-//! Library-side evolution mechanics for reusable state-stepping systems.
+//! Library-side evolution mechanics for reusable system-stepping workflows.
 //!
 //! `Evolution` is the execution noun: it owns time-step policy, run counters,
-//! listeners, and optional exact/reference auxiliary state. The integration
-//! method is a comptime type parameter. Method-specific setup flows through
-//! `Evolution.Config`, not through a separate runtime "stepper" object that
-//! redundantly owns state or dt.
+//! and listeners. The owned PDE runtime lives on the chosen system object.
+//! Analytic/reference comparisons are separate higher-order abstractions and do
+//! not live inside `Evolution`.
 
 const std = @import("std");
 const testing = std.testing;
 
+pub const reference = @import("reference_study.zig");
+
 pub fn Method(
-    comptime StateType: type,
+    comptime SystemType: type,
     comptime MethodType: type,
 ) void {
     const MethodOptionsType = methodOptionsType(MethodType);
 
     if (!@hasDecl(MethodType, "advance")) {
-        @compileError("Method requires `pub fn advance(allocator, state, dt[, options]) !void`");
+        @compileError("Method requires `pub fn advance(allocator, system, dt[, options]) !void`");
     }
 
     const advance_info = @typeInfo(@TypeOf(MethodType.advance));
@@ -27,13 +28,13 @@ pub fn Method(
     const advance_fn_info = advance_info.@"fn";
     const expected_param_len: usize = if (MethodOptionsType == void) 3 else 4;
     if (advance_fn_info.params.len != expected_param_len) {
-        @compileError("Method: `advance` must take (allocator, state, dt[, options])");
+        @compileError("Method: `advance` must take (allocator, system, dt[, options])");
     }
     if (advance_fn_info.params[0].type != std.mem.Allocator) {
         @compileError("Method: `advance` allocator parameter must be std.mem.Allocator");
     }
-    if (advance_fn_info.params[1].type != StateType) {
-        @compileError("Method: `advance` state parameter must match Evolution state type");
+    if (advance_fn_info.params[1].type != SystemType) {
+        @compileError("Method: `advance` system parameter must match Evolution system type");
     }
     if (advance_fn_info.params[2].type != f64) {
         @compileError("Method: `advance` timestep parameter must be f64");
@@ -58,13 +59,13 @@ pub fn Method(
         const initialize_fn_info = initialize_info.@"fn";
         const expected_initialize_params: usize = if (MethodOptionsType == void) 3 else 4;
         if (initialize_fn_info.params.len != expected_initialize_params) {
-            @compileError("Method: `initialize` must take (allocator, state, dt[, options])");
+            @compileError("Method: `initialize` must take (allocator, system, dt[, options])");
         }
         if (initialize_fn_info.params[0].type != std.mem.Allocator) {
             @compileError("Method: `initialize` allocator parameter must be std.mem.Allocator");
         }
-        if (initialize_fn_info.params[1].type != StateType) {
-            @compileError("Method: `initialize` state parameter must match Evolution state type");
+        if (initialize_fn_info.params[1].type != SystemType) {
+            @compileError("Method: `initialize` system parameter must match Evolution system type");
         }
         if (initialize_fn_info.params[2].type != f64) {
             @compileError("Method: `initialize` timestep parameter must be f64");
@@ -85,23 +86,12 @@ pub fn Method(
 }
 
 fn methodOptionsType(comptime MethodType: type) type {
-    if (@hasDecl(MethodType, "Options")) {
-        const Options = MethodType.Options;
-        if (@TypeOf(Options) != type) {
-            @compileError("Method: `Options` must be a type");
-        }
-        return Options;
+    if (!@hasDecl(MethodType, "Options")) return void;
+    const Options = MethodType.Options;
+    if (@TypeOf(Options) != type) {
+        @compileError("Method: `Options` must be a type");
     }
-    return void;
-}
-
-fn defaultMethodOptions(comptime MethodType: type) methodOptionsType(MethodType) {
-    const MethodOptionsType = methodOptionsType(MethodType);
-    if (MethodOptionsType == void) return {};
-    if (@hasDecl(MethodType, "defaultOptions")) {
-        return MethodType.defaultOptions();
-    }
-    return .{};
+    return Options;
 }
 
 fn resolvedMethodOptions(
@@ -110,32 +100,43 @@ fn resolvedMethodOptions(
 ) methodOptionsType(MethodType) {
     if (methodOptionsType(MethodType) == void) return {};
     if (maybe_options) |options| return options;
-    if (@hasDecl(MethodType, "defaultOptions")) {
-        return MethodType.defaultOptions();
-    }
+    if (@hasDecl(MethodType, "defaultOptions")) return MethodType.defaultOptions();
     @panic("Evolution.Config.init requires `.methodOptions(...)` for methods without default options");
 }
 
-fn requireOptionField(
+fn initializeMethod(
     comptime MethodType: type,
-    comptime field_name: []const u8,
-) void {
-    const MethodOptionsType = methodOptionsType(MethodType);
-    if (MethodOptionsType == void or !@hasField(MethodOptionsType, field_name)) {
-        @compileError("Evolution.Config: chosen method does not support `" ++ field_name ++ "`");
+    allocator: std.mem.Allocator,
+    system: anytype,
+    time_step: f64,
+    options: methodOptionsType(MethodType),
+) !void {
+    if (!@hasDecl(MethodType, "initialize")) return;
+
+    if (methodOptionsType(MethodType) == void) {
+        const result = MethodType.initialize(allocator, system, time_step);
+        if (@TypeOf(result) == void) return;
+        try result;
+        return;
     }
+
+    const result = MethodType.initialize(allocator, system, time_step, options);
+    if (@TypeOf(result) == void) return;
+    try result;
 }
 
-fn setOptionField(
+fn advanceMethod(
     comptime MethodType: type,
+    allocator: std.mem.Allocator,
+    system: anytype,
+    time_step: f64,
     options: methodOptionsType(MethodType),
-    comptime field_name: []const u8,
-    value: anytype,
-) methodOptionsType(MethodType) {
-    requireOptionField(MethodType, field_name);
-    var next = options;
-    @field(next, field_name) = value;
-    return next;
+) !void {
+    if (methodOptionsType(MethodType) == void) {
+        try MethodType.advance(allocator, system, time_step);
+        return;
+    }
+    try MethodType.advance(allocator, system, time_step, options);
 }
 
 fn invokeListeners(
@@ -154,129 +155,12 @@ fn invokeListeners(
     }
 }
 
-fn maybeInitializeMethod(
-    comptime StateType: type,
-    comptime MethodType: type,
-    allocator: std.mem.Allocator,
-    state: StateType,
-    time_step: f64,
-    options: methodOptionsType(MethodType),
-) !void {
-    _ = comptime StateType;
-    if (!@hasDecl(MethodType, "initialize")) return;
-
-    if (methodOptionsType(MethodType) == void) {
-        const result = MethodType.initialize(allocator, state, time_step);
-        const ResultType = @TypeOf(result);
-        if (ResultType == void) return;
-        try result;
-        return;
-    }
-
-    const result = MethodType.initialize(allocator, state, time_step, options);
-    const ResultType = @TypeOf(result);
-    if (ResultType == void) return;
-    try result;
-}
-
-fn advanceMethod(
-    comptime StateType: type,
-    comptime MethodType: type,
-    allocator: std.mem.Allocator,
-    state: StateType,
-    time_step: f64,
-    options: methodOptionsType(MethodType),
-) !void {
-    _ = comptime StateType;
-    if (methodOptionsType(MethodType) == void) {
-        try MethodType.advance(allocator, state, time_step);
-        return;
-    }
-    try MethodType.advance(allocator, state, time_step, options);
-}
-
-pub fn ReferenceAux(
-    comptime MeshType: type,
-    comptime InitializerType: type,
-    comptime ErrorMeasureType: type,
-) type {
-    return struct {
-        mesh: *const MeshType,
-        exact_values: []f64,
-        initializer: InitializerType,
-        error_measure: ErrorMeasureType,
-
-        pub fn init(
-            allocator: std.mem.Allocator,
-            mesh: *const MeshType,
-            len: usize,
-            initializer: InitializerType,
-            error_measure: ErrorMeasureType,
-        ) !@This() {
-            return .{
-                .mesh = mesh,
-                .exact_values = try allocator.alloc(f64, len),
-                .initializer = initializer,
-                .error_measure = error_measure,
-            };
-        }
-
-        pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-            allocator.free(self.exact_values);
-        }
-
-        pub fn fillExact(self: *@This(), time: f64) void {
-            self.initializer.fill(self.mesh, self.exact_values, time);
-        }
-
-        pub fn exactValues(self: *@This()) []f64 {
-            return self.exact_values;
-        }
-
-        pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
-            return self.error_measure.compute(self.mesh, state_values, self.exact_values);
-        }
-    };
-}
-
-pub fn empiricalRates(
-    allocator: std.mem.Allocator,
-    errors: []const f64,
-    refinement_ratio: f64,
-) ![]f64 {
-    std.debug.assert(refinement_ratio > 1.0);
-
-    if (errors.len < 2) {
-        return allocator.alloc(f64, 0);
-    }
-
-    const rates = try allocator.alloc(f64, errors.len - 1);
-    errdefer allocator.free(rates);
-
-    for (0..errors.len - 1) |idx| {
-        const coarse = errors[idx];
-        const fine = errors[idx + 1];
-        std.debug.assert(coarse > 0.0);
-        std.debug.assert(fine > 0.0);
-        rates[idx] = std.math.log(f64, refinement_ratio, coarse / fine);
-    }
-
-    return rates;
-}
-
-/// Evolution object for reusable state stepping.
-///
-/// The caller owns the primary state storage. `Evolution` owns execution state:
-/// timestep, current time, step count, listeners, and optional exact/reference
-/// auxiliary state. The method type is a comptime parameter and method-specific
-/// configuration flows through `Config`.
 pub fn Evolution(
-    comptime StateType: type,
+    comptime SystemType: type,
     comptime MethodType: type,
-    comptime AuxType: type,
 ) type {
     comptime {
-        Method(StateType, MethodType);
+        Method(SystemType, MethodType);
     }
 
     const MethodOptionsType = methodOptionsType(MethodType);
@@ -320,47 +204,10 @@ pub fn Evolution(
                 return next;
             }
 
-            pub fn minStepSize(self: Config, value: f64) Config {
-                std.debug.assert(value > 0.0);
-                var next = self;
-                next.method_options = setOptionField(
-                    MethodType,
-                    resolvedMethodOptions(MethodType, self.method_options),
-                    "min_step_size",
-                    value,
-                );
-                return next;
-            }
-
-            pub fn maxStepSize(self: Config, value: f64) Config {
-                std.debug.assert(value > 0.0);
-                var next = self;
-                next.method_options = setOptionField(
-                    MethodType,
-                    resolvedMethodOptions(MethodType, self.method_options),
-                    "max_step_size",
-                    value,
-                );
-                return next;
-            }
-
-            pub fn tolerance(self: Config, value: f64) Config {
-                std.debug.assert(value > 0.0);
-                var next = self;
-                next.method_options = setOptionField(
-                    MethodType,
-                    resolvedMethodOptions(MethodType, self.method_options),
-                    "tolerance",
-                    value,
-                );
-                return next;
-            }
-
             pub fn init(
                 self: Config,
                 allocator: std.mem.Allocator,
-                state: StateType,
-                aux: AuxType,
+                system: SystemType,
             ) !Self {
                 const time_step = self.time_step orelse
                     @panic("Evolution.Config.init requires `.dt(...)` before construction");
@@ -368,21 +215,19 @@ pub fn Evolution(
 
                 const evolution = Self{
                     .allocator = allocator,
-                    .state = state,
-                    .aux = aux,
+                    .system = system,
                     .time_step = time_step,
                     .current_time = 0.0,
                     .step_count = 0,
                     .method_options = method_options,
                 };
-                try maybeInitializeMethod(StateType, MethodType, allocator, state, time_step, method_options);
+                try initializeMethod(MethodType, allocator, system, time_step, method_options);
                 return evolution;
             }
         };
 
         allocator: std.mem.Allocator,
-        state: StateType,
-        aux: AuxType,
+        system: SystemType,
         time_step: f64,
         current_time: f64,
         step_count: u32,
@@ -393,23 +238,17 @@ pub fn Evolution(
         }
 
         pub fn deinit(self: *Self) void {
-            if (AuxType != void) {
-                self.aux.deinit(self.allocator);
-            }
+            _ = self;
         }
 
         pub fn step(self: *Self, allocator: std.mem.Allocator) !void {
-            try advanceMethod(StateType, MethodType, allocator, self.state, self.time_step, self.method_options);
+            try advanceMethod(MethodType, allocator, self.system, self.time_step, self.method_options);
             self.step_count += 1;
             self.current_time += self.time_step;
         }
 
-        pub fn currentState(self: *const Self) StateType {
-            return self.state;
-        }
-
-        pub fn stateValues(self: *const Self) StateType {
-            return self.state;
+        pub fn currentSystem(self: *const Self) SystemType {
+            return self.system;
         }
 
         pub fn timeStep(self: *const Self) f64 {
@@ -418,27 +257,6 @@ pub fn Evolution(
 
         pub fn currentTime(self: *const Self) f64 {
             return self.current_time;
-        }
-
-        pub fn fillExact(self: *Self, time: f64) void {
-            if (!@hasDecl(AuxType, "fillExact")) {
-                @compileError("Evolution auxiliary state must declare `pub fn fillExact(self, time) void` to support exact/reference runs");
-            }
-            self.aux.fillExact(time);
-        }
-
-        pub fn exactValues(self: *Self) []f64 {
-            if (!@hasDecl(AuxType, "exactValues")) {
-                @compileError("Evolution auxiliary state must declare `pub fn exactValues(self)` to expose reference values");
-            }
-            return self.aux.exactValues();
-        }
-
-        pub fn l2Error(self: *const Self) f64 {
-            if (!@hasDecl(AuxType, "l2Error")) {
-                @compileError("Evolution auxiliary state must declare `pub fn l2Error(self, state)` to evaluate errors");
-            }
-            return self.aux.l2Error(self.state);
         }
 
         pub fn stepCount(self: *const Self) u32 {
@@ -486,223 +304,74 @@ pub fn Evolution(
     };
 }
 
-const MockMesh = struct {};
-
 const MockMethod = struct {
-    pub const Options = struct {
-        increment: f64 = 1.0,
-    };
-
-    pub fn defaultOptions() Options {
-        return .{};
-    }
-
-    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, _: Options) void {
-        for (state_values, 0..) |*value, idx| {
+    pub fn initialize(_: std.mem.Allocator, system_values: []f64, _: f64) void {
+        for (system_values, 0..) |*value, idx| {
             value.* = 1.0 + @as(f64, @floatFromInt(idx));
         }
     }
 
-    pub fn advance(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) !void {
-        for (state_values) |*state_value| {
-            state_value.* += options.increment;
+    pub fn advance(_: std.mem.Allocator, system_values: []f64, _: f64) !void {
+        for (system_values) |*value| {
+            value.* += 1.0;
         }
     }
 };
 
 const MockAdaptiveMethod = struct {
     pub const Options = struct {
-        min_step_size: f64 = 1.0e-4,
-        max_step_size: f64 = 1.0,
-        tolerance: f64 = 1.0e-6,
+        gain: f64,
     };
 
-    pub fn defaultOptions() Options {
-        return .{};
-    }
-
-    pub fn advance(_: std.mem.Allocator, state_values: []f64, dt: f64, options: Options) !void {
-        const bounded_dt = @min(options.max_step_size, @max(options.min_step_size, dt));
-        for (state_values) |*state_value| {
-            state_value.* += bounded_dt + options.tolerance;
+    pub fn advance(_: std.mem.Allocator, system_values: []f64, _: f64, options: Options) !void {
+        for (system_values) |*value| {
+            value.* += options.gain;
         }
     }
 };
 
-const MockExactInitializer = struct {
-    pub fn fill(_: @This(), _: *const MockMesh, values: []f64, time: f64) void {
-        for (values, 0..) |*value, idx| {
-            value.* = time + @as(f64, @floatFromInt(idx));
-        }
-    }
-};
-
-const MockErrorMeasure = struct {
-    pub fn compute(_: @This(), _: *const MockMesh, approx: []const f64, exact: []const f64) f64 {
-        var sum: f64 = 0.0;
-        for (approx, exact) |approx_value, exact_value| {
-            sum += @abs(approx_value - exact_value);
-        }
-        return sum;
-    }
-};
-
-const MockExactAux = struct {
-    mesh: *const MockMesh,
-    exact_values: []f64,
-    initializer: MockExactInitializer,
-    error_measure: MockErrorMeasure,
-
-    pub fn init(
-        allocator: std.mem.Allocator,
-        mesh: *const MockMesh,
-        len: usize,
-        initializer: MockExactInitializer,
-        error_measure: MockErrorMeasure,
-    ) !@This() {
-        return .{
-            .mesh = mesh,
-            .exact_values = try allocator.alloc(f64, len),
-            .initializer = initializer,
-            .error_measure = error_measure,
-        };
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        allocator.free(self.exact_values);
-    }
-
-    pub fn fillExact(self: *@This(), time: f64) void {
-        self.initializer.fill(self.mesh, self.exact_values, time);
-    }
-
-    pub fn exactValues(self: *@This()) []f64 {
-        return self.exact_values;
-    }
-
-    pub fn l2Error(self: *const @This(), state_values: []const f64) f64 {
-        return self.error_measure.compute(self.mesh, state_values, self.exact_values);
-    }
-};
-
-test "Evolution config owns dt and method options" {
+test "Evolution config owns dt and initializes the chosen system" {
     const allocator = testing.allocator;
-    var state = [_]f64{ 0.0, 0.0, 0.0 };
-    var evolution = try Evolution([]f64, MockMethod, void).config()
+    var system = [_]f64{ 0.0, 0.0, 0.0 };
+    var evolution = try Evolution([]f64, MockMethod).config()
         .dt(0.25)
-        .methodOptions(.{ .increment = 2.0 })
-        .init(allocator, state[0..], {});
+        .init(allocator, system[0..]);
     defer evolution.deinit();
 
     try testing.expectApproxEqAbs(0.25, evolution.timeStep(), 1e-15);
     try testing.expectEqual(@as(u32, 0), evolution.stepCount());
-    try testing.expectApproxEqAbs(1.0, state[0], 1e-15);
-    try testing.expectApproxEqAbs(2.0, state[1], 1e-15);
-    try testing.expectApproxEqAbs(3.0, state[2], 1e-15);
+    try testing.expectApproxEqAbs(1.0, system[0], 1e-15);
+    try testing.expectApproxEqAbs(2.0, system[1], 1e-15);
+    try testing.expectApproxEqAbs(3.0, system[2], 1e-15);
 
     try evolution.step(allocator);
     try testing.expectEqual(@as(u32, 1), evolution.stepCount());
-    try testing.expectApproxEqAbs(3.0, state[0], 1e-15);
-    try testing.expectApproxEqAbs(4.0, state[1], 1e-15);
-    try testing.expectApproxEqAbs(5.0, state[2], 1e-15);
+    try testing.expectApproxEqAbs(2.0, system[0], 1e-15);
+    try testing.expectApproxEqAbs(3.0, system[1], 1e-15);
+    try testing.expectApproxEqAbs(4.0, system[2], 1e-15);
     try testing.expectApproxEqAbs(0.25, evolution.currentTime(), 1e-15);
 }
 
-test "Evolution config forwards adaptive method settings through builder methods" {
+test "Evolution method options stay method-local" {
     const allocator = testing.allocator;
-    var state = [_]f64{0.0};
-    var evolution = try Evolution([]f64, MockAdaptiveMethod, void).config()
-        .dt(2.0)
-        .minStepSize(0.2)
-        .maxStepSize(0.5)
-        .tolerance(1.0e-3)
-        .init(allocator, state[0..], {});
+    var system = [_]f64{0.0};
+    var evolution = try Evolution([]f64, MockAdaptiveMethod).config()
+        .dt(0.5)
+        .methodOptions(.{ .gain = 3.0 })
+        .init(allocator, system[0..]);
     defer evolution.deinit();
 
     try evolution.step(allocator);
-    try testing.expectApproxEqAbs(0.501, state[0], 1e-15);
-}
-
-test "Evolution owns exact buffer through auxiliary state" {
-    const allocator = testing.allocator;
-    var mesh = MockMesh{};
-    var state = [_]f64{ 1.0, 2.0, 3.0 };
-    const aux = try MockExactAux.init(
-        allocator,
-        &mesh,
-        state.len,
-        MockExactInitializer{},
-        MockErrorMeasure{},
-    );
-
-    var evolution = try Evolution([]f64, MockMethod, MockExactAux).config()
-        .dt(0.1)
-        .init(allocator, state[0..], aux);
-    defer evolution.deinit();
-
-    try testing.expectEqual(state.len, evolution.exactValues().len);
-}
-
-test "Evolution computes error against the current exact field" {
-    const allocator = testing.allocator;
-    var mesh = MockMesh{};
-    var state = [_]f64{ 1.0, 2.0 };
-    const aux = try MockExactAux.init(
-        allocator,
-        &mesh,
-        state.len,
-        MockExactInitializer{},
-        MockErrorMeasure{},
-    );
-
-    var evolution = try Evolution([]f64, MockMethod, MockExactAux).config()
-        .dt(0.1)
-        .init(allocator, state[0..], aux);
-    defer evolution.deinit();
-
-    evolution.fillExact(0.0);
-    try testing.expectEqual(@as(u32, 0), evolution.stepCount());
-    try testing.expectApproxEqAbs(2.0, evolution.l2Error(), 1e-15);
-}
-
-test "ReferenceAux owns exact buffer and computes error generically" {
-    const allocator = testing.allocator;
-    var mesh = MockMesh{};
-    var state = [_]f64{ 1.0, 2.0 };
-
-    const Aux = ReferenceAux(MockMesh, MockExactInitializer, MockErrorMeasure);
-    var aux = try Aux.init(
-        allocator,
-        &mesh,
-        state.len,
-        MockExactInitializer{},
-        MockErrorMeasure{},
-    );
-    defer aux.deinit(allocator);
-
-    aux.fillExact(0.0);
-    try testing.expectEqual(state.len, aux.exactValues().len);
-    try testing.expectApproxEqAbs(2.0, aux.l2Error(state[0..]), 1e-15);
-}
-
-test "empiricalRates returns pairwise convergence rates" {
-    const allocator = testing.allocator;
-    const errors = [_]f64{ 4.0, 1.0, 0.25 };
-    const rates = try empiricalRates(allocator, &errors, 2.0);
-    defer allocator.free(rates);
-
-    try testing.expectEqual(@as(usize, 2), rates.len);
-    try testing.expectApproxEqAbs(2.0, rates[0], 1e-12);
-    try testing.expectApproxEqAbs(2.0, rates[1], 1e-12);
+    try testing.expectApproxEqAbs(3.0, system[0], 1e-15);
 }
 
 test "Evolution run notifies listeners at begin, each step, and end" {
-    const TestEvolution = Evolution([]f64, MockMethod, void);
+    const TestEvolution = Evolution([]f64, MockMethod);
     const allocator = testing.allocator;
-    var state = [_]f64{ 0.0, 0.0 };
+    var system = [_]f64{ 0.0, 0.0 };
     var evolution = try TestEvolution.config()
         .dt(0.5)
-        .init(allocator, state[0..], {});
+        .init(allocator, system[0..]);
     defer evolution.deinit();
 
     const Listener = struct {

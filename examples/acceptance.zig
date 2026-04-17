@@ -43,18 +43,18 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
     var mesh = try maxwell.makeMesh(3, allocator, config);
     defer mesh.deinit(allocator);
 
-    var state = try maxwell.State(3).init(allocator, &mesh);
-    defer state.deinit(allocator);
+    var system = try maxwell.System(3).init(allocator, &mesh);
+    defer system.deinit(allocator);
 
-    try maxwell.seedReferenceMode(3, allocator, &state, config.dt, config.width, config.height);
+    try maxwell.seedReferenceMode(3, allocator, &system, config.dt, config.width, config.height);
 
     // The invariant must hold at every step, not just at the end — a leapfrog
     // step that *temporarily* introduces ∇·B is already a failure.
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try maxwell.step(3, allocator, &state, config.dt);
+        try maxwell.step(3, allocator, &system, config.dt);
 
-        const divergence = try maxwell.divergenceNorm(allocator, &state);
+        const divergence = try maxwell.divergenceNorm(allocator, &system);
         try testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
     }
 }
@@ -65,20 +65,20 @@ test "M3 acceptance: Euler 2D conserves total circulation to machine precision o
     var mesh = try euler.Mesh(2).plane(allocator, 16, 16, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var state = try euler.State(2).init(allocator, &mesh);
-    defer state.deinit(allocator);
+    var system = try euler.System(2).init(allocator, &mesh);
+    defer system.deinit(allocator);
 
-    try euler.seedReferenceMode(2, allocator, &state);
+    try euler.seedReferenceMode(2, allocator, &system);
 
     const dt: f64 = 0.1 * (1.0 / 16.0);
-    const circulation_initial = try euler.conservedQuantity(2, allocator, &state);
+    const circulation_initial = try euler.conservedQuantity(2, allocator, &system);
 
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler.step(2, allocator, &state, dt);
+        try euler.step(2, allocator, &system, dt);
     }
 
-    const circulation_final = try euler.conservedQuantity(2, allocator, &state);
+    const circulation_final = try euler.conservedQuantity(2, allocator, &system);
     try testing.expectApproxEqAbs(circulation_initial, circulation_final, 1e-12);
 }
 
@@ -88,18 +88,18 @@ test "M3 acceptance: Euler 3D conserves helicity to machine precision over a sho
     var mesh = try euler.Mesh(3).uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var state = try euler.State(3).init(allocator, &mesh);
-    defer state.deinit(allocator);
+    var system = try euler.System(3).init(allocator, &mesh);
+    defer system.deinit(allocator);
 
-    try euler.seedReferenceMode(3, allocator, &state);
-    const helicity_initial = try euler.conservedQuantity(3, allocator, &state);
+    try euler.seedReferenceMode(3, allocator, &system);
+    const helicity_initial = try euler.conservedQuantity(3, allocator, &system);
 
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler.step(3, allocator, &state, 0.01);
+        try euler.step(3, allocator, &system, 0.01);
     }
 
-    const helicity_final = try euler.conservedQuantity(3, allocator, &state);
+    const helicity_final = try euler.conservedQuantity(3, allocator, &system);
     try testing.expectApproxEqAbs(helicity_initial, helicity_final, 1e-12);
 }
 
@@ -112,7 +112,7 @@ test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     const results = try diffusion.runConvergenceStudy(.plane, allocator, &grids);
     defer allocator.free(results);
     const errors = [_]f64{ results[0].l2_error, results[1].l2_error };
-    const rates = try flux.evolution.empiricalRates(allocator, &errors, 2.0);
+    const rates = try flux.evolution.reference.empiricalRates(allocator, &errors, 2.0);
     defer allocator.free(rates);
 
     try testing.expectEqual(grids.len, results.len);

@@ -917,3 +917,43 @@ type-level algorithms plus optional configuration. Putting method-specific
 setup behind `Evolution.Config.init(...)` preserves a single construction
 surface while still allowing backward Euler seeding today and adaptive-method
 configuration later.
+
+## 2026-04-17: `System` is the runtime PDE noun; reference studies are separate from `Evolution`
+
+**Decision:** Refine the same-day execution cleanup further:
+
+- replace the top-level execution noun `State` with `System`
+- remove `AuxType` and embedded exact/reference support from `Evolution`
+- move exact-solution comparison into a separate `ReferenceStudy`
+
+The preferred public execution shape is now:
+
+- `Evolution(System, Method).config().dt(...).init(...)`
+
+and steady problems should use `System` directly without constructing an
+`Evolution`.
+
+**Alternatives considered:**
+1. Keep `State` as the top-level runtime noun: rejected because the practical
+   runtime owner in this codebase includes mesh, operators, boundary data,
+   assembled solve runtimes, and caches. `System` describes that broader owned
+   PDE instance more honestly.
+2. Keep `AuxType` on `Evolution` for exact/reference fields: rejected because
+   analytic comparison is not intrinsic to execution. It is a higher-order
+   study that should compose with an evolution rather than live inside every
+   `Evolution(...)` instantiation.
+3. Force steady-state workflows through `Evolution(System, SteadyState)`:
+   rejected because it makes execution look mandatory. Static and elliptic
+   workflows should operate directly on `System`.
+
+**Rationale:** The diffusion examples made the ownership bug obvious. Their
+assembled linear-system runtimes are part of the owned PDE instance, so they
+belong on the diffusion system itself, not in method options. Once that was
+clear, the old `AuxType` looked equally misplaced: exact/reference comparisons
+are analysis scaffolding, not execution state. This split gives a cleaner top-
+level language:
+
+- `System` owns the runtime PDE instance
+- `Method` updates a system in time
+- `Evolution` manages execution over a system
+- `ReferenceStudy` compares an evolution against known data when needed

@@ -34,7 +34,7 @@ const PrimalC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Primal);
 const PrimalC2 = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 const DecOperatorContext2D = flux.operators.dec.context.OperatorContext(Mesh2D);
 const FeecOperatorContext2D = flux.operators.feec.context.OperatorContext(Mesh2D);
-const MaxwellState2D = maxwell.State(2);
+const MaxwellSystem2D = maxwell.System(2);
 const ArithmeticMesh = struct {
     pub const embedding_dimension = 2;
     pub const topological_dimension = 2;
@@ -224,7 +224,7 @@ const BenchmarkContext = struct {
     c1_other: PrimalC1,
     arithmetic_cases: [arithmetic_case_lengths.len]ArithmeticCase,
     cavity_mesh: *Mesh2D,
-    cavity_state: MaxwellState2D,
+    cavity_state: MaxwellSystem2D,
     dec_operator_context: *DecOperatorContext2D,
     feec_operator_context: *FeecOperatorContext2D,
     surface_mesh: *SurfaceMesh,
@@ -253,7 +253,7 @@ const BenchmarkContext = struct {
         errdefer allocator.destroy(cavity_mesh);
         cavity_mesh.* = try Mesh2D.plane(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
         errdefer cavity_mesh.deinit(allocator);
-        var cavity_state = try MaxwellState2D.init(allocator, cavity_mesh);
+        var cavity_state = try MaxwellSystem2D.init(allocator, cavity_mesh);
         errdefer cavity_state.deinit(allocator);
         try maxwell.seedReferenceMode(2, allocator, &cavity_state, cavityDt(), cavity_domain, cavity_domain);
         const dec_operator_context = try DecOperatorContext2D.init(allocator, mesh);
@@ -771,7 +771,7 @@ fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
     var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
     defer mesh.deinit(ctx.allocator);
 
-    var system = diffusion_sphere.SurfaceSystem.init(ctx.allocator, &mesh, dt) catch unreachable;
+    var system = diffusion_sphere.SystemImpl.init(ctx.allocator, &mesh, dt) catch unreachable;
     defer system.deinit(ctx.allocator);
 }
 

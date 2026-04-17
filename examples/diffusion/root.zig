@@ -14,10 +14,10 @@ pub fn Mesh(comptime surface_kind: SurfaceKind) type {
     };
 }
 
-pub fn State(comptime surface_kind: SurfaceKind) type {
+pub fn System(comptime surface_kind: SurfaceKind) type {
     return switch (surface_kind) {
-        .plane => plane.VertexField,
-        .sphere => sphere.VertexField,
+        .plane => plane.SystemImpl,
+        .sphere => sphere.SystemImpl,
     };
 }
 
