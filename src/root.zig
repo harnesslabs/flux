@@ -86,9 +86,8 @@ pub const operators = struct {
     pub const wedge_product = @import("operators/wedge_product.zig");
 };
 pub const topology = @import("topology/mesh.zig");
-pub const time_stepper = @import("time_stepper.zig");
+pub const evolution = @import("integrators/evolution.zig");
 pub const integrators = struct {
-    pub const evolution = @import("integrators/evolution.zig");
     pub const leapfrog = @import("integrators/leapfrog.zig");
     pub const forward_euler = @import("integrators/forward_euler.zig");
 };
@@ -102,6 +101,13 @@ test "public API exposes explicit DEC and FEEC operator families" {
     try testing.expect(@hasDecl(@This().operators, "dec"));
     try testing.expect(@hasDecl(@This().operators, "feec"));
     try testing.expect(!@hasDecl(@This().operators, "context"));
+}
+
+test "public API exposes evolution as the execution root module" {
+    const testing = @import("std").testing;
+
+    try testing.expect(@hasDecl(@This(), "evolution"));
+    try testing.expect(!@hasDecl(@This().integrators, "evolution"));
 }
 
 test "DEC context only exposes DEC-family operators" {

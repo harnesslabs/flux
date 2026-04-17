@@ -26,8 +26,8 @@ zig build -Doptimize=ReleaseFast run-diffusion -- --surface sphere --refinement 
 - Plane mode uses backward Euler on the square with homogeneous Dirichlet boundary data.
 - Sphere mode solves on a triangulated unit sphere and compares against a known analytic eigenmode.
 - The family API is surface-selected at comptime: one public module, two internal runtimes.
-- Plane and sphere share the library evolution mechanics in `flux.integrators.evolution`; mesh construction, exact solutions, and solve details stay local to each runtime.
-- The example-common runner still owns snapshot cadence, progress, and convergence-study plumbing, so the example files are mostly problem setup plus a stepper builder.
+- Plane and sphere share the library evolution mechanics in `flux.evolution`; mesh construction, exact solutions, and solve details stay local to each runtime.
+- The example-common runner still owns snapshot cadence, progress, and convergence-study plumbing, so the example files are mostly problem setup plus `Evolution(...).config().dt(...).init(...)`.
 
 ## Verification
 

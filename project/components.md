@@ -38,13 +38,13 @@ imported meshes, n-dimensional meshes) are guaranteed compatible with the operat
 
 ### integrators
 **Domain label:** `domain/operators` (shares label with spatial operators)
-**Owns:** `src/integrators/`, `src/time_stepper.zig`
+**Owns:** `src/integrators/`
 **Dependencies:** none (generic — parameterized on system types at comptime)
-**Description:** Time-stepping patterns: generic leapfrog (symplectic two-step),
-forward Euler (explicit single-step). Each integrator validates its system type
-at comptime and satisfies the `TimeStepStrategy` concept. Concrete physics
-systems (e.g., `MaxwellSystem` in `src/em/`) provide the half-step or derivative
-functions; the integrators compose them into full timesteps.
+**Description:** Execution and time-integration patterns: `Evolution` owns
+runtime time management and listeners, while integrator methods such as
+leapfrog and forward Euler are parameterized at comptime on state/system types.
+Concrete physics modules provide the update functions; the execution layer
+configures and applies them without wrapper-only runtime steppers.
 
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)

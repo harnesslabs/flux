@@ -5,7 +5,7 @@ const common = @import("examples_common");
 const sparse = flux.math.sparse;
 const linear_system = flux.math.linear_system;
 const feec_context_mod = flux.operators.feec.context;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const SurfaceMesh = flux.topology.Mesh(3, 2);
 pub const VertexField = flux.forms.Cochain(SurfaceMesh, 0, flux.forms.Primal);
@@ -141,8 +141,6 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, 0.0);
 
-    const stepper_builder = SurfaceStepperBuilder{ .system = &system };
-    const stepper = try stepper_builder.initStepper(allocator, state.values);
     const aux = try SurfaceReferenceAux.init(
         allocator,
         &mesh,
@@ -151,13 +149,10 @@ fn simulateCase(
         SurfaceErrorMeasure{},
     );
 
-    const Evolution = evolution_mod.Evolution([]f64, SurfaceStepper, SurfaceReferenceAux);
-    var evolution = Evolution.init(
-        allocator,
-        state.values,
-        stepper,
-        aux,
-    );
+    var evolution = try evolution_mod.Evolution([]f64, SurfaceBackwardEulerMethod, SurfaceReferenceAux).config()
+        .dt(dt)
+        .methodOptions(.{ .system = &system })
+        .init(allocator, state.values, aux);
     defer evolution.deinit();
 
     const loop_result = try common.runExactEvolutionLoop(
@@ -167,7 +162,6 @@ fn simulateCase(
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = config.final_time,
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -214,33 +208,23 @@ fn stepBackwardEuler(
     @memcpy(state_values, solution);
 }
 
-const SurfaceStepper = struct {
-    system: *SurfaceSystem,
-    state_values: []f64,
+const SurfaceBackwardEulerMethod = struct {
+    pub const Options = struct {
+        system: *SurfaceSystem,
+    };
 
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        _ = allocator;
-        try stepBackwardEuler(self.system, self.state_values);
+    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
+        options.system.linear_system.seedSolution(state_values);
     }
 
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state_values: []f64,
+        _: f64,
+        options: Options,
+    ) !void {
         _ = allocator;
-    }
-};
-
-const SurfaceStepperBuilder = struct {
-    pub const Stepper = SurfaceStepper;
-
-    system: *SurfaceSystem,
-
-    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
-        _ = allocator;
-        self.system.linear_system.seedSolution(state_values);
-        return .{
-            .system = self.system,
-            .state_values = state_values,
-        };
+        try stepBackwardEuler(options.system, state_values);
     }
 };
 

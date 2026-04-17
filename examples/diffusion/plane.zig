@@ -5,7 +5,7 @@ const common = @import("examples_common");
 const sparse = flux.math.sparse;
 const linear_system = flux.math.linear_system;
 const feec_context_mod = flux.operators.feec.context;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const Mesh2D = flux.topology.Mesh(2, 2);
 pub const VertexField = flux.forms.Cochain(Mesh2D, 0, flux.forms.Primal);
@@ -152,11 +152,6 @@ fn simulateCase(
     defer state.deinit(allocator);
     initializeState(&mesh, state.values, initial_condition, 0.0);
 
-    const stepper_builder = HeatStepperBuilder{
-        .mesh = &mesh,
-        .heat_system = &heat_system,
-    };
-    const stepper = try stepper_builder.initStepper(allocator, state.values);
     const aux = try HeatReferenceAux.init(
         allocator,
         &mesh,
@@ -165,13 +160,13 @@ fn simulateCase(
         HeatErrorMeasure{},
     );
 
-    const Evolution = evolution_mod.Evolution([]f64, HeatStepper, HeatReferenceAux);
-    var evolution = Evolution.init(
-        allocator,
-        state.values,
-        stepper,
-        aux,
-    );
+    var evolution = try evolution_mod.Evolution([]f64, HeatBackwardEulerMethod, HeatReferenceAux).config()
+        .dt(dt)
+        .methodOptions(.{
+            .mesh = &mesh,
+            .heat_system = &heat_system,
+        })
+        .init(allocator, state.values, aux);
     defer evolution.deinit();
 
     const loop_result = try common.runExactEvolutionLoop(
@@ -181,7 +176,6 @@ fn simulateCase(
         &evolution,
         .{
             .steps = config.steps,
-            .dt = dt,
             .final_time = total_time,
             .frames = config.frames,
             .output_dir = config.output_dir,
@@ -212,40 +206,28 @@ fn convergenceConfig(grid: u32) ConfigImpl {
     };
 }
 
-const HeatStepperBuilder = struct {
-    pub const Stepper = HeatStepper;
+const HeatBackwardEulerMethod = struct {
+    pub const Options = struct {
+        mesh: *const Mesh2D,
+        heat_system: *HeatSystem,
+    };
 
-    mesh: *const Mesh2D,
-    heat_system: *HeatSystem,
-
-    pub fn initStepper(self: @This(), allocator: std.mem.Allocator, state_values: []f64) !Stepper {
-        _ = allocator;
-        self.heat_system.linear_system.seedSolutionFromFull(state_values);
-        return .{
-            .mesh = self.mesh,
-            .heat_system = self.heat_system,
-            .state_values = state_values,
-        };
+    pub fn initialize(_: std.mem.Allocator, state_values: []f64, _: f64, options: Options) void {
+        options.heat_system.linear_system.seedSolutionFromFull(state_values);
     }
-};
 
-const HeatStepper = struct {
-    mesh: *const Mesh2D,
-    heat_system: *HeatSystem,
-    state_values: []f64,
-
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
+    pub fn advance(
+        allocator: std.mem.Allocator,
+        state_values: []f64,
+        _: f64,
+        options: Options,
+    ) !void {
         try stepBackwardEuler(
             allocator,
-            self.mesh,
-            self.heat_system,
-            self.state_values,
+            options.mesh,
+            options.heat_system,
+            state_values,
         );
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
     }
 };
 

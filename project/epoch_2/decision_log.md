@@ -876,3 +876,44 @@ collection of wrappers around today's examples. Structural abstractions should
 describe the underlying mathematical/computational role so they still make
 sense for other PDEs, dimensions, and solver families. `LinearSystem` plus an
 `EliminationMap` is such a split. `DirichletConstrainedSystem` was not.
+
+## 2026-04-17: `Evolution` owns time management; methods configure through `Evolution.Config`
+
+**Decision:** Replace the old runtime-stepper shape with an execution split
+based on:
+
+- `State` for PDE data and problem-owned caches
+- `Method` for the integration algorithm
+- `Evolution` for time management, listeners, counters, and optional exact
+  auxiliary state
+
+Construction now flows through:
+
+- `Evolution(State, Method, Aux).config().dt(...).init(...)`
+
+Method-specific settings flow through `Evolution.Config`, and methods may
+optionally provide `Options` and `initialize(...)`. Do not use module-level
+`init(...)` helpers for evolution construction.
+
+**Alternatives considered:**
+1. Keep the concept-plus-wrapper `TimeStepper` design and only simplify the
+   example call sites: rejected because the real problem was the noun split,
+   not just constructor ceremony. Thin runtime steppers kept re-storing `state`
+   and `dt`, which belong to execution.
+2. Add a module-level `flux.evolution.init(...)` value constructor: rejected
+   because it makes the namespace pretend to be the noun. The package language
+   is cleaner when configuration and initialization stay on `Evolution(...)`,
+   just as mesh constructors stay on `Mesh(...)`.
+3. Make methods always runtime values passed into `Evolution`: rejected because
+   many current methods have no real runtime identity. A separate runtime
+   object is only justified when it owns genuine mutable/controller state or
+   another real representation boundary.
+
+**Rationale:** The Maxwell, Euler, and diffusion examples had all drifted into
+the same smell: a local `Stepper` struct that only forwarded one call while
+duplicating `state`, `dt`, or both. That was not a useful abstraction. `dt`
+belongs to `Evolution`, and most current methods are better represented as
+type-level algorithms plus optional configuration. Putting method-specific
+setup behind `Evolution.Config.init(...)` preserves a single construction
+surface while still allowing backward Euler seeding today and adaptive-method
+configuration later.

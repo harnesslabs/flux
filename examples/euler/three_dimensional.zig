@@ -8,7 +8,7 @@ const dec_context_mod = flux.operators.dec.context;
 const feec_context_mod = flux.operators.feec.context;
 const observers = flux.operators.observers;
 const wedge_product = flux.operators.wedge_product;
-const evolution_mod = flux.integrators.evolution;
+const evolution_mod = flux.evolution;
 
 pub const Mesh = flux.topology.Mesh(3, 3);
 pub const Velocity = flux.forms.Cochain(Mesh, 1, flux.forms.Primal);
@@ -105,16 +105,9 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     try seedReferenceMode(allocator, &state);
 
     const helicity_initial = try conservedQuantity(allocator, &state);
-    const Evolution = evolution_mod.Evolution(*StateImpl, Euler3DStepper, void);
-    var evolution = Evolution.init(
-        allocator,
-        &state,
-        .{
-            .state = &state,
-            .dt = config.dt,
-        },
-        {},
-    );
+    var evolution = try evolution_mod.Evolution(*StateImpl, Euler3DMethod, void).config()
+        .dt(config.dt)
+        .init(allocator, &state, {});
     defer evolution.deinit();
 
     const loop_result = try common.runEvolutionLoop(
@@ -122,7 +115,6 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
         &evolution,
         .{
             .steps = config.steps,
-            .dt = config.dt,
             .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
             .frames = 0,
             .output_dir = config.output_dir orelse "",
@@ -216,17 +208,9 @@ pub fn conservedQuantity(allocator: std.mem.Allocator, state: *const StateImpl) 
     return observer.evaluate(allocator, state, 0);
 }
 
-const Euler3DStepper = struct {
-    state: *StateImpl,
-    dt: f64,
-
-    pub fn step(self: *@This(), allocator: std.mem.Allocator) !void {
-        try stepImpl(allocator, self.state, self.dt);
-    }
-
-    pub fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
-        _ = self;
-        _ = allocator;
+const Euler3DMethod = struct {
+    pub fn advance(allocator: std.mem.Allocator, state: *StateImpl, dt: f64) !void {
+        try stepImpl(allocator, state, dt);
     }
 };
 

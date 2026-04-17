@@ -63,34 +63,26 @@ A wrapper type should exist only if it adds at least one of:
 
 If none of those are present, the wrapper is probably dead weight.
 
-## Case study: `TimeStepStrategy` and `TimeStepper`
+## Case study: execution stepper cleanup
 
-The current `src/time_stepper.zig` shape likely violates the rule above.
+Flux previously carried a split between a stepper concept and a pure forwarding
+wrapper. That shape was removed because it violated the rule above.
 
-Today:
+The old shape:
 
-- `TimeStepStrategy(S)` validates the required `State` and `step` declarations
-- `TimeStepper(S)` re-validates the same concept and forwards `State` and `step`
+- re-validated the same contract in multiple layers
+- taught wrapper-oriented tests
+- leaked adapter and builder boilerplate into examples
 
-That means the wrapper adds no owned state, no caching, and no stronger
-interface. It is just another noun around the same contract.
+The current preferred pattern is:
 
-This then leaks outward:
+- keep one direct method concept at the execution boundary
+- let `Evolution` validate the chosen method directly
+- let `Evolution` own `dt`, time, and run bookkeeping
+- route method-specific configuration through `Evolution.Config`
 
-- tests end up proving that the forwarding wrapper forwards
-- examples and helpers start growing indirect “builder to stepper to step”
-  structures
-- the user-facing language becomes more ceremonial than structural
-
-The stronger default pattern would be:
-
-- keep the concept
-- require that concept where a system, runner, or evolution type accepts a
-  stepper
-- pass the conforming stepper directly
-
-In other words, the interface boundary should be the concept check, not the
-wrapper.
+In other words, the interface boundary is the concept check plus the execution
+owner, not a wrapper around the concept.
 
 ## Pattern: test the behavior or the invariant, not the forwarding layer
 
@@ -130,6 +122,70 @@ If a builder only:
 
 then it is probably an API smell rather than a useful pattern.
 
+## Pattern: type factories remain nouns; initialization lives on the returned type
+
+Many flux nouns are legitimately parameterized at comptime. That means a
+type-level factory such as:
+
+- `Mesh(2, 2)`
+- `Cochain(MeshType, k, Duality)`
+- `Evolution(StateType, MethodType, AuxType)`
+
+may still be the right implementation tool and the right public noun.
+
+The preferred construction pattern is:
+
+- keep the noun as the type factory
+- put staged configuration and initialization on the returned type
+- avoid module-level `init(...)` helpers that make the namespace pretend to be
+  the noun
+
+### Why
+
+This matches the mesh pattern cleanly:
+
+- `Mesh(...).plane(...)`
+- `Evolution(...).config().dt(...).init(...)`
+
+Both read as:
+
+- name the structural noun
+- choose construction/configuration on that noun
+- produce the runtime value
+
+The anti-pattern is:
+
+- `module.init(...)`
+
+because it weakens the package language and makes the namespace, rather than
+the noun, look like the constructor surface.
+
+Examples should also avoid redundant type aliases such as:
+
+- `const EvolutionType = Evolution(...);`
+- `var evolution = try EvolutionType.config()...init(...);`
+
+unless the type name is genuinely needed in type position.
+
+## Pattern: avoid fake runtime nouns when a method is really type-level
+
+If an execution method has no independent runtime identity, keep it as a type.
+
+Weak:
+
+- runtime `Stepper` object stores `state`
+- runtime `Stepper` object stores `dt`
+- `Evolution` also stores `state` or run counters
+
+Stronger:
+
+- `Method` is a comptime type with `advance(...)`
+- `Evolution` owns `dt`, time, and run bookkeeping
+- method-specific settings flow through `Evolution.Config`
+
+This keeps the execution language flat and avoids double ownership of the same
+idea.
+
 ## Pattern: examples should reveal the pattern, not compensate for it
 
 Examples are one of the fastest ways to detect a weak standard pattern.
@@ -156,17 +212,14 @@ Before introducing a new public or semi-public type, ask:
 
 If the answers are weak, do not add the type.
 
-## Current likely follow-up
+## Current implication
 
-The `TimeStepStrategy` / `TimeStepper` split should be revisited with this note
-in mind. The likely end state is:
+This note records the preferred pattern for future API work:
 
-- keep the concept
-- remove the pure forwarding wrapper
-- validate the concept at consumer boundaries such as evolution or system setup
-
-This note does not itself change the implementation. It defines the preferred
-pattern so future cleanup and refactors converge toward one consistent shape.
+- do not reintroduce wrapper-only execution layers
+- keep construction on the structural noun rather than on the module
+- keep execution methods type-level unless they own real runtime state
+- keep examples pointed at the direct `State` / `Method` / `Evolution` seams
 
 ## Pattern: separate model nouns from execution nouns
 

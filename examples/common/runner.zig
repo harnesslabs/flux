@@ -14,7 +14,6 @@ const flux_io = flux.io;
 
 pub const RunLoopConfig = struct {
     steps: u32,
-    dt: f64,
     final_time: f64,
     frames: u32,
     output_dir: []const u8,
@@ -137,7 +136,6 @@ fn runCapturedLoop(
             allocator,
             .{
                 .steps = config.steps,
-                .dt = config.dt,
                 .final_time = config.final_time,
             },
             .{
@@ -149,7 +147,6 @@ fn runCapturedLoop(
         allocator,
         .{
             .steps = config.steps,
-            .dt = config.dt,
             .final_time = config.final_time,
         },
         .{&snapshot_listener},
@@ -183,81 +180,6 @@ pub fn runEvolutionLoop(
     );
 }
 
-pub fn runStepLoop(
-    allocator: std.mem.Allocator,
-    config: RunLoopConfig,
-    stepper: anytype,
-    capturer: anytype,
-) !RunLoopResult {
-    const StepperWrapper = struct {
-        inner: @TypeOf(stepper),
-
-        pub fn step(self: *@This(), inner_allocator: std.mem.Allocator) !void {
-            try self.inner.step(inner_allocator);
-        }
-
-        pub fn deinit(self: *@This(), inner_allocator: std.mem.Allocator) void {
-            _ = self;
-            _ = inner_allocator;
-        }
-    };
-
-    const EvolutionType = flux.integrators.evolution.Evolution(void, StepperWrapper, void);
-    var evolution = EvolutionType.init(
-        allocator,
-        {},
-        .{ .inner = stepper },
-        {},
-    );
-    return runCapturedLoop(allocator, &evolution, config, capturer);
-}
-
-pub fn runSimulationLoop(
-    comptime MeshType: type,
-    allocator: std.mem.Allocator,
-    mesh: *const MeshType,
-    state_values: []const f64,
-    exact_values: ?[]f64,
-    config: RunLoopConfig,
-    exact_initializer: anytype,
-    stepper: anytype,
-) !RunLoopResult {
-    const Capturer = struct {
-        mesh_ptr: *const MeshType,
-        state: []const f64,
-        exact: ?[]f64,
-        exact_init: @TypeOf(exact_initializer),
-
-        pub fn capture(self: @This(), series: anytype, time: f64) !void {
-            if (self.exact) |exact_values_inner| {
-                self.exact_init.fill(self.mesh_ptr, exact_values_inner, time);
-                try series.capture(time, ExactFieldRenderer(MeshType){
-                    .mesh = self.mesh_ptr,
-                    .state = self.state,
-                    .exact = exact_values_inner,
-                });
-            }
-        }
-    };
-
-    const result = try runStepLoop(
-        allocator,
-        config,
-        stepper,
-        Capturer{
-            .mesh_ptr = mesh,
-            .state = state_values,
-            .exact = exact_values,
-            .exact_init = exact_initializer,
-        },
-    );
-
-    if (exact_values) |exact| {
-        exact_initializer.fill(mesh, exact, config.final_time);
-    }
-    return result;
-}
-
 pub fn runExactEvolutionLoop(
     comptime MeshType: type,
     allocator: std.mem.Allocator,
@@ -281,10 +203,10 @@ pub fn runExactEvolutionLoop(
         }
     };
 
-    const result = try runStepLoop(
+    const result = try runCapturedLoop(
         allocator,
-        config,
         evolution,
+        config,
         Capturer{
             .mesh_ptr = mesh,
             .evolution_ptr = evolution,
@@ -292,28 +214,6 @@ pub fn runExactEvolutionLoop(
     );
     evolution.fillExact(config.final_time);
     return result;
-}
-
-pub fn runExactFieldLoop(
-    comptime MeshType: type,
-    allocator: std.mem.Allocator,
-    mesh: *const MeshType,
-    state_values: []const f64,
-    exact_values: []f64,
-    config: RunLoopConfig,
-    exact_initializer: anytype,
-    stepper: anytype,
-) !RunLoopResult {
-    return runSimulationLoop(
-        MeshType,
-        allocator,
-        mesh,
-        state_values,
-        exact_values,
-        config,
-        exact_initializer,
-        stepper,
-    );
 }
 
 pub fn runConvergenceStudy(

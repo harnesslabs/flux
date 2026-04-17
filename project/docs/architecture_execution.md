@@ -1,170 +1,169 @@
-# Architecture Execution
+# Execution Architecture
 
-Date: 2026-04-15
+Date: 2026-04-17
 
 ## Purpose
 
-This note defines the durable execution language for flux: what owns repeated
-time stepping, what contract a stepper must satisfy, and which wrapper patterns
-should be deleted rather than normalized.
+This note defines the execution-side nouns for flux and the preferred
+construction pattern for time evolution.
 
-This is the canonical reference for execution-side API reviews. If a proposed
-execution type is hard to justify against this note, it should probably not
-exist.
+The goal is a small, explicit execution language:
 
-## Core rule
+- `State` owns the evolving PDE data and problem-owned caches
+- `Method` names the time-integration algorithm
+- `Evolution` owns repeated stepping, time, counters, listeners, and optional
+  exact/reference state
 
-Execution should read in terms of a small set of structural roles:
+## Core nouns
 
-- `System` owns assembled operators, solve state, boundary-conditioned variants,
-  and other problem-local caches
-- `State` is the evolving unknown
-- `Evolution` owns repeated-step orchestration
-- `TimeStepper` is a comptime contract, not a forwarding wrapper
+### `State`
 
-If examples need builder nouns, adapter nouns, or wrapper-only tests to fit the
-execution layer, the seam is wrong.
+`State` is the simulation state for one problem family.
 
-## Preferred execution boundary
+It may own:
 
-The default shape is:
+- cochains and field storage
+- operator contexts and assembled operators
+- mesh references
+- problem-specific caches
+- counters that are intrinsic to the physical update itself
 
-- define a comptime stepper concept
-- validate that concept at the `Evolution` boundary
-- pass the conforming stepper directly
+It should not be wrapped just to satisfy the execution API.
 
-The default shape is **not**:
+### `Method`
 
-- define a stepper concept
-- wrap it in a `TimeStepper(...)` forwarding type
-- wrap that again for a runner or evolution helper
-- add builder objects whose only job is to manufacture the wrapper
+`Method` is the integration algorithm: leapfrog, forward Euler, backward Euler,
+ or a future adaptive method.
 
-In other words: the boundary is the concept check.
+Default rule:
 
-## `TimeStepper` is a concept
+- if the method has no real runtime identity, keep it as a comptime type with
+  `advance(...)`
+- do not invent a runtime `Stepper` object that re-stores `state`, `dt`, or
+  other execution-owned data
 
-`TimeStepper` should mean the direct execution contract required by
-`Evolution`. It should not also name a second wrapper noun.
+Methods may expose:
 
-The preferred contract is intentionally small:
+- `pub fn advance(allocator, state, dt) !void`
+- `pub const Options = struct { ... }`
+- `pub fn initialize(allocator, state, dt, options) !void` when construction
+  needs method-specific setup
 
-- `pub fn step(self: *Stepper, allocator: std.mem.Allocator) !void`
-- `pub fn deinit(self: *Stepper, allocator: std.mem.Allocator) void`
+Method options are configuration, not a second execution noun.
 
-If execution later needs stronger guarantees, extend the concept. Do not add a
-wrapper type whose only job is to re-check the same declarations and forward
-them.
+### `Evolution`
 
-This implies:
+`Evolution` is the execution owner.
 
-- delete `src/time_stepper.zig` as a wrapper home
-- keep the concept near the execution layer, ideally as part of the evolution
-  module surface
-- make `Evolution` validate `TimeStepper` directly
+It owns:
 
-## `Evolution` is the execution noun
+- the primary state reference/value passed to it
+- `dt`
+- current time
+- step count
+- listeners and run orchestration
+- optional exact/reference auxiliary state
+- stored method options
 
-`Evolution` earns its existence when it owns real orchestration state such as:
+It does **not** own a separate runtime stepper object by default.
 
-- allocator and lifetime management for execution-owned state
-- step counts
-- run timing
-- listener dispatch
-- exact/reference auxiliary state
-- snapshot or observer staging
+## Construction pattern
 
-That is a real noun. It should stay.
+The standard construction path is:
 
-What should **not** exist between `Evolution` and the stepper:
+```zig
+const Evolution = flux.evolution.Evolution(StateType, MethodType, AuxType);
 
-- forwarding wrappers
-- builder objects with a single `initStepper` method
-- adapter types that only rename `step` and `deinit`
+var evolution = try Evolution
+    .config()
+    .dt(dt)
+    .methodOptions(.{ .source = source })
+    .init(allocator, state, aux);
+```
 
-If setup-time seeding is required before stepping begins, that belongs in one
-of two places:
+Interpretation:
 
-- system initialization, if it is inherent to system construction
-- stepper initialization, if it is specific to one execution story
+- `Evolution(...)` is the type-level noun, like `Mesh(...)`
+- `.config()` begins a staged configuration phase
+- `.dt(...)` configures execution-owned timestep policy
+- `.methodOptions(...)` configures method-specific settings when needed
+- `.init(...)` constructs the runtime execution object
 
-It should not force a second builder noun by default.
+Examples should prefer the inline form above over:
 
-## Relationship to `System`
+```zig
+const EvolutionType = flux.evolution.Evolution(...);
+var evolution = try EvolutionType.config()...init(...);
+```
 
-`System` and `Evolution` should remain separate.
+unless the type name itself is needed later in type position.
 
-- `System` is the PDE/model noun
-- `Evolution` is the repeated-step execution noun
+## Ownership rules
 
-The right simplification is a more direct contract between them, not merging
-them and not inserting additional wrapper layers.
+### `dt`
 
-A stepper may hold:
+`dt` belongs to `Evolution`, not to a thin method wrapper.
 
-- a pointer to system-owned state
-- references to state storage
-- execution-local counters or scratch
+Reason:
 
-But those choices should be expressed directly in the stepper type the caller
-passes to `Evolution`.
+- time-step policy is part of execution
+- fixed-step and adaptive-step methods should share one construction surface
+- future adaptive methods can refine how `Evolution` chooses or updates `dt`
+  without changing the top-level noun split
 
-## Example pressure tests
+### Method-specific setup
 
-Good execution design should make these examples small:
+If a method needs setup during construction, that setup happens downstream of
+`Evolution.Config.init(...)` through an optional method hook such as
+`initialize(...)`.
 
-1. an explicit hyperbolic system with a custom stepper
-2. an implicit parabolic system whose stepper seeds a linear solve state once
-3. a reference or exact-solution run with observer/listener hooks
+Example:
 
-If one of these requires:
+- backward Euler methods may seed a linear-system solution buffer from the
+  current state
+- a future adaptive method may validate tolerances or initialize controller
+  state
 
-- `HeatStepperBuilder`
-- `SurfaceStepperBuilder`
-- `StepperWrapper`
-- `TimeStepper(Strategy)`
+This keeps the construction surface flat while still allowing method-specific
+ setup.
 
-then the execution seam is too indirect.
+## Wrapper admission rule
 
-## Test policy
+Do not introduce a runtime `Stepper`/`Integrator` object unless it owns a real
+runtime identity such as:
 
-Prefer tests that prove:
+- mutable controller state that is separate from `Evolution`
+- owned scratch or cached factorization state that should not live on `State`
+- a representation boundary that materially simplifies the public language
 
-- `Evolution` rejects a non-conforming stepper at comptime
-- a conforming stepper advances state correctly
-- listeners and exact/reference hooks observe the right run events
-- PDE invariants hold over repeated steps
+If the proposed object only:
 
-Do not preserve tests whose only purpose is:
+- holds `state`
+- holds `dt`
+- forwards one `step` call
 
-- “the wrapper forwards to the inner type”
-- “the builder returns the wrapper”
+then it should not exist.
 
-Those tests protect ceremony, not behavior.
+## Example quality signal
 
-## Deletion guidance
+Example code should read like:
 
-The default cleanup order for execution abstraction drift is:
+- choose a `State`
+- choose a `Method`
+- configure `Evolution`
+- run
 
-1. delete forwarding wrappers
-2. inline one-shot builder setup into direct init
-3. make `Evolution` consume the direct concept
-4. only then ask whether any additional noun is still necessary
+When examples start inventing family-local wrapper structs just to satisfy the
+execution interface, the interface is wrong.
 
-If a proposed fix adds execution code, the burden is to explain why deletion
-and direct concept validation are insufficient.
+## Current implication
 
-## Current intended direction
+The default flux execution pattern is now:
 
-The current intended direction is:
+- `Evolution(State, Method, Aux).config().dt(...).init(...)`
+- methods are type-level by default
+- method options flow through `Evolution.Config`
+- `Evolution` owns time management and run bookkeeping
 
-- `TimeStepper` becomes a comptime concept only
-- `Evolution` remains the execution owner
-- `Evolution` validates the direct stepper contract
-- `src/time_stepper.zig` should disappear as a wrapper-focused module
-- example-local stepper builders and adapter wrappers should be removed as the
-  execution seam is tightened
-
-This note records the target shape. Individual code changes should converge
-toward it incrementally, but they should not add new wrapper layers in the
-meantime.
+This note should be updated before introducing adaptive execution features,
+observer attachment changes, or any new public execution noun.
