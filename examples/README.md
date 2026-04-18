@@ -5,34 +5,34 @@ one generic module and one CLI entry surface:
 
 | Family | Selector | Notes |
 |---|---|---|
-| [maxwell](maxwell/README.md) | `--dim 2|3` | 2D dipole / cavity, 3D cavity reference mode |
-| [euler](euler/README.md) | `--dim 2|3` | 2D circulation demo, 3D helicity regression mode |
-| [diffusion](diffusion/README.md) | `--surface plane|sphere` | plane heat solve and spherical eigenmode |
+| `new_maxwell` | `maxwell <scenario>` | `dipole` or `cavity`, with `cavity --dim 2|3` |
+| `new_euler` | `euler <scenario>` | `gaussian`, `dipole`, or `reference` |
+| `new_diffusion` | `diffusion <scenario>` | `plane` or `sphere` |
 
 ## Quick start
 
 Use `ReleaseFast` for real runs:
 
 ```sh
-zig build -Doptimize=ReleaseFast run-maxwell -- --dim 2 --demo dipole --frames 8
-zig build -Doptimize=ReleaseFast run-euler -- --dim 2 --demo dipole --frames 8
-zig build -Doptimize=ReleaseFast run-diffusion -- --surface plane --grid 32 --frames 8
+zig build -Doptimize=ReleaseFast run-maxwell -- --width 1.0 --height 1.0 --frames 8
+zig build -Doptimize=ReleaseFast run-euler -- --width 1.0 --height 1.0 --frames 8
+zig build -Doptimize=ReleaseFast run-diffusion -- --width 1.0 --height 1.0 --frames 8
 ```
 
 Use the umbrella binary when you want one command surface:
 
 ```sh
-zig build run -- maxwell --dim 2 --demo cavity
-zig build run -- euler --dim 3 --steps 100
-zig build run -- diffusion --surface sphere --refinement 3
+zig build run -- maxwell cavity --dim 2
+zig build run -- euler reference --steps 100
+zig build run -- diffusion sphere --refinement 3
 ```
 
 Ask a family for its own help:
 
 ```sh
-zig build run -- maxwell --dim 2 --help
-zig build run -- euler --dim 3 --help
-zig build run -- diffusion --help
+zig build run -- maxwell cavity --help
+zig build run -- euler gaussian --help
+zig build run -- diffusion plane --help
 ```
 
 ## Output
@@ -47,18 +47,13 @@ uv run tools/visualize.py output --output animation.png
 APNG is the default recommendation. Use `.gif` only when you specifically need
 GIF compatibility.
 
-## Shared CLI shape
+## CLI shape
 
-- `--steps`, `--dt`, `--output`, and `--frames` are shared across families.
-- `--grid` and `--domain` apply where the example is structured-grid based.
-- `--refinement` and `--final-time` apply to the spherical diffusion path.
-
-The timestep policy still depends on the family:
-
-- Maxwell 2D uses `dt = courant * h` unless `--dt` is passed.
-- Euler 2D uses `dt = cfl * h` unless `--dt` is passed.
-- Diffusion plane uses `dt_scale * h^2` unless `--dt` is passed.
-- Maxwell 3D, Euler 3D, and diffusion sphere use explicit fixed-time stepping.
+- `maxwell dipole` is the default Maxwell convenience scenario behind `run-maxwell`.
+- `euler gaussian` is the default Euler convenience scenario behind `run-euler`.
+- `diffusion plane` is the default diffusion convenience scenario behind `run-diffusion`.
+- `--steps`, `--dt`, `--output`, `--frames`, and `--output-interval` are the shared execution flags.
+- Per-family geometry/resolution flags are scenario-specific by design rather than forced through one shared schema.
 
 ## Verification
 

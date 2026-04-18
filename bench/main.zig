@@ -34,7 +34,8 @@ const PrimalC1 = flux.forms.Cochain(Mesh2D, 1, flux.forms.Primal);
 const PrimalC2 = flux.forms.Cochain(Mesh2D, 2, flux.forms.Primal);
 const DecOperatorContext2D = flux.operators.dec.context.OperatorContext(Mesh2D);
 const FeecOperatorContext2D = flux.operators.feec.context.OperatorContext(Mesh2D);
-const MaxwellSystem2D = maxwell.System(2);
+const MaxwellSystem2D = maxwell.system_api.Maxwell(2, Mesh2D);
+const DiffusionSphereSystem = diffusion_sphere.system_api.Diffusion(.sphere, SurfaceMesh);
 const ArithmeticMesh = struct {
     pub const embedding_dimension = 2;
     pub const topological_dimension = 2;
@@ -254,7 +255,7 @@ const BenchmarkContext = struct {
         cavity_mesh.* = try Mesh2D.cartesian(allocator, .{ cavity_grid, cavity_grid }, .{ cavity_domain, cavity_domain });
         errdefer cavity_mesh.deinit(allocator);
         var cavity_state = try MaxwellSystem2D.cavity(allocator, cavity_mesh, .{
-            .domain_length = cavity_domain,
+            .extents = .{ cavity_domain, cavity_domain },
             .time_step = cavityDt(),
             .boundary = .pec,
         });
@@ -775,7 +776,7 @@ fn benchDiffusionSurfaceSystemInit(ctx: *BenchmarkContext) void {
     var mesh = SurfaceMesh.sphere(ctx.allocator, 1.0, diffusion_surface_refinement) catch unreachable;
     defer mesh.deinit(ctx.allocator);
 
-    var system = diffusion_sphere.SystemImpl.init(ctx.allocator, &mesh, dt) catch unreachable;
+    var system = DiffusionSphereSystem.sphere(ctx.allocator, &mesh, dt) catch unreachable;
     defer system.deinit(ctx.allocator);
 }
 

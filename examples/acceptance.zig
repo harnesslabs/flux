@@ -1,149 +1,133 @@
 //! M3 milestone capstone — end-to-end conservation invariants in one place.
-//!
-//! Each existing example already verifies its own invariant in depth (1000-step
-//! Maxwell ∇·B run, 1000-step helicity run, 8/16/32 heat refinement study, …).
-//! This file is the *capstone*: short, focused tests that mirror the M3
-//! milestone acceptance criterion verbatim and run on every CI push so a single
-//! failing target proves M3 is broken without having to scan five files.
-//!
-//! Why these tests are short and complementary, not redundant. The per-example
-//! tests prove each invariant under heavy load; the capstone proves all five
-//! invariants hold together at the smallest grid that still demonstrates the
-//! property, so CI surfaces a regression in the *milestone* contract — not just
-//! in one example — within seconds.
 
 const std = @import("std");
 const testing = std.testing;
 const flux = @import("flux");
 
-// Each physics example is imported as a named module (declared in build.zig)
-// so its tests do not get pulled into this compilation unit. Only the five
-// acceptance tests defined in this file run when this target executes.
 const maxwell = @import("maxwell");
 const euler = @import("euler");
 const diffusion = @import("diffusion");
 
-/// Step count for the short capstone runs. The per-example deep tests run for
-/// 1000 steps; the capstone runs the same physics for an order of magnitude
-/// fewer steps because the invariants asserted here are *structural* — they
-/// hold to machine precision at every step or not at all.
 const acceptance_steps: u32 = 10;
 
 test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a short cavity run" {
     const allocator = testing.allocator;
+    const Mesh = flux.topology.Mesh(3, 3);
+    const Maxwell = maxwell.system_api.Maxwell(3, Mesh);
+    const dt: f64 = 0.0025;
 
-    const config = maxwell.CavityConfig(3){
-        .nx = 2,
-        .ny = 2,
-        .nz = 2,
-        .dt = 0.0025,
-        .steps = acceptance_steps,
-    };
-
-    var mesh = try maxwell.Mesh(3).cartesian(
-        allocator,
-        .{ config.nx, config.ny, config.nz },
-        .{ config.width, config.height, config.depth },
-    );
+    var mesh = try Mesh.cartesian(allocator, .{ 2, 2, 2 }, .{ 1.0, 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
-    var system = try maxwell.System(3).cavity(allocator, &mesh, .{
-        .width = config.width,
-        .height = config.height,
-        .time_step = config.dt,
+    var system = try Maxwell.cavity(allocator, &mesh, .{
+        .extents = .{ 1.0, 1.0, 1.0 },
+        .time_step = dt,
         .boundary = .pec,
     });
     defer system.deinit(allocator);
 
-    // The invariant must hold at every step, not just at the end — a leapfrog
-    // step that *temporarily* introduces ∇·B is already a failure.
-    const Leapfrog = flux.integrators.Leapfrog(*maxwell.System(3));
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try Leapfrog.advance(allocator, &system, config.dt);
+        try flux.integrators.Leapfrog(*Maxwell).advance(allocator, &system, dt);
 
-        const divergence = try maxwell.reference.divergenceNorm3D(allocator, &system.state);
-        try testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
+        var derivative = try (try system.state.dec_operators.exteriorDerivative(flux.forms.Primal, 2)).apply(allocator, system.state.B);
+        defer derivative.deinit(allocator);
+
+        var divergence_sq: f64 = 0.0;
+        for (derivative.values) |value| {
+            divergence_sq += value * value;
+        }
+        try testing.expectApproxEqAbs(@as(f64, 0.0), @sqrt(divergence_sq), 1e-12);
     }
 }
 
 test "M3 acceptance: Euler 2D conserves total circulation to machine precision over a short dipole run" {
     const allocator = testing.allocator;
+    const Mesh = flux.topology.Mesh(2, 2);
+    const Euler = euler.system_api.Euler(2, Mesh);
+    const dt: f64 = 0.1 * (1.0 / 16.0);
 
-    var mesh = try euler.Mesh(2).cartesian(allocator, .{ 16, 16 }, .{ 1.0, 1.0 });
+    var mesh = try Mesh.cartesian(allocator, .{ 16, 16 }, .{ 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
-    var system = try euler.System(2).init(allocator, &mesh);
+    var system = try Euler.dipole(allocator, &mesh);
     defer system.deinit(allocator);
 
-    try euler.seedReferenceMode(2, allocator, &system);
-
-    const dt: f64 = 0.1 * (1.0 / 16.0);
-    const circulation_initial = try euler.conservedQuantity(2, allocator, &system);
-
+    const circulation_initial = try system.measurement(allocator, .circulation);
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler.step(2, allocator, &system, dt);
+        try Euler.Explicit.advance(allocator, &system, dt);
     }
 
-    const circulation_final = try euler.conservedQuantity(2, allocator, &system);
+    const circulation_final = try system.measurement(allocator, .circulation);
     try testing.expectApproxEqAbs(circulation_initial, circulation_final, 1e-12);
 }
 
 test "M3 acceptance: Euler 3D conserves helicity to machine precision over a short reference-mode run" {
     const allocator = testing.allocator;
+    const Mesh = flux.topology.Mesh(3, 3);
+    const Euler = euler.system_api.Euler(3, Mesh);
 
-    var mesh = try euler.Mesh(3).cartesian(allocator, .{ 2, 2, 2 }, .{ 1.0, 1.0, 1.0 });
+    var mesh = try Mesh.cartesian(allocator, .{ 2, 2, 2 }, .{ 1.0, 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
-    var system = try euler.System(3).init(allocator, &mesh);
+    var system = try Euler.reference(allocator, &mesh);
     defer system.deinit(allocator);
 
-    try euler.seedReferenceMode(3, allocator, &system);
-    const helicity_initial = try euler.conservedQuantity(3, allocator, &system);
-
+    const helicity_initial = try system.measurement(allocator, .helicity);
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try euler.step(3, allocator, &system, 0.01);
+        try Euler.Explicit.advance(allocator, &system, 0.01);
     }
 
-    const helicity_final = try euler.conservedQuantity(3, allocator, &system);
+    const helicity_final = try system.measurement(allocator, .helicity);
     try testing.expectApproxEqAbs(helicity_initial, helicity_final, 1e-12);
 }
 
 test "M3 acceptance: heat equation reaches expected spatial convergence rate" {
     const allocator = testing.allocator;
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
 
-    // Two-grid pair is the smallest configuration that exhibits a measurable
-    // rate. The deeper {8,16,32} sweep lives in the per-example test.
-    const grids = [_]u32{ 8, 16 };
-    const results = try diffusion.runConvergenceStudy(.plane, allocator, &grids);
-    defer allocator.free(results);
-    const errors = [_]f64{ results[0].l2_error, results[1].l2_error };
+    const plane8 = try diffusion.runPlane(allocator, .{
+        .counts = .{ 8, 8 },
+        .steps = 8,
+        .extents = .{ 1.0, 1.0 },
+        .snapshot_cadence = .disabled,
+    }, stderr);
+    const plane16 = try diffusion.runPlane(allocator, .{
+        .counts = .{ 16, 16 },
+        .steps = 32,
+        .extents = .{ 1.0, 1.0 },
+        .snapshot_cadence = .disabled,
+    }, stderr);
+
+    const errors = [_]f64{ plane8.summary.l2_error_final, plane16.summary.l2_error_final };
     const rates = try flux.evolution.reference.empiricalRates(allocator, &errors, 2.0);
     defer allocator.free(rates);
 
-    try testing.expectEqual(grids.len, results.len);
     try testing.expectEqual(@as(usize, 1), rates.len);
-    // Backward-Euler heat solve is second order in space; require ≥ 1.75 to
-    // accept asymptotic noise on the small-grid pair while still failing if
-    // the operator stack regresses to first order.
     try testing.expect(rates[0] > 1.75);
 }
 
 test "M3 acceptance: diffusion-surface solution matches the analytic eigenmode under refinement" {
     const allocator = testing.allocator;
+    var stderr_buffer: [1024]u8 = undefined;
+    var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
+    const stderr = &stderr_writer.interface;
 
-    // Refinement levels 1 and 2 — the smallest pair that still shows error
-    // strictly decreasing on the sphere; refinement 0 is too coarse for the
-    // analytic eigenmode comparison.
-    const refinements = [_]u32{ 1, 2 };
-    const results = try diffusion.runConvergenceStudy(.sphere, allocator, &refinements);
-    defer allocator.free(results);
+    const coarse = try diffusion.runSphere(allocator, .{
+        .refinement = 1,
+        .steps = 8,
+        .snapshot_cadence = .disabled,
+    }, stderr);
+    const fine = try diffusion.runSphere(allocator, .{
+        .refinement = 2,
+        .steps = 8,
+        .snapshot_cadence = .disabled,
+    }, stderr);
 
-    try testing.expectEqual(refinements.len, results.len);
-    try testing.expect(results[1].l2_error < results[0].l2_error);
-    // Loose absolute bound at refinement 2 — the per-example test asserts the
-    // tighter < 1e-3 bound at refinement 3.
-    try testing.expect(results[1].l2_error < 5e-3);
+    try testing.expect(fine.summary.l2_error_final < coarse.summary.l2_error_final);
+    try testing.expect(fine.summary.l2_error_final < 5e-3);
 }
