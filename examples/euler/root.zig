@@ -195,7 +195,7 @@ fn defaultCounts(comptime dim: u8) [dim]u32 {
     return switch (dim) {
         2 => .{ 16, 16 },
         3 => .{ 2, 2, 2 },
-        else => @compileError("new_euler only supports dimensions 2 and 3"),
+        else => @compileError("euler examples only support dimensions 2 and 3"),
     };
 }
 

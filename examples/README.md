@@ -5,9 +5,9 @@ one generic module and one CLI entry surface:
 
 | Family | Selector | Notes |
 |---|---|---|
-| `new_maxwell` | `maxwell <scenario>` | `dipole` or `cavity`, with `cavity --dim 2|3` |
-| `new_euler` | `euler <scenario>` | `gaussian`, `dipole`, or `reference` |
-| `new_diffusion` | `diffusion <scenario>` | `plane` or `sphere` |
+| `maxwell` | `maxwell <scenario>` | `dipole` or `cavity`, with `cavity --dim 2|3` |
+| `euler` | `euler <scenario>` | `gaussian`, `dipole`, or `reference` |
+| `diffusion` | `diffusion <scenario>` | `plane` or `sphere` |
 
 ## Quick start
 
@@ -57,6 +57,5 @@ GIF compatibility.
 
 ## Verification
 
-Each family keeps its own convergence/regression tests next to the example
-module. [acceptance.zig](/Users/autoparallel/Code/flux/examples/acceptance.zig)
-contains the short end-to-end milestone checks that run all invariants together.
+Each family keeps its own convergence and regression tests next to the example
+module. The canonical repo-wide check is `zig build test --summary all`.

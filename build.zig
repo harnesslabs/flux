@@ -15,7 +15,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Fresh Maxwell examples (`dipole` or `cavity`)",
         .run_step = "run-maxwell",
         .run_doc = "Run the Maxwell example suite",
-        .physics_source = "examples/new_maxwell/root.zig",
+        .physics_source = "examples/maxwell/root.zig",
         .physics_module = "maxwell",
     },
     .{
@@ -23,7 +23,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Fresh Euler examples (`gaussian`, `dipole`, `reference`)",
         .run_step = "run-euler",
         .run_doc = "Run the Euler example suite",
-        .physics_source = "examples/new_euler/root.zig",
+        .physics_source = "examples/euler/root.zig",
         .physics_module = "euler",
     },
     .{
@@ -31,7 +31,7 @@ const example_specs = [_]ExampleSpec{
         .summary = "Fresh diffusion examples (`plane` or `sphere`)",
         .run_step = "run-diffusion",
         .run_doc = "Run the diffusion example suite",
-        .physics_source = "examples/new_diffusion/root.zig",
+        .physics_source = "examples/diffusion/root.zig",
         .physics_module = "diffusion",
     },
 };
@@ -232,8 +232,8 @@ pub fn build(b: *std.Build) void {
         .root_module = examples_common_mod,
     });
     const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
-    const new_maxwell_mod = b.createModule(.{
-        .root_source_file = b.path("examples/new_maxwell/root.zig"),
+    const maxwell_mod = b.createModule(.{
+        .root_source_file = b.path("examples/maxwell/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -241,8 +241,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "examples_common", .module = examples_common_mod },
         },
     });
-    const new_diffusion_mod = b.createModule(.{
-        .root_source_file = b.path("examples/new_diffusion/root.zig"),
+    const diffusion_mod = b.createModule(.{
+        .root_source_file = b.path("examples/diffusion/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -250,8 +250,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "examples_common", .module = examples_common_mod },
         },
     });
-    const new_euler_mod = b.createModule(.{
-        .root_source_file = b.path("examples/new_euler/root.zig"),
+    const euler_mod = b.createModule(.{
+        .root_source_file = b.path("examples/euler/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -259,51 +259,36 @@ pub fn build(b: *std.Build) void {
             .{ .name = "examples_common", .module = examples_common_mod },
         },
     });
-    const new_diffusion_tests = b.addTest(.{
-        .root_module = new_diffusion_mod,
+    const diffusion_tests = b.addTest(.{
+        .root_module = diffusion_mod,
     });
-    const run_new_diffusion_tests = b.addRunArtifact(new_diffusion_tests);
-    const new_euler_tests = b.addTest(.{
-        .root_module = new_euler_mod,
+    const run_diffusion_tests = b.addRunArtifact(diffusion_tests);
+    const euler_tests = b.addTest(.{
+        .root_module = euler_mod,
     });
-    const run_new_euler_tests = b.addRunArtifact(new_euler_tests);
-    const new_cli_commands_mod = b.createModule(.{
-        .root_source_file = b.path("examples/new_cli/commands.zig"),
+    const run_euler_tests = b.addRunArtifact(euler_tests);
+    const cli_commands_mod = b.createModule(.{
+        .root_source_file = b.path("examples/cli/commands.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "new_diffusion", .module = new_diffusion_mod },
-            .{ .name = "new_euler", .module = new_euler_mod },
-            .{ .name = "new_maxwell", .module = new_maxwell_mod },
+            .{ .name = "diffusion", .module = diffusion_mod },
+            .{ .name = "euler", .module = euler_mod },
+            .{ .name = "maxwell", .module = maxwell_mod },
         },
     });
-    const new_cli_root_mod = b.createModule(.{
-        .root_source_file = b.path("examples/new_cli/root.zig"),
+    const cli_root_mod = b.createModule(.{
+        .root_source_file = b.path("examples/cli/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "new_cli_commands", .module = new_cli_commands_mod },
+            .{ .name = "cli_commands", .module = cli_commands_mod },
         },
     });
-    const new_cli_exe = b.addExecutable(.{
-        .name = "flux-new-cli",
-        .root_module = new_cli_root_mod,
+    const cli_tests = b.addTest(.{
+        .root_module = cli_root_mod,
     });
-    b.installArtifact(new_cli_exe);
-    const new_cli_step = b.step("new-cli", "Build the fresh new example CLI");
-    new_cli_step.dependOn(&new_cli_exe.step);
-    new_cli_step.dependOn(b.getInstallStep());
-    const run_new_cli_cmd = b.addRunArtifact(new_cli_exe);
-    run_new_cli_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_new_cli_cmd.addArgs(args);
-    }
-    const run_new_cli_step = b.step("run-new-cli", "Run the fresh new example CLI");
-    run_new_cli_step.dependOn(&run_new_cli_cmd.step);
-    const new_cli_tests = b.addTest(.{
-        .root_module = new_cli_root_mod,
-    });
-    const run_new_cli_tests = b.addRunArtifact(new_cli_tests);
+    const run_cli_tests = b.addRunArtifact(cli_tests);
     const bench_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("bench/main.zig"),
@@ -312,7 +297,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "flux", .module = mod },
                 .{ .name = "maxwell_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/new_maxwell/root.zig"),
+                    .root_source_file = b.path("examples/maxwell/root.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{
@@ -321,7 +306,7 @@ pub fn build(b: *std.Build) void {
                     },
                 }) },
                 .{ .name = "diffusion_sphere_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/new_diffusion/root.zig"),
+                    .root_source_file = b.path("examples/diffusion/root.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{
@@ -348,7 +333,7 @@ pub fn build(b: *std.Build) void {
         );
     }
 
-    exe.root_module.addImport("example_app", new_cli_root_mod);
+    exe.root_module.addImport("example_app", cli_root_mod);
 
     // -- flux-examples umbrella binary --
     // A single executable exposes every example as a subcommand. The build
@@ -356,7 +341,7 @@ pub fn build(b: *std.Build) void {
     // while the runtime surface is the shared example app module.
     const examples_exe = b.addExecutable(.{
         .name = "flux-examples",
-        .root_module = new_cli_root_mod,
+        .root_module = cli_root_mod,
     });
     b.installArtifact(examples_exe);
 
@@ -383,7 +368,7 @@ pub fn build(b: *std.Build) void {
     // Dedicated generated test roots import those modules by name and
     // explicitly ref all decls, so adding a new `@import()` inside an example
     // can no longer silently expand its test suite.
-    var example_run_test_steps: [example_specs.len + 1]*std.Build.Step.Run = undefined;
+    var example_run_test_steps: [example_specs.len]*std.Build.Step.Run = undefined;
     inline for (example_specs, 0..) |spec, idx| {
         var test_imports: [1]std.Build.Module.Import = undefined;
         test_imports[0] = .{ .name = spec.physics_module, .module = physics_modules[idx] };
@@ -398,26 +383,6 @@ pub fn build(b: *std.Build) void {
         example_run_test_steps[idx] = b.addRunArtifact(test_exe);
     }
 
-    // The capstone target imports each physics module by name so its test
-    // root only runs the five acceptance tests, not the per-example test
-    // suites already covered by the modules above.
-    {
-        var acceptance_imports: [physics_modules.len + 2]std.Build.Module.Import = undefined;
-        acceptance_imports[0] = .{ .name = "flux", .module = mod };
-        acceptance_imports[1] = .{ .name = "examples_common", .module = examples_common_mod };
-        inline for (example_specs, 0..) |spec, idx| {
-            acceptance_imports[2 + idx] = .{ .name = spec.physics_module, .module = physics_modules[idx] };
-        }
-        const acceptance_mod = b.createModule(.{
-            .root_source_file = b.path("examples/acceptance.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &acceptance_imports,
-        });
-        const acceptance_test_exe = b.addTest(.{ .root_module = acceptance_mod });
-        example_run_test_steps[example_specs.len] = b.addRunArtifact(acceptance_test_exe);
-    }
-
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
@@ -425,9 +390,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_common_tests.step);
-    test_step.dependOn(&run_new_diffusion_tests.step);
-    test_step.dependOn(&run_new_euler_tests.step);
-    test_step.dependOn(&run_new_cli_tests.step);
+    test_step.dependOn(&run_diffusion_tests.step);
+    test_step.dependOn(&run_euler_tests.step);
+    test_step.dependOn(&run_cli_tests.step);
     test_step.dependOn(&run_bench_tests.step);
     for (example_run_test_steps) |run_step_ptr| {
         test_step.dependOn(&run_step_ptr.step);
@@ -481,7 +446,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "flux", .module = mod },
                 .{ .name = "maxwell_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/new_maxwell/root.zig"),
+                    .root_source_file = b.path("examples/maxwell/root.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
                     .imports = &.{
@@ -490,7 +455,7 @@ pub fn build(b: *std.Build) void {
                     },
                 }) },
                 .{ .name = "diffusion_sphere_example", .module = b.createModule(.{
-                    .root_source_file = b.path("examples/new_diffusion/root.zig"),
+                    .root_source_file = b.path("examples/diffusion/root.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
                     .imports = &.{
@@ -525,7 +490,6 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&exe_tests.step);
     check_step.dependOn(&examples_exe.step);
-    check_step.dependOn(&new_cli_exe.step);
     check_step.dependOn(&examples_common_tests.step);
     check_step.dependOn(&bench_tests.step);
 
@@ -536,10 +500,11 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
     ci_step.dependOn(&run_examples_common_tests.step);
-    ci_step.dependOn(&run_new_cli_tests.step);
+    ci_step.dependOn(&run_diffusion_tests.step);
+    ci_step.dependOn(&run_euler_tests.step);
+    ci_step.dependOn(&run_cli_tests.step);
     ci_step.dependOn(&run_bench_tests.step);
     ci_step.dependOn(&examples_exe.step);
-    ci_step.dependOn(&new_cli_exe.step);
     for (example_run_test_steps) |run_step_ptr| {
         ci_step.dependOn(&run_step_ptr.step);
     }

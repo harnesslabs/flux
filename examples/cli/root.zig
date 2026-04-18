@@ -1,5 +1,5 @@
 const std = @import("std");
-const commands = @import("new_cli_commands");
+const commands = @import("cli_commands");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};

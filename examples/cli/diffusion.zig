@@ -1,9 +1,9 @@
 const std = @import("std");
-const diffusion = @import("new_diffusion");
+const diffusion = @import("diffusion");
 const parse = @import("parse.zig");
 
 pub const name = "diffusion";
-pub const summary = "Fresh diffusion examples over examples/new_diffusion";
+pub const summary = "Diffusion examples";
 
 const Scenario = enum {
     plane,

@@ -1,13 +1,14 @@
 const std = @import("std");
+const euler = @import("euler");
 const parse = @import("parse.zig");
-const maxwell = @import("new_maxwell");
 
-pub const name = "maxwell";
-pub const summary = "New Maxwell example CLI over examples/new_maxwell";
+pub const name = "euler";
+pub const summary = "Euler examples";
 
 const Scenario = enum {
+    gaussian,
     dipole,
-    cavity,
+    reference,
 };
 
 pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -24,28 +25,31 @@ pub fn run(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
         return;
     }
 
-    const scenario: Scenario = if (parse.eql(scenario_arg, "dipole"))
+    const scenario: Scenario = if (parse.eql(scenario_arg, "gaussian"))
+        .gaussian
+    else if (parse.eql(scenario_arg, "dipole"))
         .dipole
-    else if (parse.eql(scenario_arg, "cavity"))
-        .cavity
+    else if (parse.eql(scenario_arg, "reference"))
+        .reference
     else {
-        std.debug.print("error: unknown Maxwell scenario '{s}'\n\n", .{scenario_arg});
+        std.debug.print("error: unknown Euler scenario '{s}'\n\n", .{scenario_arg});
         printUsage();
         std.process.exit(2);
     };
 
     switch (scenario) {
-        .dipole => try runDipole(allocator, &parser),
-        .cavity => try runCavity(allocator, &parser),
+        .gaussian => try run2DScenario(.gaussian, allocator, &parser),
+        .dipole => try run2DScenario(.dipole, allocator, &parser),
+        .reference => try runReference(allocator, &parser),
     }
 }
 
-fn runDipole(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
-    var config = maxwell.DipoleConfig2D{};
+fn run2DScenario(comptime scenario: Scenario, allocator: std.mem.Allocator, parser: *parse.Parser) !void {
+    var config = euler.Config(2){};
 
     while (parser.next()) |arg| {
         if (parse.eql(arg, "--help") or parse.eql(arg, "-h")) {
-            printDipoleUsage();
+            print2DUsage();
             return;
         }
         if (parse.eql(arg, "--steps")) {
@@ -53,23 +57,19 @@ fn runDipole(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
             continue;
         }
         if (parse.eql(arg, "--nx")) {
-            const value = try parser.parseU32("--nx");
-            config.counts[0] = value;
+            config.counts[0] = try parser.parseU32("--nx");
             continue;
         }
         if (parse.eql(arg, "--ny")) {
-            const value = try parser.parseU32("--ny");
-            config.counts[1] = value;
+            config.counts[1] = try parser.parseU32("--ny");
             continue;
         }
         if (parse.eql(arg, "--width")) {
-            const value = try parser.parseF64("--width");
-            config.extents[0] = value;
+            config.extents[0] = try parser.parseF64("--width");
             continue;
         }
         if (parse.eql(arg, "--height")) {
-            const value = try parser.parseF64("--height");
-            config.extents[1] = value;
+            config.extents[1] = try parser.parseF64("--height");
             continue;
         }
         if (parse.eql(arg, "--courant")) {
@@ -78,14 +78,6 @@ fn runDipole(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
         }
         if (parse.eql(arg, "--dt")) {
             config.time_step_override = try parser.parseF64("--dt");
-            continue;
-        }
-        if (parse.eql(arg, "--frequency")) {
-            config.frequency_hz = try parser.parseF64("--frequency");
-            continue;
-        }
-        if (parse.eql(arg, "--amplitude")) {
-            config.amplitude = try parser.parseF64("--amplitude");
             continue;
         }
         if (parse.eql(arg, "--output")) {
@@ -100,55 +92,44 @@ fn runDipole(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
             config.snapshot_cadence = .{ .interval = try parser.parseU32("--output-interval") };
             continue;
         }
-        failUnknownFlag(arg, printDipoleUsage);
+        failUnknownFlag(arg, print2DUsage);
     }
 
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
 
-    const result = try maxwell.runDipole(allocator, config, stderr);
+    const result = switch (scenario) {
+        .gaussian => try euler.runGaussian(allocator, config, stderr),
+        .dipole => try euler.runDipole(allocator, config, stderr),
+        else => unreachable,
+    };
     try stderr.print(
-        "dipole: elapsed={d:.3}s snapshots={d} energy={e}\n",
-        .{ result.elapsed_s, result.snapshot_count, result.summary.energy_final },
+        "euler_{s}: elapsed={d:.3}s snapshots={d} invariant={e} -> {e}\n",
+        .{
+            if (scenario == .gaussian) "gaussian" else "dipole",
+            result.elapsed_s,
+            result.snapshot_count,
+            result.summary.invariant_initial,
+            result.summary.invariant_final,
+        },
     );
 }
 
-fn runCavity(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
-    var dim: u8 = 2;
-    if (parser.peek()) |arg| {
-        if (parse.eql(arg, "--dim")) {
-            _ = parser.next();
-            dim = @intCast(try parser.parseU32("--dim"));
-        }
-    }
-
-    switch (dim) {
-        2 => try runCavityDim(2, allocator, parser),
-        3 => try runCavityDim(3, allocator, parser),
-        else => {
-            std.debug.print("error: Maxwell cavity only supports --dim 2 or --dim 3\n", .{});
-            std.process.exit(2);
-        },
-    }
-}
-
-fn runCavityDim(comptime dim: u8, allocator: std.mem.Allocator, parser: *parse.Parser) !void {
-    var config = maxwell.CavityConfig(dim){};
+fn runReference(allocator: std.mem.Allocator, parser: *parse.Parser) !void {
+    var config = euler.Config(3){};
 
     while (parser.next()) |arg| {
         if (parse.eql(arg, "--help") or parse.eql(arg, "-h")) {
-            printCavityUsage();
+            print3DUsage();
             return;
         }
         if (parse.eql(arg, "--steps")) {
             config.steps = try parser.parseU32("--steps");
             continue;
         }
-        if (parse.eql(arg, "--reference")) {
-            config.reference = true;
-            continue;
-        }
+        if (try consumeCounts(3, parser, arg, &config.counts)) continue;
+        if (try consumeExtents(3, parser, arg, &config.extents)) continue;
         if (parse.eql(arg, "--courant")) {
             config.courant = try parser.parseF64("--courant");
             continue;
@@ -169,34 +150,23 @@ fn runCavityDim(comptime dim: u8, allocator: std.mem.Allocator, parser: *parse.P
             config.snapshot_cadence = .{ .interval = try parser.parseU32("--output-interval") };
             continue;
         }
-        if (try consumeCounts(dim, parser, arg, &config.counts)) continue;
-        if (try consumeExtents(dim, parser, arg, &config.extents)) continue;
-        failUnknownFlag(arg, printCavityUsage);
+        failUnknownFlag(arg, print3DUsage);
     }
 
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
 
-    const result = try maxwell.runCavity(dim, allocator, config, stderr);
-    if (config.reference) {
-        try stderr.print(
-            "cavity_{d}d: elapsed={d:.3}s snapshots={d} energy={e} electric_l2={e} magnetic_l2={e}\n",
-            .{
-                dim,
-                result.elapsed_s,
-                result.snapshot_count,
-                result.summary.energy_final,
-                result.summary.electric_l2_final.?,
-                result.summary.magnetic_l2_final.?,
-            },
-        );
-    } else {
-        try stderr.print(
-            "cavity_{d}d: elapsed={d:.3}s snapshots={d} energy={e}\n",
-            .{ dim, result.elapsed_s, result.snapshot_count, result.summary.energy_final },
-        );
-    }
+    const result = try euler.runReference(allocator, config, stderr);
+    try stderr.print(
+        "euler_reference_3d: elapsed={d:.3}s snapshots={d} invariant={e} -> {e}\n",
+        .{
+            result.elapsed_s,
+            result.snapshot_count,
+            result.summary.invariant_initial,
+            result.summary.invariant_final,
+        },
+    );
 }
 
 fn consumeCounts(comptime dim: u8, parser: *parse.Parser, arg: []const u8, counts: *[dim]u32) !bool {
@@ -240,23 +210,25 @@ fn failUnknownFlag(arg: []const u8, usage: *const fn () void) noreturn {
 fn printUsage() void {
     std.debug.print(
         \\
-        \\  flux-new-cli maxwell <scenario> [options]
+        \\  flux-new-cli euler <scenario> [options]
         \\
         \\  scenarios:
-        \\    dipole    2D point dipole radiation
-        \\    cavity    2D or 3D cavity mode
+        \\    gaussian   2D Gaussian vortex
+        \\    dipole     2D vortex dipole
+        \\    reference  3D reference mode
         \\
         \\  ask a scenario for details:
-        \\    zig build run-new-cli -- maxwell dipole --help
-        \\    zig build run-new-cli -- maxwell cavity --help
+        \\    zig build run-new-cli -- euler gaussian --help
+        \\    zig build run-new-cli -- euler dipole --help
+        \\    zig build run-new-cli -- euler reference --help
         \\
     , .{});
 }
 
-fn printDipoleUsage() void {
+fn print2DUsage() void {
     std.debug.print(
         \\
-        \\  flux-new-cli maxwell dipole [options]
+        \\  flux-new-cli euler <gaussian|dipole> [options]
         \\
         \\  options:
         \\    --steps N
@@ -264,8 +236,6 @@ fn printDipoleUsage() void {
         \\    --width L --height L
         \\    --courant C
         \\    --dt DT
-        \\    --frequency F
-        \\    --amplitude A
         \\    --output DIR
         \\    --frames N
         \\    --output-interval N
@@ -273,18 +243,17 @@ fn printDipoleUsage() void {
     , .{});
 }
 
-fn printCavityUsage() void {
+fn print3DUsage() void {
     std.debug.print(
         \\
-        \\  flux-new-cli maxwell cavity [--dim 2|3] [options]
+        \\  flux-new-cli euler reference [options]
         \\
         \\  options:
         \\    --steps N
-        \\    --n0 N --n1 N [--n2 N]
-        \\    --extent0 L --extent1 L [--extent2 L]
+        \\    --n0 N --n1 N --n2 N
+        \\    --extent0 L --extent1 L --extent2 L
         \\    --courant C
         \\    --dt DT
-        \\    --reference
         \\    --output DIR
         \\    --frames N
         \\    --output-interval N

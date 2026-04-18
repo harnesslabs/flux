@@ -156,7 +156,7 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
             options: DipoleOptions(dim),
         ) !Self {
             comptime {
-                if (dim != 2) @compileError("new_maxwell dipole is only defined for 2D");
+                if (dim != 2) @compileError("maxwell dipole is only defined for 2D");
             }
 
             var system = try Self.init(allocator, mesh);
@@ -350,7 +350,7 @@ pub fn DipoleOptions(comptime dim: u8) type {
 
 pub fn CavityOptions(comptime dim: u8) type {
     comptime {
-        if (dim != 2 and dim != 3) @compileError("new_maxwell only supports dimensions 2 and 3");
+        if (dim != 2 and dim != 3) @compileError("maxwell examples only support dimensions 2 and 3");
     }
     return struct {
         extents: [dim]f64,
@@ -384,7 +384,7 @@ fn writeProjectedTetFields(
 
 pub fn CavityMeasurementProvider(comptime dim: u8) type {
     comptime {
-        if (dim != 2 and dim != 3) @compileError("new_maxwell only supports dimensions 2 and 3");
+        if (dim != 2 and dim != 3) @compileError("maxwell examples only support dimensions 2 and 3");
     }
     return struct {
         pub const Measurement = enum { energy, electric_l2, magnetic_l2 };

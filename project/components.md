@@ -68,11 +68,11 @@ writes `.vtu` files.
 
 ### examples
 **Domain label:** `domain/em`
-**Owns:** `examples/new_maxwell/`, `examples/new_euler/`, `examples/new_diffusion/`, `examples/new_cli/`, `examples/common/`, `examples/acceptance.zig`
+**Owns:** `examples/maxwell/`, `examples/euler/`, `examples/diffusion/`, `examples/cli/`, `examples/common/`
 **Dependencies:** flux library (via package import)
 **Description:** End-to-end physics examples and their shared CLI/output
 infrastructure. Each family exports one system noun in `system.zig` and a thin
-scenario/config surface in `root.zig`. `examples/new_cli/` is the canonical
+scenario/config surface in `root.zig`. `examples/cli/` is the canonical
 example CLI.
 
 ### cli

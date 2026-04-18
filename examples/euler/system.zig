@@ -11,7 +11,7 @@ const wedge_product = flux.operators.wedge_product;
 
 pub fn Euler(comptime dim: u8, comptime MeshType: type) type {
     comptime {
-        if (dim != 2 and dim != 3) @compileError("new_euler only supports dimensions 2 and 3");
+        if (dim != 2 and dim != 3) @compileError("euler examples only support dimensions 2 and 3");
     }
 
     return struct {

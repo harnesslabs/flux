@@ -295,7 +295,7 @@ fn defaultCounts(comptime dim: u8) [dim]u32 {
     return switch (dim) {
         2 => .{ 32, 32 },
         3 => .{ 2, 2, 2 },
-        else => @compileError("new_maxwell only supports dimensions 2 and 3"),
+        else => @compileError("maxwell examples only support dimensions 2 and 3"),
     };
 }
 
@@ -303,7 +303,7 @@ fn defaultSnapshotCadence(comptime dim: u8) SnapshotCadence {
     return switch (dim) {
         2 => .{ .frames = 100 },
         3 => .disabled,
-        else => @compileError("new_maxwell only supports dimensions 2 and 3"),
+        else => @compileError("maxwell examples only support dimensions 2 and 3"),
     };
 }
 
