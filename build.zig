@@ -272,6 +272,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "new_diffusion", .module = new_diffusion_mod },
+            .{ .name = "new_euler", .module = new_euler_mod },
             .{ .name = "new_maxwell", .module = new_maxwell_mod },
         },
     });

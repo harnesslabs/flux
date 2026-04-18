@@ -30,6 +30,10 @@ pub fn Diffusion(comptime surface_kind: SurfaceKind, comptime MeshType: type) ty
 
         pub const BackwardEuler = struct {
             pub fn initialize(_: std.mem.Allocator, system: *Self, _: f64) void {
+                if (surface_kind == .plane) {
+                    system.runtime.linear_system.seedSolutionFromFull(system.temperature.values);
+                    return;
+                }
                 system.runtime.linear_system.seedSolution(system.temperature.values);
             }
 
