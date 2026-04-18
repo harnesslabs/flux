@@ -1,5 +1,6 @@
 const std = @import("std");
 const flux = @import("flux");
+const common = @import("examples_common");
 
 const cochain = flux.forms;
 const topology = flux.topology;
@@ -8,6 +9,10 @@ const feec_context_mod = flux.operators.feec.context;
 
 pub const Mesh2D = topology.Mesh(2, 2);
 pub const Mesh3D = topology.Mesh(3, 3);
+
+pub const BoundaryCondition = enum {
+    pec,
+};
 
 fn MaxwellCore(comptime MeshType: type, comptime Hooks: type) type {
     return struct {
@@ -245,5 +250,226 @@ pub fn PointDipole(comptime MeshType: type) type {
             @memset(J.values, 0.0);
             J.values[self.edge_index] = (self.amplitude / self.edge_length) * @sin(2.0 * std.math.pi * self.frequency * t);
         }
+    };
+}
+
+pub fn DipoleOptions(comptime dim: u8) type {
+    return struct {
+        center: [dim]f64,
+        frequency: f64,
+        amplitude: f64,
+        boundary: BoundaryCondition = .pec,
+    };
+}
+
+pub fn CavityOptions(comptime dim: u8) type {
+    return switch (dim) {
+        2 => struct {
+            domain_length: f64,
+            time_step: f64,
+            boundary: BoundaryCondition = .pec,
+        },
+        3 => struct {
+            width: f64,
+            height: f64,
+            time_step: f64,
+            boundary: BoundaryCondition = .pec,
+        },
+        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
+    };
+}
+
+fn Maxwell2D(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Field = enum { electric, magnetic, current };
+        pub const Measurement = enum { energy };
+
+        state: StateForMesh2D(MeshType),
+        source: ?PointDipole(MeshType) = null,
+        boundary: BoundaryCondition = .pec,
+
+        pub const Leapfrog = struct {
+            pub fn first(allocator: std.mem.Allocator, system: *Self, dt: f64) !void {
+                const time = @as(f64, @floatFromInt(system.state.timestep)) * dt;
+                if (system.source) |source| {
+                    source.apply(&system.state.J, time);
+                } else {
+                    @memset(system.state.J.values, 0.0);
+                }
+                try faraday_step(allocator, &system.state, dt);
+            }
+
+            pub fn second(allocator: std.mem.Allocator, system: *Self, dt: f64) !void {
+                try ampere_step(allocator, &system.state, dt);
+                system.state.timestep += 1;
+            }
+
+            pub fn applyBoundary(system: *Self) void {
+                switch (system.boundary) {
+                    .pec => apply_pec_boundary(&system.state),
+                }
+            }
+        };
+
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
+            return .{
+                .state = try StateForMesh2D(MeshType).init(allocator, mesh),
+            };
+        }
+
+        pub fn dipole(
+            allocator: std.mem.Allocator,
+            mesh: *const MeshType,
+            options: DipoleOptions(2),
+        ) !Self {
+            var system = try Self.init(allocator, mesh);
+            system.source = PointDipole(MeshType).init(mesh, options.frequency, options.amplitude, options.center);
+            system.boundary = options.boundary;
+            return system;
+        }
+
+        pub fn cavity(
+            allocator: std.mem.Allocator,
+            mesh: *const MeshType,
+            options: CavityOptions(2),
+        ) !Self {
+            var system = try Self.init(allocator, mesh);
+            @import("reference.zig").project_te10_b(mesh, system.state.B.values, -options.time_step / 2.0, options.domain_length);
+            system.boundary = options.boundary;
+            system.source = null;
+            return system;
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.state.deinit(allocator);
+        }
+
+        pub fn measurement(self: *const Self, allocator: std.mem.Allocator, which: Measurement) !f64 {
+            return switch (which) {
+                .energy => try electromagnetic_energy(allocator, &self.state),
+            };
+        }
+
+        pub fn writeFields(self: *const Self, allocator: std.mem.Allocator, writer: anytype, fields: []const Field) !void {
+            var cell_data: [3]flux.io.DataArraySlice = undefined;
+            var projected: [3]?[]f64 = .{ null, null, null };
+            defer for (projected) |maybe_values| {
+                if (maybe_values) |values| allocator.free(values);
+            };
+
+            var count: usize = 0;
+            for (fields) |field| {
+                switch (field) {
+                    .electric => {
+                        projected[count] = try flux.io.project_edges_to_faces(allocator, self.state.mesh.*, self.state.E.values);
+                        cell_data[count] = .{ .name = "electric", .values = projected[count].? };
+                    },
+                    .magnetic => {
+                        cell_data[count] = .{ .name = "magnetic", .values = self.state.B.values };
+                    },
+                    .current => {
+                        projected[count] = try flux.io.project_edges_to_faces(allocator, self.state.mesh.*, self.state.J.values);
+                        cell_data[count] = .{ .name = "current", .values = projected[count].? };
+                    },
+                }
+                count += 1;
+            }
+
+            try flux.io.write(writer, self.state.mesh.*, &.{}, cell_data[0..count]);
+        }
+    };
+}
+
+fn Maxwell3D(comptime MeshType: type) type {
+    return struct {
+        const Self = @This();
+
+        pub const Field = enum { electric, magnetic, current };
+        pub const Measurement = enum { energy };
+
+        state: StateForMesh3D(MeshType),
+        boundary: BoundaryCondition = .pec,
+
+        pub const Leapfrog = struct {
+            pub fn first(allocator: std.mem.Allocator, system: *Self, dt: f64) !void {
+                try faraday_step(allocator, &system.state, dt);
+            }
+
+            pub fn second(allocator: std.mem.Allocator, system: *Self, dt: f64) !void {
+                try ampere_step_3d(allocator, &system.state, dt);
+                system.state.timestep += 1;
+            }
+
+            pub fn applyBoundary(system: *Self) void {
+                switch (system.boundary) {
+                    .pec => apply_pec_boundary(&system.state),
+                }
+            }
+        };
+
+        pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !Self {
+            return .{
+                .state = try StateForMesh3D(MeshType).init(allocator, mesh),
+            };
+        }
+
+        pub fn cavity(
+            allocator: std.mem.Allocator,
+            mesh: *const MeshType,
+            options: CavityOptions(3),
+        ) !Self {
+            var system = try Self.init(allocator, mesh);
+            try @import("reference.zig").seedTm110Mode(allocator, &system.state, options.time_step, options.width, options.height);
+            system.boundary = options.boundary;
+            return system;
+        }
+
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            self.state.deinit(allocator);
+        }
+
+        pub fn measurement(self: *const Self, allocator: std.mem.Allocator, which: Measurement) !f64 {
+            return switch (which) {
+                .energy => try electromagnetic_energy(allocator, &self.state),
+            };
+        }
+
+        pub fn writeFields(self: *const Self, allocator: std.mem.Allocator, writer: anytype, fields: []const Field) !void {
+            var projected_fields: [3]common.viz.TetProjectionField = undefined;
+            var count: usize = 0;
+            for (fields) |field| {
+                projected_fields[count] = switch (field) {
+                    .electric => .{ .name = "electric", .kind = .edge_abs_mean, .values = self.state.E.values },
+                    .magnetic => .{ .name = "magnetic", .kind = .face_abs_mean, .values = self.state.B.values },
+                    .current => .{ .name = "current", .kind = .edge_abs_mean, .values = self.state.J.values },
+                };
+                count += 1;
+            }
+
+            switch (count) {
+                0 => try flux.io.write(writer, self.state.mesh.*, &.{}, &.{}),
+                1 => try common.viz.writeProjectedTetFields(1, allocator, writer, self.state.mesh, .{projected_fields[0]}),
+                2 => try common.viz.writeProjectedTetFields(2, allocator, writer, self.state.mesh, .{
+                    projected_fields[0],
+                    projected_fields[1],
+                }),
+                3 => try common.viz.writeProjectedTetFields(3, allocator, writer, self.state.mesh, .{
+                    projected_fields[0],
+                    projected_fields[1],
+                    projected_fields[2],
+                }),
+                else => unreachable,
+            }
+        }
+    };
+}
+
+pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
+    return switch (dim) {
+        2 => Maxwell2D(MeshType),
+        3 => Maxwell3D(MeshType),
+        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
