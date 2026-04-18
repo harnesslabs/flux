@@ -85,6 +85,20 @@ const RunResult3D = struct {
     snapshot_count: u32,
 };
 
+const ReferenceRunResult2D = struct {
+    elapsed_s: f64,
+    snapshot_count: u32,
+    electric_l2_final: f64,
+    magnetic_l2_final: f64,
+};
+
+const ReferenceRunResult3D = struct {
+    elapsed_s: f64,
+    snapshot_count: u32,
+    electric_l2_final: f64,
+    magnetic_l2_final: f64,
+};
+
 pub fn Mesh(comptime dim: u8) type {
     return switch (dim) {
         2 => runtime.Mesh2D,
@@ -101,6 +115,14 @@ pub fn RunResult(comptime dim: u8) type {
     return switch (dim) {
         2 => RunResult2D,
         3 => RunResult3D,
+        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
+    };
+}
+
+pub fn ReferenceRunResult(comptime dim: u8) type {
+    return switch (dim) {
+        2 => ReferenceRunResult2D,
+        3 => ReferenceRunResult3D,
         else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
     };
 }
@@ -178,6 +200,19 @@ pub fn runCavity(
     return switch (dim) {
         2 => try runCavity2D(allocator, config, writer),
         3 => try runCavity3D(allocator, config, writer),
+        else => unreachable,
+    };
+}
+
+pub fn runCavityWithReference(
+    comptime dim: u8,
+    allocator: std.mem.Allocator,
+    config: CavityConfig(dim),
+    writer: *std.Io.Writer,
+) !ReferenceRunResult(dim) {
+    return switch (dim) {
+        2 => try runCavityWithReference2D(allocator, config, writer),
+        3 => try runCavityWithReference3D(allocator, config, writer),
         else => unreachable,
     };
 }
@@ -315,6 +350,135 @@ fn runCavity3D(
         else
             0,
     };
+}
+
+fn runCavityWithReference2D(
+    allocator: std.mem.Allocator,
+    config: CavityConfig(2),
+    writer: *std.Io.Writer,
+) !ReferenceRunResult(2) {
+    const SystemType = System(2);
+    const dt = config.dt();
+    var mesh = try runtime.Mesh2D.cartesian(
+        allocator,
+        .{ config.grid, config.grid },
+        .{ config.domain, config.domain },
+    );
+    defer mesh.deinit(allocator);
+
+    var system = try SystemType.cavity(allocator, &mesh, .{
+        .domain_length = config.domain,
+        .time_step = dt,
+        .boundary = .pec,
+    });
+    defer system.deinit(allocator);
+
+    const interval = @max(@as(u32, 1), common.framesToInterval(config.steps, config.frames));
+    const provider = reference.CavityMeasurementProvider(2){
+        .domain_length = config.domain,
+        .time_step = dt,
+    };
+
+    var evolution = try flux.evolution.Evolution(*SystemType, flux.integrators.Leapfrog).config()
+        .dt(dt)
+        .steps(config.steps)
+        .listen(flux.listeners.Progress(writer))
+        .listen(
+            flux.listeners.Snapshots(*SystemType)
+                .measureWith(provider)
+                .field(.electric)
+                .field(.magnetic)
+                .measurement(.energy)
+                .measurement(.electric_l2)
+                .measurement(.magnetic_l2)
+                .directory(config.output_dir)
+                .baseName("cavity_reference")
+                .everySteps(interval),
+        )
+        .init(allocator, &system);
+    defer evolution.deinit();
+
+    const run_result = try evolution.run();
+    return .{
+        .elapsed_s = run_result.elapsed_s,
+        .snapshot_count = snapshotCount(config.steps, interval),
+        .electric_l2_final = try provider.measurement(allocator, &system, .electric_l2, evolution.currentTime()),
+        .magnetic_l2_final = try provider.measurement(allocator, &system, .magnetic_l2, evolution.currentTime()),
+    };
+}
+
+fn runCavityWithReference3D(
+    allocator: std.mem.Allocator,
+    config: CavityConfig(3),
+    writer: *std.Io.Writer,
+) !ReferenceRunResult(3) {
+    const SystemType = System(3);
+    var mesh = try runtime.Mesh3D.cartesian(
+        allocator,
+        .{ config.nx, config.ny, config.nz },
+        .{ config.width, config.height, config.depth },
+    );
+    defer mesh.deinit(allocator);
+
+    var system = try SystemType.cavity(allocator, &mesh, .{
+        .width = config.width,
+        .height = config.height,
+        .time_step = config.dt,
+        .boundary = .pec,
+    });
+    defer system.deinit(allocator);
+
+    const provider = reference.CavityMeasurementProvider(3){
+        .width = config.width,
+        .height = config.height,
+        .time_step = config.dt,
+    };
+
+    const run_result = if (config.output_dir != null and config.output_interval > 0) blk: {
+        var evolution = try flux.evolution.Evolution(*SystemType, flux.integrators.Leapfrog).config()
+            .dt(config.dt)
+            .steps(config.steps)
+            .listen(flux.listeners.Progress(writer))
+            .listen(
+                flux.listeners.Snapshots(*SystemType)
+                    .measureWith(provider)
+                    .field(.electric)
+                    .field(.magnetic)
+                    .measurement(.energy)
+                    .measurement(.electric_l2)
+                    .measurement(.magnetic_l2)
+                    .directory(config.output_dir.?)
+                    .baseName("cavity_reference_3d")
+                    .everySteps(config.output_interval),
+            )
+            .init(allocator, &system);
+        defer evolution.deinit();
+
+        const result = try evolution.run();
+        break :blk ReferenceRunResult(3){
+            .elapsed_s = result.elapsed_s,
+            .snapshot_count = snapshotCount(config.steps, config.output_interval),
+            .electric_l2_final = try provider.measurement(allocator, &system, .electric_l2, evolution.currentTime()),
+            .magnetic_l2_final = try provider.measurement(allocator, &system, .magnetic_l2, evolution.currentTime()),
+        };
+    } else blk: {
+        var evolution = try flux.evolution.Evolution(*SystemType, flux.integrators.Leapfrog).config()
+            .dt(config.dt)
+            .steps(config.steps)
+            .listen(flux.listeners.Progress(writer))
+            .init(allocator, &system);
+        defer evolution.deinit();
+
+        const result = try evolution.run();
+        break :blk ReferenceRunResult(3){
+            .elapsed_s = result.elapsed_s,
+            .snapshot_count = 0,
+            .electric_l2_final = try provider.measurement(allocator, &system, .electric_l2, evolution.currentTime()),
+            .magnetic_l2_final = try provider.measurement(allocator, &system, .magnetic_l2, evolution.currentTime()),
+        };
+    };
+
+    return run_result;
 }
 
 fn snapshotCount(steps: u32, interval: u32) u32 {

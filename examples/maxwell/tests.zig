@@ -45,6 +45,29 @@ test "TM₁₁₀ cavity: eigenvalue error decreases under 3D refinement" {
     try testing.expect(error_coarse / error_fine >= 1.5);
 }
 
+test "TE₁₀ cavity reference measurements shrink under 2D refinement" {
+    const allocator = testing.allocator;
+    var writer_buffer: [1024]u8 = undefined;
+    var writer_impl = std.Io.Writer.fixed(&writer_buffer);
+    const writer = &writer_impl.interface;
+
+    const coarse = try root.runCavityWithReference(2, allocator, .{
+        .grid = 8,
+        .steps = 12,
+        .frames = 0,
+        .output_dir = "output/maxwell-test-reference-coarse",
+    }, writer);
+    const fine = try root.runCavityWithReference(2, allocator, .{
+        .grid = 16,
+        .steps = 24,
+        .frames = 0,
+        .output_dir = "output/maxwell-test-reference-fine",
+    }, writer);
+
+    try testing.expect(fine.electric_l2_final < coarse.electric_l2_final);
+    try testing.expect(fine.magnetic_l2_final < coarse.magnetic_l2_final);
+}
+
 test {
     testing.refAllDeclsRecursive(root);
 }

@@ -65,6 +65,10 @@ pub fn Snapshots(comptime SystemType: type) SnapshotListener(SystemType) {
 }
 
 pub fn SnapshotListener(comptime SystemType: type) type {
+    return SnapshotListenerWithProvider(SystemType, void);
+}
+
+pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime ProviderType: type) type {
     const SystemDeclType = switch (@typeInfo(SystemType)) {
         .pointer => |pointer| pointer.child,
         else => SystemType,
@@ -75,7 +79,16 @@ pub fn SnapshotListener(comptime SystemType: type) type {
     }
 
     const Field = SystemDeclType.Field;
-    const Measurement = if (@hasDecl(SystemDeclType, "Measurement")) SystemDeclType.Measurement else void;
+    const Measurement = blk: {
+        if (ProviderType != void) {
+            if (!@hasDecl(ProviderType, "Measurement")) {
+                @compileError("Snapshot measurement providers must declare `pub const Measurement`");
+            }
+            break :blk ProviderType.Measurement;
+        }
+        if (@hasDecl(SystemDeclType, "Measurement")) break :blk SystemDeclType.Measurement;
+        break :blk void;
+    };
     const MeasurementStorage = if (Measurement == void) u8 else Measurement;
     const field_capacity = 8;
     const measurement_capacity = 8;
@@ -94,6 +107,7 @@ pub fn SnapshotListener(comptime SystemType: type) type {
         emit_final: bool = true,
         last_captured_step: ?u32 = null,
         csv_initialized: bool = false,
+        measurement_provider: if (ProviderType == void) void else ProviderType = if (ProviderType == void) {} else undefined,
 
         pub fn field(self: Self, which: Field) Self {
             std.debug.assert(self.field_count < field_capacity);
@@ -101,6 +115,24 @@ pub fn SnapshotListener(comptime SystemType: type) type {
             next.fields[next.field_count] = which;
             next.field_count += 1;
             return next;
+        }
+
+        pub fn measureWith(self: Self, provider: anytype) SnapshotListenerWithProvider(SystemType, @TypeOf(provider)) {
+            std.debug.assert(self.measurement_count == 0);
+            return .{
+                .fields = self.fields,
+                .field_count = self.field_count,
+                .measurements = undefined,
+                .measurement_count = self.measurement_count,
+                .output_dir = self.output_dir,
+                .base_name = self.base_name,
+                .interval_steps = self.interval_steps,
+                .capture_initial = self.capture_initial,
+                .emit_final = self.emit_final,
+                .last_captured_step = self.last_captured_step,
+                .csv_initialized = self.csv_initialized,
+                .measurement_provider = provider,
+            };
         }
 
         pub fn measurement(self: Self, which: Measurement) Self {
@@ -212,7 +244,15 @@ pub fn SnapshotListener(comptime SystemType: type) type {
             try writer.print("{d},{d:.12}", .{ event.step_index, event.time });
             for (self.measurements[0..self.measurement_count]) |measurement_value| {
                 const selected_measurement = @as(Measurement, measurement_value);
-                const value = try event.system.measurement(std.heap.page_allocator, selected_measurement);
+                const value = if (ProviderType == void)
+                    try event.system.measurement(std.heap.page_allocator, selected_measurement)
+                else
+                    try self.measurement_provider.measurement(
+                        std.heap.page_allocator,
+                        event.system,
+                        selected_measurement,
+                        event.time,
+                    );
                 try writer.print(",{d:.16}", .{value});
             }
             try writer.writeByte('\n');
@@ -244,4 +284,40 @@ test "formatDuration over a minute prints mins+secs" {
 test "formatDuration zero" {
     var buf: [16]u8 = undefined;
     try testing.expectEqualStrings("0.0s", formatDuration(&buf, 0.0));
+}
+
+test "Snapshots.measureWith composes measurements from an attached provider" {
+    const System = struct {
+        pub const Field = enum { value };
+        pub const Measurement = enum { base };
+
+        value: f64,
+
+        pub fn writeFields(_: *const @This(), _: std.mem.Allocator, _: anytype, _: []const Field) !void {}
+
+        pub fn measurement(self: *const @This(), _: std.mem.Allocator, which: Measurement) !f64 {
+            return switch (which) {
+                .base => self.value,
+            };
+        }
+    };
+
+    const Provider = struct {
+        pub const Measurement = enum { base, doubled };
+
+        pub fn measurement(_: @This(), allocator: std.mem.Allocator, system: *System, which: Measurement, _: f64) !f64 {
+            return switch (which) {
+                .base => try system.measurement(allocator, .base),
+                .doubled => 2.0 * system.value,
+            };
+        }
+    };
+
+    const Listener = SnapshotListenerWithProvider(*System, Provider);
+    const listener = Snapshots(*System)
+        .measureWith(Provider{})
+        .measurement(.base)
+        .measurement(.doubled);
+    _ = Listener;
+    try testing.expectEqual(@as(usize, 2), listener.measurement_count);
 }

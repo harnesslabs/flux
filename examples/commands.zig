@@ -26,6 +26,7 @@ const usage_maxwell_2d =
     \\    cavity    TE10 standing wave, source-free
     \\
     \\  options:
+    \\    --reference       emit cavity reference measurements
     \\    --grid N          cells per side (default: 32)
     \\    --domain L        domain side length (default: 1.0)
     \\    --courant C       Courant number, dt = C*h (default: 0.1)
@@ -42,6 +43,7 @@ const usage_maxwell_3d =
     \\  flux maxwell --dim 3 [options]
     \\
     \\  options:
+    \\    --reference            emit cavity reference measurements
     \\    --nx N --ny N --nz N   tetrahedral cells per axis
     \\    --width L              cavity width
     \\    --height L             cavity height
@@ -117,6 +119,7 @@ pub fn runEuler(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
 fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     const Demo = enum { dipole, cavity };
     var demo: Demo = .dipole;
+    var reference_mode = false;
     var shared = common.Common{};
     var courant: f64 = 0.1;
     var frequency: f64 = 0.0;
@@ -136,6 +139,10 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
                 std.debug.print("error: unknown demo '{s}'. available: dipole, cavity\n", .{value});
                 std.process.exit(2);
             }
+            continue;
+        }
+        if (eql(arg, "--reference")) {
+            reference_mode = true;
             continue;
         }
         if (eql(arg, "--courant")) {
@@ -164,6 +171,10 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
     const stderr = &stderr_writer.interface;
     switch (demo) {
         .dipole => {
+            if (reference_mode) {
+                std.debug.print("error: --reference is only supported for the cavity demo\n", .{});
+                std.process.exit(2);
+            }
             var config = maxwell.DipoleConfig2D{
                 .courant = courant,
                 .frequency = frequency,
@@ -185,22 +196,40 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
                 const h = config.domain / @as(f64, @floatFromInt(config.grid));
                 config.courant = dt_value / h;
             }
-            _ = try maxwell.runCavity(2, allocator, config, stderr);
+            if (reference_mode) {
+                const result = try maxwell.runCavityWithReference(2, allocator, config, stderr);
+                try stderr.print(
+                    "elapsed={d:.3}s snapshots={d} electric_l2={e} magnetic_l2={e}\n",
+                    .{ result.elapsed_s, result.snapshot_count, result.electric_l2_final, result.magnetic_l2_final },
+                );
+            } else {
+                _ = try maxwell.runCavity(2, allocator, config, stderr);
+            }
         },
     }
 }
 
 fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
+    var reference_mode = false;
     const config = try parseBox3Command(
         maxwell.CavityConfig(3),
         args,
         printMaxwell3dUsage,
         applyFixedDtWithFrameInterval,
+        &reference_mode,
     ) orelse return;
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    _ = try maxwell.runCavity(3, allocator, config, stderr);
+    if (reference_mode) {
+        const result = try maxwell.runCavityWithReference(3, allocator, config, stderr);
+        try stderr.print(
+            "elapsed={d:.3}s snapshots={d} electric_l2={e} magnetic_l2={e}\n",
+            .{ result.elapsed_s, result.snapshot_count, result.electric_l2_final, result.magnetic_l2_final },
+        );
+    } else {
+        _ = try maxwell.runCavity(3, allocator, config, stderr);
+    }
 }
 
 fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
@@ -266,6 +295,7 @@ fn runEuler3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
         args,
         printEuler3dUsage,
         applyFixedDtWithFrameInterval,
+        null,
     ) orelse return;
 
     var stderr_buffer: [1024]u8 = undefined;
@@ -379,6 +409,7 @@ fn parseBox3Command(
     args: []const [:0]const u8,
     usage_fn: UsageFn,
     comptime apply_shared: anytype,
+    reference_mode: ?*bool,
 ) !?ConfigType {
     var config = ConfigType{};
     var shared = common.Common{};
@@ -387,6 +418,12 @@ fn parseBox3Command(
 
     while (parser.next()) |arg| {
         if (try consumeDimensionFlag(&parser, arg)) continue;
+        if (eql(arg, "--reference")) {
+            if (reference_mode) |value| {
+                value.* = true;
+                continue;
+            }
+        }
         if (try common.tryBox3Flag(&parser, arg, &config)) continue;
         if (try parser.tryCommon(arg, &shared)) continue;
         failUnknownFlag(arg, usage_fn);

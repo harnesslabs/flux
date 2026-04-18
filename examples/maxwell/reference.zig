@@ -200,6 +200,100 @@ pub fn divergenceNorm3D(allocator: std.mem.Allocator, state: anytype) !f64 {
     return std.math.sqrt(divergence.norm_squared());
 }
 
+fn relativeFormError(
+    allocator: std.mem.Allocator,
+    approx: anytype,
+    exact: anytype,
+    operator_context: anytype,
+    comptime degree: u8,
+) !f64 {
+    var error_form = try @TypeOf(approx).init(allocator, approx.mesh);
+    defer error_form.deinit(allocator);
+    @memcpy(error_form.values, approx.values);
+    error_form.sub(exact);
+
+    var star_error = try (try operator_context.hodgeStar(degree)).apply(allocator, error_form);
+    defer star_error.deinit(allocator);
+    var star_exact = try (try operator_context.hodgeStar(degree)).apply(allocator, exact);
+    defer star_exact.deinit(allocator);
+
+    var error_energy: f64 = 0.0;
+    for (error_form.values, star_error.values) |lhs, rhs| {
+        error_energy += lhs * rhs;
+    }
+
+    var exact_energy: f64 = 0.0;
+    for (exact.values, star_exact.values) |lhs, rhs| {
+        exact_energy += lhs * rhs;
+    }
+
+    std.debug.assert(exact_energy > 0.0);
+    return std.math.sqrt(error_energy / exact_energy);
+}
+
+pub fn CavityMeasurementProvider(comptime dim: u8) type {
+    return switch (dim) {
+        2 => struct {
+            pub const Measurement = enum { energy, electric_l2, magnetic_l2 };
+
+            domain_length: f64,
+            time_step: f64,
+
+            pub fn measurement(self: @This(), allocator: std.mem.Allocator, system: anytype, which: Measurement, time: f64) !f64 {
+                return switch (which) {
+                    .energy => try system.measurement(allocator, .energy),
+                    .electric_l2 => try self.electricL2(allocator, system, time),
+                    .magnetic_l2 => try self.magneticL2(allocator, system, time),
+                };
+            }
+
+            fn electricL2(self: @This(), allocator: std.mem.Allocator, system: anytype, time: f64) !f64 {
+                var exact = try @TypeOf(system.state.E).init(allocator, system.state.mesh);
+                defer exact.deinit(allocator);
+                project_te10_e(system.state.mesh, exact.values, time, self.domain_length);
+                return relativeFormError(allocator, system.state.E, exact, system.state.feec_operators, 1);
+            }
+
+            fn magneticL2(self: @This(), allocator: std.mem.Allocator, system: anytype, time: f64) !f64 {
+                var exact = try @TypeOf(system.state.B).init(allocator, system.state.mesh);
+                defer exact.deinit(allocator);
+                project_te10_b(system.state.mesh, exact.values, time - 0.5 * self.time_step, self.domain_length);
+                return relativeFormError(allocator, system.state.B, exact, system.state.feec_operators, 2);
+            }
+        },
+        3 => struct {
+            pub const Measurement = enum { energy, electric_l2, magnetic_l2 };
+
+            width: f64,
+            height: f64,
+            time_step: f64,
+
+            pub fn measurement(self: @This(), allocator: std.mem.Allocator, system: anytype, which: Measurement, time: f64) !f64 {
+                return switch (which) {
+                    .energy => try system.measurement(allocator, .energy),
+                    .electric_l2 => try self.electricL2(allocator, system, time),
+                    .magnetic_l2 => try self.magneticL2(allocator, system, time),
+                };
+            }
+
+            fn electricL2(self: @This(), allocator: std.mem.Allocator, system: anytype, time: f64) !f64 {
+                var exact = try @TypeOf(system.state.E).init(allocator, system.state.mesh);
+                defer exact.deinit(allocator);
+                project_tm110_e(system.state.mesh, exact.values, time, self.width, self.height);
+                return relativeFormError(allocator, system.state.E, exact, system.state.feec_operators, 1);
+            }
+
+            fn magneticL2(self: @This(), allocator: std.mem.Allocator, system: anytype, time: f64) !f64 {
+                var exact = try @TypeOf(system.state.B).init(allocator, system.state.mesh);
+                defer exact.deinit(allocator);
+                project_tm110_b(system.state.mesh, exact.values, time - 0.5 * self.time_step, self.width, self.height);
+                return relativeFormError(allocator, system.state.B, exact, system.state.feec_operators, 2);
+            }
+        },
+        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
+    };
+}
+
 pub fn compute_tm110_eigenvalue(allocator: std.mem.Allocator, nx: u32, ny: u32, nz: u32, width: f64, height: f64, depth: f64) !f64 {
     var mesh = try runtime.Mesh3D.cartesian(allocator, .{ nx, ny, nz }, .{ width, height, depth });
     defer mesh.deinit(allocator);

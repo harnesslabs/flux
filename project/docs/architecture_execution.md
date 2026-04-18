@@ -13,7 +13,8 @@ The goal is a small, explicit execution language:
 - `Method` names a time-integration family
 - `Evolution` owns repeated stepping, time, counters, and configured listeners
 - `Measurement` names optional observable quantities exposed by a system
-- reference/comparison helpers stay outside core execution
+- measurement composition may attach at the listener layer without changing the
+  core execution nouns
 
 ## Core nouns
 
@@ -80,8 +81,9 @@ It does **not** own a separate runtime stepper object by default.
 field, such as total energy.
 
 Execution listeners may request fields and measurements from a system.
-Comparison- or refinement-driven quantities may later be expressed through the
-same measurement surface once that API settles.
+Comparison- or refinement-driven quantities may also be expressed through the
+same measurement surface by attaching a measurement provider to a listener
+instead of baking reference state into `Evolution`.
 
 ## Construction pattern
 
@@ -144,6 +146,16 @@ Reason:
   system, not of execution itself
 - listeners can stay generic if systems expose a small measurement interface
 
+When a run needs composed measurements such as reference errors, the preferred
+interim pattern is:
+
+- keep canonical measurements on `System`
+- attach an explicit measurement provider at the listener layer
+- let the listener request `Measurement` values through that provider
+
+This keeps comparison machinery out of `Evolution` while still allowing
+generic output listeners to observe richer quantities.
+
 ## Wrapper admission rule
 
 Do not introduce a runtime `Stepper`/`Integrator` object unless it owns a real
@@ -172,7 +184,8 @@ The default flux execution pattern is now:
 - method options flow through `Evolution.Config`
 - listeners attach during configuration and run through `evolution.run()`
 - systems expose structural fields and optional measurements
-- reference/comparison helpers remain outside core execution for now
+- composed measurements attach at the listener layer instead of extending the
+  core execution API
 
 This note should be updated before introducing adaptive execution features,
 public comparison/probe APIs, or any new public execution noun.
