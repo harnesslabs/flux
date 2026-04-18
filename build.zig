@@ -241,6 +241,32 @@ pub fn build(b: *std.Build) void {
             .{ .name = "examples_common", .module = examples_common_mod },
         },
     });
+    const new_diffusion_mod = b.createModule(.{
+        .root_source_file = b.path("examples/new_diffusion/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+            .{ .name = "examples_common", .module = examples_common_mod },
+        },
+    });
+    const new_euler_mod = b.createModule(.{
+        .root_source_file = b.path("examples/new_euler/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+            .{ .name = "examples_common", .module = examples_common_mod },
+        },
+    });
+    const new_diffusion_tests = b.addTest(.{
+        .root_module = new_diffusion_mod,
+    });
+    const run_new_diffusion_tests = b.addRunArtifact(new_diffusion_tests);
+    const new_euler_tests = b.addTest(.{
+        .root_module = new_euler_mod,
+    });
+    const run_new_euler_tests = b.addRunArtifact(new_euler_tests);
     const new_cli_commands_mod = b.createModule(.{
         .root_source_file = b.path("examples/new_cli/commands.zig"),
         .target = target,
@@ -432,6 +458,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_common_tests.step);
+    test_step.dependOn(&run_new_diffusion_tests.step);
+    test_step.dependOn(&run_new_euler_tests.step);
     test_step.dependOn(&run_new_cli_tests.step);
     test_step.dependOn(&run_bench_tests.step);
     for (example_run_test_steps) |run_step_ptr| {
