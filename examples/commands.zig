@@ -115,8 +115,12 @@ pub fn runEuler(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
 }
 
 fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
-    var config = maxwell.Config(2){};
+    const Demo = enum { dipole, cavity };
+    var demo: Demo = .dipole;
     var shared = common.Common{};
+    var courant: f64 = 0.1;
+    var frequency: f64 = 0.0;
+    var amplitude: f64 = 1.0;
     var parser = common.Parser.init(args);
     _ = parser.next();
 
@@ -125,9 +129,9 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
         if (eql(arg, "--demo")) {
             const value = try parser.requireValue("--demo");
             if (eql(value, "dipole")) {
-                config.demo = .dipole;
+                demo = .dipole;
             } else if (eql(value, "cavity")) {
-                config.demo = .cavity;
+                demo = .cavity;
             } else {
                 std.debug.print("error: unknown demo '{s}'. available: dipole, cavity\n", .{value});
                 std.process.exit(2);
@@ -135,15 +139,15 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
             continue;
         }
         if (eql(arg, "--courant")) {
-            config.courant = try parser.parseF64("--courant");
+            courant = try parser.parseF64("--courant");
             continue;
         }
         if (eql(arg, "--frequency")) {
-            config.frequency = try parser.parseF64("--frequency");
+            frequency = try parser.parseF64("--frequency");
             continue;
         }
         if (eql(arg, "--amplitude")) {
-            config.amplitude = try parser.parseF64("--amplitude");
+            amplitude = try parser.parseF64("--amplitude");
             continue;
         }
         if (try parser.tryCommon(arg, &shared)) continue;
@@ -155,21 +159,40 @@ fn runMaxwell2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
         return;
     }
 
-    common.applySharedFields(&config, shared);
-    if (shared.dt) |dt_value| {
-        const h = config.domain / @as(f64, @floatFromInt(config.grid));
-        config.courant = dt_value / h;
-    }
-
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    _ = try maxwell.run(2, allocator, config, stderr);
+    switch (demo) {
+        .dipole => {
+            var config = maxwell.DipoleConfig2D{
+                .courant = courant,
+                .frequency = frequency,
+                .amplitude = amplitude,
+            };
+            common.applySharedFields(&config, shared);
+            if (shared.dt) |dt_value| {
+                const h = config.domain / @as(f64, @floatFromInt(config.grid));
+                config.courant = dt_value / h;
+            }
+            _ = try maxwell.runDipole(allocator, config, stderr);
+        },
+        .cavity => {
+            var config = maxwell.CavityConfig(2){
+                .courant = courant,
+            };
+            common.applySharedFields(&config, shared);
+            if (shared.dt) |dt_value| {
+                const h = config.domain / @as(f64, @floatFromInt(config.grid));
+                config.courant = dt_value / h;
+            }
+            _ = try maxwell.runCavity(2, allocator, config, stderr);
+        },
+    }
 }
 
 fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {
     const config = try parseBox3Command(
-        maxwell.Config(3),
+        maxwell.CavityConfig(3),
         args,
         printMaxwell3dUsage,
         applyFixedDtWithFrameInterval,
@@ -177,7 +200,7 @@ fn runMaxwell3d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void 
     var stderr_buffer: [1024]u8 = undefined;
     var stderr_writer = std.fs.File.stderr().writer(&stderr_buffer);
     const stderr = &stderr_writer.interface;
-    _ = try maxwell.run(3, allocator, config, stderr);
+    _ = try maxwell.runCavity(3, allocator, config, stderr);
 }
 
 fn runEuler2d(allocator: std.mem.Allocator, args: []const [:0]const u8) !void {

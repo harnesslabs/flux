@@ -251,11 +251,14 @@ const BenchmarkContext = struct {
         }
         const cavity_mesh = try allocator.create(Mesh2D);
         errdefer allocator.destroy(cavity_mesh);
-        cavity_mesh.* = try Mesh2D.plane(allocator, cavity_grid, cavity_grid, cavity_domain, cavity_domain);
+        cavity_mesh.* = try Mesh2D.cartesian(allocator, .{ cavity_grid, cavity_grid }, .{ cavity_domain, cavity_domain });
         errdefer cavity_mesh.deinit(allocator);
-        var cavity_state = try MaxwellSystem2D.init(allocator, cavity_mesh);
+        var cavity_state = try MaxwellSystem2D.cavity(allocator, cavity_mesh, .{
+            .domain_length = cavity_domain,
+            .time_step = cavityDt(),
+            .boundary = .pec,
+        });
         errdefer cavity_state.deinit(allocator);
-        try maxwell.seedReferenceMode(2, allocator, &cavity_state, cavityDt(), cavity_domain, cavity_domain);
         const dec_operator_context = try DecOperatorContext2D.init(allocator, mesh);
         errdefer dec_operator_context.deinit();
         const feec_operator_context = try FeecOperatorContext2D.init(allocator, mesh);
@@ -757,7 +760,8 @@ fn benchCochainInnerProduct(ctx: *BenchmarkContext) void {
 }
 
 fn benchMaxwellCavityStep256(ctx: *BenchmarkContext) void {
-    maxwell.step(2, ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
+    const Leapfrog = flux.integrators.Leapfrog(*MaxwellSystem2D);
+    Leapfrog.advance(ctx.allocator, &ctx.cavity_state, cavityDt()) catch unreachable;
 }
 
 fn benchSurfaceLaplacianAssemblyDirect(ctx: *BenchmarkContext) void {
@@ -1424,7 +1428,7 @@ pub fn main() !void {
     const stderr = stderrWriter();
     try stderr.print("  Building {d}x{d} mesh...\n", .{ grid_nx, grid_ny });
 
-    var mesh = try Mesh2D.plane(allocator, grid_nx, grid_ny, grid_width, grid_height);
+    var mesh = try Mesh2D.cartesian(allocator, .{ grid_nx, grid_ny }, .{ grid_width, grid_height });
     defer mesh.deinit(allocator);
 
     try stderr.print("  Mesh: {d} vertices, {d} edges, {d} faces\n", .{

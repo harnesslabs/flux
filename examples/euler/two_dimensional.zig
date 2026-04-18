@@ -100,7 +100,7 @@ pub fn runImpl(
     config: ConfigImpl,
     writer: anytype,
 ) !RunResultImpl {
-    var mesh = try Mesh.plane(allocator, config.grid, config.grid, config.domain, config.domain);
+    var mesh = try Mesh.cartesian(allocator, .{ config.grid, config.grid }, .{ config.domain, config.domain });
     defer mesh.deinit(allocator);
 
     var system = try SystemImpl.init(allocator, &mesh);

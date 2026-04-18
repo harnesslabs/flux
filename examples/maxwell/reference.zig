@@ -61,7 +61,7 @@ pub fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_
     const dt = 0.1 * (domain_length / @as(f64, @floatFromInt(grid_n)));
     const num_steps: u32 = @intFromFloat(@round(final_time / dt));
 
-    var mesh = try runtime.Mesh2D.plane(allocator, grid_n, grid_n, domain_length, domain_length);
+    var mesh = try runtime.Mesh2D.cartesian(allocator, .{ grid_n, grid_n }, .{ domain_length, domain_length });
     defer mesh.deinit(allocator);
 
     var state = try runtime.MaxwellState2D.init(allocator, &mesh);
@@ -80,7 +80,7 @@ pub fn run_cavity_energy_drift(allocator: std.mem.Allocator, grid_n: u32, final_
 }
 
 pub fn compute_te10_eigenvalue(allocator: std.mem.Allocator, grid_n: u32, domain_length: f64) !f64 {
-    var mesh = try runtime.Mesh2D.plane(allocator, grid_n, grid_n, domain_length, domain_length);
+    var mesh = try runtime.Mesh2D.cartesian(allocator, .{ grid_n, grid_n }, .{ domain_length, domain_length });
     defer mesh.deinit(allocator);
     const dec_operators = try dec_context_mod.OperatorContext(runtime.Mesh2D).init(allocator, &mesh);
     defer dec_operators.deinit();
@@ -201,7 +201,7 @@ pub fn divergenceNorm3D(allocator: std.mem.Allocator, state: anytype) !f64 {
 }
 
 pub fn compute_tm110_eigenvalue(allocator: std.mem.Allocator, nx: u32, ny: u32, nz: u32, width: f64, height: f64, depth: f64) !f64 {
-    var mesh = try runtime.Mesh3D.uniform_tetrahedral_grid(allocator, nx, ny, nz, width, height, depth);
+    var mesh = try runtime.Mesh3D.cartesian(allocator, .{ nx, ny, nz }, .{ width, height, depth });
     defer mesh.deinit(allocator);
     const dec_operators = try dec_context_mod.OperatorContext(runtime.Mesh3D).init(allocator, &mesh);
     defer dec_operators.deinit();

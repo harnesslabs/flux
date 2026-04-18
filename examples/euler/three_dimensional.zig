@@ -89,14 +89,10 @@ pub const SystemImpl = struct {
 };
 
 pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype) !RunResultImpl {
-    var mesh = try Mesh.uniform_tetrahedral_grid(
+    var mesh = try Mesh.cartesian(
         allocator,
-        config.nx,
-        config.ny,
-        config.nz,
-        config.width,
-        config.height,
-        config.depth,
+        .{ config.nx, config.ny, config.nz },
+        .{ config.width, config.height, config.depth },
     );
     defer mesh.deinit(allocator);
 

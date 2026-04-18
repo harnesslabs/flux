@@ -32,7 +32,7 @@ const acceptance_steps: u32 = 10;
 test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a short cavity run" {
     const allocator = testing.allocator;
 
-    const config = maxwell.Config(3){
+    const config = maxwell.CavityConfig(3){
         .nx = 2,
         .ny = 2,
         .nz = 2,
@@ -40,21 +40,29 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
         .steps = acceptance_steps,
     };
 
-    var mesh = try maxwell.makeMesh(3, allocator, config);
+    var mesh = try maxwell.Mesh(3).cartesian(
+        allocator,
+        .{ config.nx, config.ny, config.nz },
+        .{ config.width, config.height, config.depth },
+    );
     defer mesh.deinit(allocator);
 
-    var system = try maxwell.System(3).init(allocator, &mesh);
+    var system = try maxwell.System(3).cavity(allocator, &mesh, .{
+        .width = config.width,
+        .height = config.height,
+        .time_step = config.dt,
+        .boundary = .pec,
+    });
     defer system.deinit(allocator);
-
-    try maxwell.seedReferenceMode(3, allocator, &system, config.dt, config.width, config.height);
 
     // The invariant must hold at every step, not just at the end — a leapfrog
     // step that *temporarily* introduces ∇·B is already a failure.
+    const Leapfrog = flux.integrators.Leapfrog(*maxwell.System(3));
     var step_idx: u32 = 0;
     while (step_idx < acceptance_steps) : (step_idx += 1) {
-        try maxwell.step(3, allocator, &system, config.dt);
+        try Leapfrog.advance(allocator, &system, config.dt);
 
-        const divergence = try maxwell.divergenceNorm(allocator, &system);
+        const divergence = try maxwell.reference.divergenceNorm3D(allocator, &system.state);
         try testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
     }
 }
@@ -62,7 +70,7 @@ test "M3 acceptance: Maxwell 3D enforces ∇·B = 0 to machine precision over a 
 test "M3 acceptance: Euler 2D conserves total circulation to machine precision over a short dipole run" {
     const allocator = testing.allocator;
 
-    var mesh = try euler.Mesh(2).plane(allocator, 16, 16, 1.0, 1.0);
+    var mesh = try euler.Mesh(2).cartesian(allocator, .{ 16, 16 }, .{ 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
     var system = try euler.System(2).init(allocator, &mesh);
@@ -85,7 +93,7 @@ test "M3 acceptance: Euler 2D conserves total circulation to machine precision o
 test "M3 acceptance: Euler 3D conserves helicity to machine precision over a short reference-mode run" {
     const allocator = testing.allocator;
 
-    var mesh = try euler.Mesh(3).uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    var mesh = try euler.Mesh(3).cartesian(allocator, .{ 2, 2, 2 }, .{ 1.0, 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
     var system = try euler.System(3).init(allocator, &mesh);

@@ -177,7 +177,7 @@ fn simulateCase(
     std.debug.assert(config.domain > 0.0);
     std.debug.assert(config.dt_scale > 0.0);
 
-    var mesh = try Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
+    var mesh = try Mesh2D.cartesian(allocator, .{ config.grid, config.grid }, .{ config.domain, config.domain });
     defer mesh.deinit(allocator);
 
     const total_time = final_time_override orelse (@as(f64, @floatFromInt(config.steps)) * config.dt());
