@@ -197,6 +197,7 @@ fn simulateCase(
 
     var evolution = try evolution_mod.Evolution(*SystemImpl, HeatBackwardEulerMethod).config()
         .dt(dt)
+        .steps(config.steps)
         .init(allocator, &system);
     defer evolution.deinit();
 

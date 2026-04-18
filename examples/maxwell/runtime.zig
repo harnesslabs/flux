@@ -169,6 +169,10 @@ pub fn ampere_step(allocator: std.mem.Allocator, state: anytype, dt: f64) !void 
     try MaxwellCore(@TypeOf(state.mesh.*), hooks2d(@TypeOf(state.mesh.*))).ampereStep(allocator, state, dt);
 }
 
+pub fn ampere_step_3d(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
+    try MaxwellCore(@TypeOf(state.mesh.*), hooks3d(@TypeOf(state.mesh.*))).ampereStep(allocator, state, dt);
+}
+
 pub fn apply_pec_boundary(state: anytype) void {
     MaxwellCore(@TypeOf(state.mesh.*), hooks2d(@TypeOf(state.mesh.*))).applyPecBoundary(state);
 }

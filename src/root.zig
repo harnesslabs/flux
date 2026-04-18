@@ -86,8 +86,11 @@ pub const operators = struct {
     pub const wedge_product = @import("operators/wedge_product.zig");
 };
 pub const topology = @import("topology/mesh.zig");
-pub const evolution = @import("integrators/evolution.zig");
+pub const evolution = @import("evolution/root.zig");
+pub const listeners = evolution.listeners;
 pub const integrators = struct {
+    pub const Leapfrog = @import("integrators/leapfrog.zig").Leapfrog;
+    pub const ForwardEuler = @import("integrators/forward_euler.zig").ForwardEuler;
     pub const leapfrog = @import("integrators/leapfrog.zig");
     pub const forward_euler = @import("integrators/forward_euler.zig");
 };
@@ -107,6 +110,7 @@ test "public API exposes evolution as the execution root module" {
     const testing = @import("std").testing;
 
     try testing.expect(@hasDecl(@This(), "evolution"));
+    try testing.expect(@hasDecl(@This(), "listeners"));
     try testing.expect(!@hasDecl(@This().integrators, "evolution"));
 }
 

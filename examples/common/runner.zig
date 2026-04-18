@@ -70,8 +70,16 @@ fn runCapturedLoop(
     config: RunLoopConfig,
     capturer: anytype,
 ) !RunLoopResult {
-    const EvolutionType = @TypeOf(evolution.*);
+    const EvolutionNs = @TypeOf(evolution.*).EvolutionNamespace;
     const plan = buildPlan(config);
+
+    std.debug.assert(evolution.configuredSteps() == config.steps);
+    const expected_final_time = evolution.currentTime() +
+        evolution.timeStep() * @as(f64, @floatFromInt(config.steps));
+    std.debug.assert(
+        std.math.approxEqAbs(f64, expected_final_time, config.final_time, 1e-12) or
+            std.math.approxEqRel(f64, expected_final_time, config.final_time, 1e-12),
+    );
 
     var series = try snapshot.Series.init(
         allocator,
@@ -87,19 +95,19 @@ fn runCapturedLoop(
         capture_initial: bool,
         total_steps: u32,
 
-        pub fn onRunBegin(self: *@This(), event: EvolutionType.Event) !void {
+        pub fn onRunBegin(self: *@This(), event: EvolutionNs.Event) !void {
             if (!self.capture_initial or !self.series_ptr.enabled()) return;
             _ = event;
             try self.inner.capture(self.series_ptr, 0.0);
         }
 
-        pub fn onStep(self: *@This(), event: EvolutionType.Event) !void {
+        pub fn onStep(self: *@This(), event: EvolutionNs.Event) !void {
             if (!self.series_ptr.enabled()) return;
             if (!self.series_ptr.dueAt(event.step_index, self.total_steps)) return;
             try self.inner.capture(self.series_ptr, event.time);
         }
 
-        pub fn onRunEnd(self: *@This(), event: EvolutionType.Event) !void {
+        pub fn onRunEnd(self: *@This(), event: EvolutionNs.Event) !void {
             _ = event;
             try self.series_ptr.finalize();
         }
@@ -120,11 +128,11 @@ fn runCapturedLoop(
     const ProgressListener = struct {
         progress_ptr: *progress_mod.Progress,
 
-        pub fn onStep(self: *@This(), event: EvolutionType.Event) !void {
+        pub fn onStep(self: *@This(), event: EvolutionNs.Event) !void {
             self.progress_ptr.update(event.step_index);
         }
 
-        pub fn onRunEnd(self: *@This(), event: EvolutionType.Event) !void {
+        pub fn onRunEnd(self: *@This(), event: EvolutionNs.Event) !void {
             _ = event;
             self.progress_ptr.finish();
         }
@@ -132,25 +140,11 @@ fn runCapturedLoop(
 
     const run_result = if (progress) |*bar| blk: {
         var progress_listener = ProgressListener{ .progress_ptr = bar };
-        break :blk try evolution.run(
-            allocator,
-            .{
-                .steps = config.steps,
-                .final_time = config.final_time,
-            },
-            .{
-                &snapshot_listener,
-                &progress_listener,
-            },
-        );
-    } else try evolution.run(
-        allocator,
-        .{
-            .steps = config.steps,
-            .final_time = config.final_time,
-        },
-        .{&snapshot_listener},
-    );
+        break :blk try evolution.runWith(.{
+            &snapshot_listener,
+            &progress_listener,
+        });
+    } else try evolution.runWith(.{&snapshot_listener});
 
     return .{
         .elapsed_s = run_result.elapsed_s,

@@ -10,9 +10,10 @@ construction pattern for time evolution.
 The goal is a small, explicit execution language:
 
 - `System` owns one runtime PDE instance
-- `Method` names the time-integration algorithm
-- `Evolution` owns repeated stepping, time, counters, and listeners
-- `ReferenceStudy` is an optional higher-order analysis tool layered on top
+- `Method` names a time-integration family
+- `Evolution` owns repeated stepping, time, counters, and configured listeners
+- `Measurement` names optional observable quantities exposed by a system
+- reference/comparison helpers stay outside core execution
 
 ## Core nouns
 
@@ -28,30 +29,34 @@ It may own:
 - boundary-condition data
 - assembled linear systems
 - problem-specific caches
-- counters that are intrinsic to the physical update itself
+- counters intrinsic to the physical update
 
 It should not be wrapped just to satisfy the execution API.
 
+Systems expose:
+
+- structural fields through `pub const Field`
+- optional scalar observables through `pub const Measurement`
+- optional integration contracts that method families validate at comptime
+
 ### `Method`
 
-`Method` is the integration algorithm: leapfrog, forward Euler, backward Euler,
- or a future adaptive method.
+`Method` is a time-integration family: leapfrog, forward Euler, backward
+Euler, or a future adaptive controller.
 
 Default rule:
 
-- if the method has no real runtime identity, keep it as a comptime type with
-  `advance(...)`
-- do not invent a runtime `Stepper` object that re-stores `system`, `dt`, or
-  other execution-owned data
+- keep methods as comptime families or comptime-specialized types
+- do not invent a runtime stepper object that re-stores `system`, `dt`, or
+  other execution-owned state
 
-Methods may expose:
+Method families may expose:
 
 - `pub fn advance(allocator, system, dt) !void`
 - `pub const Options = struct { ... }`
-- `pub fn initialize(allocator, system, dt, options) !void` when construction
-  needs method-specific setup
+- `pub fn initialize(allocator, system, dt, options) !void`
 
-Method options are configuration, not a second execution noun.
+Method-specific configuration flows through `Evolution.Config.methodOptions(...)`.
 
 ### `Evolution`
 
@@ -59,57 +64,51 @@ Method options are configuration, not a second execution noun.
 
 It owns:
 
-- the primary system reference/value passed to it
+- the primary system handle passed to it
 - `dt`
+- configured run length (`steps`)
 - current time
 - step count
-- listeners and run orchestration
+- configured listeners
 - stored method options
 
 It does **not** own a separate runtime stepper object by default.
 
-### `ReferenceStudy`
+### `Measurement`
 
-`ReferenceStudy` is not part of core execution. It pairs:
+`Measurement` is a system-declared observable quantity that is not a structural
+field, such as total energy.
 
-- a mesh
-- a view of the current approximate values
-- an analytic or known comparison field
-- an error measure
-
-It exists for convergence studies, exact-solution snapshots, and related
-analysis. It should compose with an evolution; it should not be built into the
-core `Evolution` type.
+Execution listeners may request fields and measurements from a system.
+Comparison- or refinement-driven quantities may later be expressed through the
+same measurement surface once that API settles.
 
 ## Construction pattern
 
-The standard construction path is:
+The standard construction path is now:
 
 ```zig
-const Evolution = flux.evolution.Evolution(SystemType, MethodType);
-
-var evolution = try Evolution
+var evolution = try flux.evolution.Evolution(SystemType, flux.integrators.Leapfrog)
     .config()
     .dt(dt)
+    .steps(steps)
+    .listen(flux.listeners.Progress(writer))
     .init(allocator, system);
 ```
 
 Interpretation:
 
-- `Evolution(...)` is the type-level noun, like `Mesh(...)`
-- `.config()` begins a staged configuration phase
+- `Evolution(System, MethodFamily)` is the type-level execution noun
+- `.config()` begins the staged configuration phase
 - `.dt(...)` configures execution-owned timestep policy
+- `.steps(...)` configures run length
+- `.listen(...)` attaches event listeners that live on the evolution object
 - `.methodOptions(...)` configures method-specific settings when needed
 - `.init(...)` constructs the runtime execution object
+- `.run()` executes the configured run using the stored listeners
 
-Examples should prefer the inline form above over:
-
-```zig
-const EvolutionType = flux.evolution.Evolution(...);
-var evolution = try EvolutionType.config()...init(...);
-```
-
-unless the type name itself is needed later in type position.
+Method families are specialized internally by `Evolution`; users should not
+spell `Leapfrog(System)` separately at ordinary call sites.
 
 ## Ownership rules
 
@@ -120,32 +119,37 @@ unless the type name itself is needed later in type position.
 Reason:
 
 - time-step policy is part of execution
-- fixed-step and adaptive-step methods should share one construction surface
-- future adaptive methods can refine how `Evolution` chooses or updates `dt`
-  without changing the top-level noun split
+- fixed-step and future adaptive-step methods should share one construction
+  surface
+- method-specific controller settings can stay downstream in
+  `.methodOptions(...)`
 
-### Method-specific setup
+### Listeners
 
-If a method needs setup during construction, that setup happens downstream of
-`Evolution.Config.init(...)` through an optional method hook such as
-`initialize(...)`.
+Listeners belong to `Evolution`, not to the shared example runner.
 
-Example:
+Reason:
 
-- backward Euler methods may seed a linear-system solution buffer from the
-  current system
-- a future adaptive method may validate tolerances or initialize controller
-  state
+- they are execution attachments
+- they observe run begin/step/end events
+- they should be configured once and reused by `run()`
 
-This keeps the construction surface flat while still allowing method-specific
- setup.
+### Measurements
+
+Measurements belong to the `System` surface.
+
+Reason:
+
+- canonical observables such as total energy are properties of the chosen PDE
+  system, not of execution itself
+- listeners can stay generic if systems expose a small measurement interface
 
 ## Wrapper admission rule
 
 Do not introduce a runtime `Stepper`/`Integrator` object unless it owns a real
 runtime identity such as:
 
-- mutable controller state that is separate from `Evolution`
+- mutable controller state that should not live on `Evolution`
 - owned scratch or cached factorization state that should not live on `System`
 - a representation boundary that materially simplifies the public language
 
@@ -158,27 +162,17 @@ If the proposed object only:
 
 then it should not exist.
 
-## Example quality signal
-
-Example code should read like:
-
-- choose a `System`
-- choose a `Method`
-- configure `Evolution`
-- run
-
-When examples start inventing family-local wrapper structs just to satisfy the
-execution interface, the interface is wrong.
-
 ## Current implication
 
 The default flux execution pattern is now:
 
-- `Evolution(System, Method).config().dt(...).init(...)`
+- `Evolution(System, MethodFamily).config().dt(...).steps(...).listen(...).init(...)`
 - methods are type-level by default
+- `Evolution` specializes method families internally
 - method options flow through `Evolution.Config`
-- `Evolution` owns time management and run bookkeeping
-- `ReferenceStudy` owns exact/comparison-field analysis outside `Evolution`
+- listeners attach during configuration and run through `evolution.run()`
+- systems expose structural fields and optional measurements
+- reference/comparison helpers remain outside core execution for now
 
 This note should be updated before introducing adaptive execution features,
-observer attachment changes, or any new public execution noun.
+public comparison/probe APIs, or any new public execution noun.

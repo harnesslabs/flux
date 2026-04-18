@@ -107,6 +107,7 @@ pub fn runImpl(allocator: std.mem.Allocator, config: ConfigImpl, writer: anytype
     const helicity_initial = try conservedQuantity(allocator, &system);
     var evolution = try evolution_mod.Evolution(*SystemImpl, Euler3DMethod).config()
         .dt(config.dt)
+        .steps(config.steps)
         .init(allocator, &system);
     defer evolution.deinit();
 

@@ -115,6 +115,7 @@ pub fn runImpl(
     const dt = config.dt();
     var evolution = try evolution_mod.Evolution(*SystemImpl, Euler2DMethod).config()
         .dt(dt)
+        .steps(config.steps)
         .init(allocator, &system);
     defer evolution.deinit();
 

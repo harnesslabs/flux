@@ -183,6 +183,7 @@ fn simulateCase(
 
     var evolution = try evolution_mod.Evolution(*SystemImpl, SurfaceBackwardEulerMethod).config()
         .dt(dt)
+        .steps(config.steps)
         .init(allocator, &system);
     defer evolution.deinit();
 

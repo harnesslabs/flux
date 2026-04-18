@@ -36,17 +36,21 @@ composition. Each operator is an independent, testable unit.
 contracts on user-defined types so alternative mesh implementations (mesh views,
 imported meshes, n-dimensional meshes) are guaranteed compatible with the operator stack.
 
+### evolution
+**Domain label:** `domain/operators` (shares label with spatial operators)
+**Owns:** `src/evolution/`
+**Dependencies:** none (generic — parameterized on system types at comptime)
+**Description:** Execution mechanics. `Evolution` owns timestep policy, run
+state, configured listeners, and method-local options. Reference studies remain
+separate helpers layered around execution rather than built into the core type.
+
 ### integrators
 **Domain label:** `domain/operators` (shares label with spatial operators)
 **Owns:** `src/integrators/`
-**Dependencies:** none (generic — parameterized on system types at comptime)
-**Description:** Execution and time-integration patterns: `Evolution` owns
-runtime time management and listeners, while integrator methods such as
-leapfrog and forward Euler are parameterized at comptime on system types.
-Reference studies are separate higher-order helpers rather than built into
-`Evolution`. Concrete physics modules provide the update functions; the
-execution layer configures and applies them without wrapper-only runtime
-steppers.
+**Dependencies:** none (generic — parameterized on system capabilities at comptime)
+**Description:** Time-integration method families such as leapfrog and forward
+Euler. These are orchestration patterns that specialize on system-side
+contracts rather than owning runtime state themselves.
 
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)
@@ -115,6 +119,7 @@ flowchart TD
         forms
         operators
         io
+        evolution
         integrators
         concepts
     end

@@ -380,6 +380,40 @@ forwards preserve the simplest typed entrypoint for current consumers. This
 keeps the API aligned with the project's "one obvious way" preference without
 forcing a larger constructor-surface rewrite into the same PR.
 
+## 2026-04-17: Execution uses method families, config-attached listeners, and system measurements
+
+**Decision:** Promote `evolution` to a root module under `src/evolution/` and
+make the primary public execution shape:
+
+- `Evolution(System, MethodFamily)`
+- `.config().dt(...).steps(...).listen(...).init(...)`
+- `.run()`
+
+`Evolution` now specializes method families internally, listeners attach during
+configuration, and systems expose scalar observables through `Measurement`
+rather than introducing a separate execution-side diagnostic noun. Maxwell is
+the first example family converted to this shape.
+
+**Alternatives considered:**
+1. Keep `src/integrators/evolution.zig` and treat it as a logical root only:
+   rejected because execution is now a first-class noun distinct from the
+   method-family layer.
+2. Continue passing pre-specialized method types such as `Leapfrog(System)` at
+   call sites: rejected because it forces users to spell the system twice.
+3. Keep listener attachment in the shared example runner: rejected because
+   listeners are execution attachments, not runner-local scaffolding.
+4. Introduce both `Diagnostic` and `Measurement` as public observable nouns:
+   rejected for now because one `Measurement` surface is enough for canonical
+   observables such as energy, while comparison/probe APIs are still unsettled.
+
+**Rationale:** This keeps the execution language small and structural.
+`System` owns problem runtime and optional measurement capabilities. Method
+families stay thin and validate system-side contracts at comptime. `Evolution`
+owns time, run length, listeners, and method-local options without regrowing a
+runtime stepper wrapper. The converted Maxwell example now reads like the API
+we want to teach, while Euler and diffusion remain on a temporary bridge path
+until their own cleanup passes land.
+
 **Rationale:** The real question in issue #48 is empirical: does smaller
 incidence storage make boundary-operator application faster on large meshes?
 Separating the storage experiment from mesh/operator integration keeps the API
