@@ -232,6 +232,56 @@ pub fn build(b: *std.Build) void {
         .root_module = examples_common_mod,
     });
     const run_examples_common_tests = b.addRunArtifact(examples_common_tests);
+    const new_maxwell_mod = b.createModule(.{
+        .root_source_file = b.path("examples/new_maxwell/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "flux", .module = mod },
+            .{ .name = "examples_common", .module = examples_common_mod },
+        },
+    });
+    const new_cli_commands_mod = b.createModule(.{
+        .root_source_file = b.path("examples/new_cli/commands.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "new_maxwell", .module = new_maxwell_mod },
+        },
+    });
+    const new_cli_exe = b.addExecutable(.{
+        .name = "flux-new-cli",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/new_cli/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "new_cli_commands", .module = new_cli_commands_mod },
+            },
+        }),
+    });
+    b.installArtifact(new_cli_exe);
+    const new_cli_step = b.step("new-cli", "Build the fresh new example CLI");
+    new_cli_step.dependOn(&new_cli_exe.step);
+    new_cli_step.dependOn(b.getInstallStep());
+    const run_new_cli_cmd = b.addRunArtifact(new_cli_exe);
+    run_new_cli_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_new_cli_cmd.addArgs(args);
+    }
+    const run_new_cli_step = b.step("run-new-cli", "Run the fresh new example CLI");
+    run_new_cli_step.dependOn(&run_new_cli_cmd.step);
+    const new_cli_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/new_cli/root.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "new_cli_commands", .module = new_cli_commands_mod },
+            },
+        }),
+    });
+    const run_new_cli_tests = b.addRunArtifact(new_cli_tests);
     const bench_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("bench/main.zig"),
@@ -382,6 +432,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_examples_common_tests.step);
+    test_step.dependOn(&run_new_cli_tests.step);
     test_step.dependOn(&run_bench_tests.step);
     for (example_run_test_steps) |run_step_ptr| {
         test_step.dependOn(&run_step_ptr.step);
@@ -479,6 +530,7 @@ pub fn build(b: *std.Build) void {
     check_step.dependOn(&mod_tests.step);
     check_step.dependOn(&exe_tests.step);
     check_step.dependOn(&examples_exe.step);
+    check_step.dependOn(&new_cli_exe.step);
     check_step.dependOn(&examples_common_tests.step);
     check_step.dependOn(&bench_tests.step);
 
@@ -489,8 +541,10 @@ pub fn build(b: *std.Build) void {
     ci_step.dependOn(&run_mod_tests.step);
     ci_step.dependOn(&run_exe_tests.step);
     ci_step.dependOn(&run_examples_common_tests.step);
+    ci_step.dependOn(&run_new_cli_tests.step);
     ci_step.dependOn(&run_bench_tests.step);
     ci_step.dependOn(&examples_exe.step);
+    ci_step.dependOn(&new_cli_exe.step);
     for (example_run_test_steps) |run_step_ptr| {
         ci_step.dependOn(&run_step_ptr.step);
     }

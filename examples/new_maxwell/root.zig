@@ -203,44 +203,56 @@ fn runCavityMode(
 ) !RunResult(CavitySummary) {
     const provider = if (with_reference) config.measurementProvider() else {};
     const result = if (config.snapshotInterval()) |interval| blk: {
-        var evolution_config = flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
-            .dt(config.timeStep())
-            .steps(config.steps)
-            .listen(flux.listeners.Progress(writer));
         if (with_reference) {
-            evolution_config = evolution_config.listen(
-                flux.listeners.Snapshots(*Maxwell)
-                    .measureWith(provider)
-                    .field(.electric)
-                    .field(.magnetic)
-                    .measurement(.energy)
-                    .measurement(.electric_l2)
-                    .measurement(.magnetic_l2)
-                    .directory(config.output_dir.?)
-                    .baseName(config.snapshotBaseName())
-                    .everySteps(interval),
-            );
+            var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+                .dt(config.timeStep())
+                .steps(config.steps)
+                .listen(flux.listeners.Progress(writer))
+                .listen(
+                    flux.listeners.Snapshots(*Maxwell)
+                        .measureWith(provider)
+                        .field(.electric)
+                        .field(.magnetic)
+                        .measurement(.energy)
+                        .measurement(.electric_l2)
+                        .measurement(.magnetic_l2)
+                        .directory(config.output_dir.?)
+                        .baseName(config.snapshotBaseName())
+                        .everySteps(interval),
+                )
+                .init(allocator, system);
+            defer evolution.deinit();
+
+            const run_result = try evolution.run();
+            break :blk RunResult(CavitySummary){
+                .elapsed_s = run_result.elapsed_s,
+                .snapshot_count = snapshotCount(config.steps, interval),
+                .summary = try cavitySummary(true, allocator, system, evolution.currentTime(), provider),
+            };
         } else {
-            evolution_config = evolution_config.listen(
-                flux.listeners.Snapshots(*Maxwell)
-                    .field(.electric)
-                    .field(.magnetic)
-                    .measurement(.energy)
-                    .directory(config.output_dir.?)
-                    .baseName(config.snapshotBaseName())
-                    .everySteps(interval),
-            );
+            var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+                .dt(config.timeStep())
+                .steps(config.steps)
+                .listen(flux.listeners.Progress(writer))
+                .listen(
+                    flux.listeners.Snapshots(*Maxwell)
+                        .field(.electric)
+                        .field(.magnetic)
+                        .measurement(.energy)
+                        .directory(config.output_dir.?)
+                        .baseName(config.snapshotBaseName())
+                        .everySteps(interval),
+                )
+                .init(allocator, system);
+            defer evolution.deinit();
+
+            const run_result = try evolution.run();
+            break :blk RunResult(CavitySummary){
+                .elapsed_s = run_result.elapsed_s,
+                .snapshot_count = snapshotCount(config.steps, interval),
+                .summary = try cavitySummary(false, allocator, system, evolution.currentTime(), provider),
+            };
         }
-
-        var evolution = try evolution_config.init(allocator, system);
-        defer evolution.deinit();
-
-        const run_result = try evolution.run();
-        break :blk RunResult(CavitySummary){
-            .elapsed_s = run_result.elapsed_s,
-            .snapshot_count = snapshotCount(config.steps, interval),
-            .summary = try cavitySummary(with_reference, allocator, system, evolution.currentTime(), provider),
-        };
     } else blk: {
         var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
             .dt(config.timeStep())
