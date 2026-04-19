@@ -160,6 +160,11 @@ The language should lean on a small set of strong verbs:
 These verbs should sit on stable nouns. Avoid creating a new noun when the real
 operation is simply “do X to this object.”
 
+For FEEC weak operators specifically, prefer one shared `assemble` seam for
+local-to-global scatter, with family-specific local kernels supplying the
+simplex-local mathematics. Do not duplicate orientation/scatter plumbing inside
+each weak operator family helper.
+
 ## Qualifiers should usually be adjectives
 
 Many distinctions in flux are qualifiers, not reasons to mint fresh public

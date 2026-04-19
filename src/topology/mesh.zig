@@ -375,7 +375,7 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             }
 
             inline for (1..topological_dimension) |k| {
-                var mass = try whitney.assemble_whitney_mass(k, allocator, mesh);
+                var mass = try whitney.assemble_whitney_mass(k, allocator, mesh, {});
                 errdefer mass.deinit(allocator);
 
                 const preconditioner = try whitney.assemble_whitney_preconditioner(k, allocator, mesh);

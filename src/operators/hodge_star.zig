@@ -247,7 +247,7 @@ fn apply_hodge_star_riemannian(
     errdefer output.deinit(allocator);
 
     if (comptime supportsWhitneyMassDegree(MeshType, k)) {
-        var matrix = try whitney_mass.assemble_whitney_mass_with_metric(k, allocator, input.mesh, metric.top_simplex_tensors);
+        var matrix = try whitney_mass.assemble_whitney_mass(k, allocator, input.mesh, metric.top_simplex_tensors);
         defer matrix.deinit(allocator);
         sparse.spmv(matrix, input.values, output.values);
         return output;
@@ -283,7 +283,7 @@ fn apply_hodge_star_inverse_riemannian(
     errdefer output.deinit(allocator);
 
     if (comptime supportsWhitneyMassDegree(MeshType, primal_degree)) {
-        var matrix = try whitney_mass.assemble_whitney_mass_with_metric(primal_degree, allocator, input.mesh, metric.top_simplex_tensors);
+        var matrix = try whitney_mass.assemble_whitney_mass(primal_degree, allocator, input.mesh, metric.top_simplex_tensors);
         defer matrix.deinit(allocator);
 
         const diagonal = try assembleMatrixDiagonal(allocator, matrix);

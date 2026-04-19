@@ -433,7 +433,7 @@ test "CG solves Whitney mass matrix system" {
     var mesh = try Mesh2D.plane(allocator, 4, 4, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try whitney.assemble_whitney_mass(1, allocator, &mesh);
+    var mass = try whitney.assemble_whitney_mass(1, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     const row_count = mass.n_rows;
