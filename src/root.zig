@@ -61,15 +61,17 @@ pub const math = struct {
     pub const cg = @import("math/cg.zig");
     pub const linear_system = @import("math/linear_system.zig");
 };
+const laplacian_mod = @import("operators/laplacian.zig");
 pub const operators = struct {
     pub const context = @import("operators/context.zig");
     pub const dec = struct {
         pub const exterior_derivative = @import("operators/exterior_derivative.zig");
+        pub const laplacian = laplacian_mod.dec;
     };
     pub const feec = struct {
         pub const codifferential = @import("operators/codifferential.zig");
         pub const hodge_star = @import("operators/hodge_star.zig");
-        pub const laplacian = @import("operators/laplacian.zig");
+        pub const laplacian = laplacian_mod.feec;
         pub const weak_form = @import("operators/weak_form.zig");
         pub const whitney_mass = @import("operators/whitney_mass.zig");
     };
@@ -79,7 +81,7 @@ pub const operators = struct {
     pub const compose = @import("operators/compose.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
-    pub const laplacian = @import("operators/laplacian.zig");
+    pub const laplacian = laplacian_mod;
     pub const observers = @import("operators/observers.zig");
     pub const poisson = @import("operators/poisson.zig");
     pub const weak_form = @import("operators/weak_form.zig");
@@ -105,6 +107,10 @@ test "public API exposes explicit DEC and FEEC operator families" {
     try testing.expect(@hasDecl(@This().operators, "dec"));
     try testing.expect(@hasDecl(@This().operators, "feec"));
     try testing.expect(@hasDecl(@This().operators, "context"));
+    try testing.expect(@hasDecl(@This().operators.dec, "laplacian"));
+    try testing.expect(@hasDecl(@This().operators.feec, "laplacian"));
+    try testing.expect(@hasDecl(@This().operators.laplacian, "dec"));
+    try testing.expect(@hasDecl(@This().operators.laplacian, "feec"));
 }
 
 test "public API exposes evolution as the execution root module" {
