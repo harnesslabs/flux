@@ -239,6 +239,7 @@ pub fn laplacian_composed(
 
 const Mesh2D = topology.Mesh(2, 2);
 const MeshSurface = topology.Mesh(3, 2);
+const Mesh3D = topology.Mesh(3, 3);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {
@@ -494,11 +495,88 @@ test "assembled Δ₀ on Mesh(3, 2) matches intrinsic 2D Δ₀ on an isometric e
     }
 }
 
+test "assembled FEEC stiffness satisfies S₀ω = M₀(Δ₀ω) on embedded surface meshes" {
+    const allocator = testing.allocator;
+    const ScalarForm = cochain.Cochain(MeshSurface, 0, cochain.Primal);
+
+    var mesh = try MeshSurface.plane(allocator, 5, 4, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(MeshSurface).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    var omega = try ScalarForm.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x51_0F_AA);
+    for (omega.values) |*value| {
+        value.* = rng.random().float(f64) * 2.0 - 1.0;
+    }
+
+    var strong = try (try operator_context.laplacian(0)).apply(allocator, omega);
+    defer strong.deinit(allocator);
+
+    var stiffness = try assemble_stiffness(0, allocator, &mesh);
+    defer stiffness.deinit(allocator);
+
+    const expected = try allocator.alloc(f64, omega.values.len);
+    defer allocator.free(expected);
+    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+    for (expected, strong.values, dual_volumes) |*out, value, dual_volume| {
+        out.* = dual_volume * value;
+    }
+
+    const actual = try allocator.alloc(f64, omega.values.len);
+    defer allocator.free(actual);
+    sparse.spmv(stiffness, omega.values, actual);
+
+    for (actual, expected) |lhs, rhs| {
+        try testing.expectApproxEqAbs(rhs, lhs, 1e-11);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Δ₁ tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PrimalC1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
+
+test "assembled FEEC stiffness satisfies S₁ω = M₁(Δ₁ω) on tetrahedral meshes" {
+    const allocator = testing.allocator;
+    const OneForm = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    var omega = try OneForm.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x51_1F_AA);
+    for (omega.values) |*value| {
+        value.* = rng.random().float(f64) * 2.0 - 1.0;
+    }
+
+    var strong = try (try operator_context.laplacian(1)).apply(allocator, omega);
+    defer strong.deinit(allocator);
+
+    var stiffness = try assemble_stiffness(1, allocator, &mesh);
+    defer stiffness.deinit(allocator);
+
+    const expected = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(expected);
+    sparse.spmv(mesh.whitney_mass(1), strong.values, expected);
+
+    const actual = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(actual);
+    sparse.spmv(stiffness, omega.values, actual);
+
+    for (actual, expected) |lhs, rhs| {
+        try testing.expectApproxEqAbs(rhs, lhs, 1e-10);
+    }
+}
 
 test "Δ₁ of exact 1-form d₀f has dδ component zero" {
     // For ω = d₀f (an exact 1-form), the dδ term of Δ₁ vanishes because
