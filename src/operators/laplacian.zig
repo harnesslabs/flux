@@ -108,6 +108,17 @@ pub fn assemble_for_degree(
     };
 }
 
+pub fn assemble_stiffness(
+    comptime k: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    _ = allocator;
+    _ = mesh;
+    _ = k;
+    @panic("not yet implemented");
+}
+
 fn assemble_zero_form_stiffness(
     allocator: std.mem.Allocator,
     mesh: anytype,
