@@ -22,16 +22,96 @@ const sparse = @import("../math/sparse.zig");
 const weak_form = @import("weak_form.zig");
 
 pub fn WhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type {
+    comptime {
+        if (k <= 0 or k >= MeshType.topological_dimension) {
+            @compileError("Whitney mass is only defined for interior degrees 0 < k < n");
+        }
+        if (MeshType.topological_dimension > 3) {
+            @compileError("Whitney mass assembly is currently implemented for topological_dimension <= 3");
+        }
+    }
+
     return struct {
         const Self = @This();
+        const n = MeshType.topological_dimension;
 
         pub const degree = k;
         pub const MeshT = MeshType;
+        pub const LocalMatrix = [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64;
 
         mesh: *const MeshType,
 
         pub fn init(mesh: *const MeshType) Self {
             return .{ .mesh = mesh };
+        }
+
+        pub fn localMatrix(self: Self, top_simplex_index: usize) LocalMatrix {
+            const top_simplex_vertices = self.mesh.simplices(n).items(.vertices);
+            const top_simplex_volumes = self.mesh.simplices(n).items(.volume);
+            const coords = self.mesh.vertices.slice().items(.coords);
+            const top_vertices = top_simplex_vertices[top_simplex_index];
+
+            var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
+            for (0..n + 1) |local_vertex_idx| {
+                top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
+            }
+
+            const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
+            return localWhitneyMass(MeshType.embedding_dimension, n, k, gradients, top_simplex_volumes[top_simplex_index]);
+        }
+    };
+}
+
+fn RiemannianWhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type {
+    comptime {
+        if (MeshType.embedding_dimension != MeshType.topological_dimension) {
+            @compileError("metric-aware Whitney mass currently requires embedding_dimension == topological_dimension");
+        }
+    }
+
+    return struct {
+        const Self = @This();
+        const n = MeshType.topological_dimension;
+
+        pub const degree = k;
+        pub const MeshT = MeshType;
+        pub const LocalMatrix = [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64;
+
+        mesh: *const MeshType,
+        top_simplex_metric_tensors: []const [n][n]f64,
+
+        pub fn init(mesh: *const MeshType, top_simplex_metric_tensors: []const [n][n]f64) Self {
+            std.debug.assert(top_simplex_metric_tensors.len == mesh.num_cells(n));
+            return .{
+                .mesh = mesh,
+                .top_simplex_metric_tensors = top_simplex_metric_tensors,
+            };
+        }
+
+        pub fn localMatrix(self: Self, top_simplex_index: usize) LocalMatrix {
+            const top_simplex_vertices = self.mesh.simplices(n).items(.vertices);
+            const top_simplex_volumes = self.mesh.simplices(n).items(.volume);
+            const coords = self.mesh.vertices.slice().items(.coords);
+            const top_vertices = top_simplex_vertices[top_simplex_index];
+
+            var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
+            for (0..n + 1) |local_vertex_idx| {
+                top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
+            }
+
+            const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
+            const metric_tensor = self.top_simplex_metric_tensors[top_simplex_index];
+            const metric_inverse = invertSmallMatrix(n, metric_tensor);
+            const metric_volume_scale = @sqrt(smallMatrixDeterminant(n, metric_tensor));
+            return localWhitneyMassWithMetric(
+                MeshType.embedding_dimension,
+                n,
+                k,
+                gradients,
+                top_simplex_volumes[top_simplex_index],
+                metric_inverse,
+                metric_volume_scale,
+            );
         }
     };
 }
@@ -53,54 +133,7 @@ pub fn assemble_whitney_mass(
         }
     }
 
-    const simplex_count = mesh.num_cells(k);
-    const top_simplex_count = mesh.num_cells(n);
-    const simplex_vertices = mesh.simplices(k).items(.vertices);
-    const top_simplex_vertices = mesh.simplices(n).items(.vertices);
-    const top_simplex_volumes = mesh.simplices(n).items(.volume);
-    const coords = mesh.vertices.slice().items(.coords);
-    const local_faces = localFaces(n, k);
-
-    var simplex_index = std.AutoHashMap([k + 1]u32, u32).init(allocator);
-    defer simplex_index.deinit();
-    for (simplex_vertices, 0..) |vertices, global_idx| {
-        try simplex_index.put(vertices, @intCast(global_idx));
-    }
-
-    var assembler = sparse.TripletAssembler(f64).init(simplex_count, simplex_count);
-    defer assembler.deinit(allocator);
-
-    for (0..top_simplex_count) |top_idx| {
-        const top_vertices = top_simplex_vertices[top_idx];
-
-        var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
-        for (0..n + 1) |local_vertex_idx| {
-            top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
-        }
-
-        const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
-        const local_mass = localWhitneyMass(MeshType.embedding_dimension, n, k, gradients, top_simplex_volumes[top_idx]);
-
-        var global_indices: [local_faces.len]u32 = undefined;
-        var orientation_signs: [local_faces.len]i8 = undefined;
-        for (local_faces, 0..) |local_face, local_face_idx| {
-            const oriented_vertices = liftLocalFaceVertices(k, n, top_vertices, local_face);
-            const canonical_key = canonicalizeVertices(k + 1, oriented_vertices);
-            const global_idx = simplex_index.get(canonical_key).?;
-            global_indices[local_face_idx] = global_idx;
-            orientation_signs[local_face_idx] = orientationSign(k + 1, oriented_vertices, simplex_vertices[global_idx]);
-        }
-
-        for (0..local_faces.len) |i| {
-            const sign_i: f64 = @floatFromInt(orientation_signs[i]);
-            for (0..local_faces.len) |j| {
-                const sign_j: f64 = @floatFromInt(orientation_signs[j]);
-                try assembler.addEntry(allocator, global_indices[i], global_indices[j], sign_i * sign_j * local_mass[i][j]);
-            }
-        }
-    }
-
-    return assembler.build(allocator);
+    return weak_form.assemble(k, allocator, mesh, WhitneyMassKernel(MeshType, k).init(mesh));
 }
 
 pub fn assemble_whitney_mass_with_metric(
@@ -124,67 +157,12 @@ pub fn assemble_whitney_mass_with_metric(
         }
     }
 
-    const simplex_count = mesh.num_cells(k);
-    const top_simplex_count = mesh.num_cells(n);
-    std.debug.assert(top_simplex_metric_tensors.len == top_simplex_count);
-
-    const simplex_vertices = mesh.simplices(k).items(.vertices);
-    const top_simplex_vertices = mesh.simplices(n).items(.vertices);
-    const top_simplex_volumes = mesh.simplices(n).items(.volume);
-    const coords = mesh.vertices.slice().items(.coords);
-    const local_faces = localFaces(n, k);
-
-    var simplex_index = std.AutoHashMap([k + 1]u32, u32).init(allocator);
-    defer simplex_index.deinit();
-    for (simplex_vertices, 0..) |vertices, global_idx| {
-        try simplex_index.put(vertices, @intCast(global_idx));
-    }
-
-    var assembler = sparse.TripletAssembler(f64).init(simplex_count, simplex_count);
-    defer assembler.deinit(allocator);
-
-    for (0..top_simplex_count) |top_idx| {
-        const top_vertices = top_simplex_vertices[top_idx];
-
-        var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
-        for (0..n + 1) |local_vertex_idx| {
-            top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
-        }
-
-        const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
-        const metric_tensor = top_simplex_metric_tensors[top_idx];
-        const metric_inverse = invertSmallMatrix(n, metric_tensor);
-        const metric_volume_scale = @sqrt(smallMatrixDeterminant(n, metric_tensor));
-        const local_mass = localWhitneyMassWithMetric(
-            MeshType.embedding_dimension,
-            n,
-            k,
-            gradients,
-            top_simplex_volumes[top_idx],
-            metric_inverse,
-            metric_volume_scale,
-        );
-
-        var global_indices: [local_faces.len]u32 = undefined;
-        var orientation_signs: [local_faces.len]i8 = undefined;
-        for (local_faces, 0..) |local_face, local_face_idx| {
-            const oriented_vertices = liftLocalFaceVertices(k, n, top_vertices, local_face);
-            const canonical_key = canonicalizeVertices(k + 1, oriented_vertices);
-            const global_idx = simplex_index.get(canonical_key).?;
-            global_indices[local_face_idx] = global_idx;
-            orientation_signs[local_face_idx] = orientationSign(k + 1, oriented_vertices, simplex_vertices[global_idx]);
-        }
-
-        for (0..local_faces.len) |i| {
-            const sign_i: f64 = @floatFromInt(orientation_signs[i]);
-            for (0..local_faces.len) |j| {
-                const sign_j: f64 = @floatFromInt(orientation_signs[j]);
-                try assembler.addEntry(allocator, global_indices[i], global_indices[j], sign_i * sign_j * local_mass[i][j]);
-            }
-        }
-    }
-
-    return assembler.build(allocator);
+    return weak_form.assemble(
+        k,
+        allocator,
+        mesh,
+        RiemannianWhitneyMassKernel(MeshType, k).init(mesh, top_simplex_metric_tensors),
+    );
 }
 
 pub fn assemble_whitney_preconditioner(
@@ -247,99 +225,6 @@ fn factorial(comptime n: comptime_int) comptime_int {
     return result;
 }
 
-fn choose(comptime n: comptime_int, comptime k: comptime_int) comptime_int {
-    if (k < 0 or k > n) return 0;
-    if (k == 0 or k == n) return 1;
-    var numerator: comptime_int = 1;
-    var denominator: comptime_int = 1;
-    const k_small = if (k < n - k) k else n - k;
-    inline for (0..k_small) |i| {
-        numerator *= (n - i);
-        denominator *= (i + 1);
-    }
-    return @divExact(numerator, denominator);
-}
-
-fn localFaces(comptime n: comptime_int, comptime k: comptime_int) [choose(n + 1, k + 1)][k + 1]u8 {
-    return switch (n) {
-        2 => switch (k) {
-            1 => .{
-                .{ 0, 1 },
-                .{ 0, 2 },
-                .{ 1, 2 },
-            },
-            else => @compileError("unsupported local face degree for 2-simplex"),
-        },
-        3 => switch (k) {
-            1 => .{
-                .{ 0, 1 },
-                .{ 0, 2 },
-                .{ 0, 3 },
-                .{ 1, 2 },
-                .{ 1, 3 },
-                .{ 2, 3 },
-            },
-            2 => .{
-                .{ 0, 1, 2 },
-                .{ 0, 1, 3 },
-                .{ 0, 2, 3 },
-                .{ 1, 2, 3 },
-            },
-            else => @compileError("unsupported local face degree for 3-simplex"),
-        },
-        else => @compileError("local face enumeration is only implemented for topological_dimension <= 3"),
-    };
-}
-
-fn liftLocalFaceVertices(
-    comptime k: comptime_int,
-    comptime n: comptime_int,
-    top_vertices: [n + 1]u32,
-    local_face: [k + 1]u8,
-) [k + 1]u32 {
-    var result: [k + 1]u32 = undefined;
-    for (local_face, 0..) |local_vertex_idx, write_idx| {
-        result[write_idx] = top_vertices[local_vertex_idx];
-    }
-    return result;
-}
-
-fn canonicalizeVertices(comptime len: comptime_int, vertices: [len]u32) [len]u32 {
-    var result = vertices;
-    inline for (1..len) |i| {
-        var j = i;
-        while (j > 0 and result[j - 1] > result[j]) : (j -= 1) {
-            std.mem.swap(u32, &result[j - 1], &result[j]);
-        }
-    }
-    return result;
-}
-
-fn orientationSign(comptime len: comptime_int, oriented_vertices: [len]u32, global_vertices: [len]u32) i8 {
-    var permutation: [len]u8 = undefined;
-    var used = [_]bool{false} ** len;
-    for (oriented_vertices, 0..) |vertex, oriented_idx| {
-        var found = false;
-        for (global_vertices, 0..) |global_vertex, global_idx| {
-            if (used[global_idx]) continue;
-            if (vertex != global_vertex) continue;
-            permutation[oriented_idx] = @intCast(global_idx);
-            used[global_idx] = true;
-            found = true;
-            break;
-        }
-        std.debug.assert(found);
-    }
-
-    var inversion_count: u32 = 0;
-    inline for (0..len) |i| {
-        inline for (i + 1..len) |j| {
-            if (permutation[i] > permutation[j]) inversion_count += 1;
-        }
-    }
-    return if (inversion_count % 2 == 0) 1 else -1;
-}
-
 fn barycentricGradients(
     comptime embedding_dimension: usize,
     comptime n: comptime_int,
@@ -383,8 +268,8 @@ fn localWhitneyMass(
     comptime k: comptime_int,
     gradients: [n + 1][embedding_dimension]f64,
     simplex_volume: f64,
-) [choose(n + 1, k + 1)][choose(n + 1, k + 1)]f64 {
-    const local_faces = localFaces(n, k);
+) [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64 {
+    const local_faces = weak_form.localFaces(n, k);
     var local_mass: [local_faces.len][local_faces.len]f64 = undefined;
     const lambda_integral_scale = simplex_volume / @as(f64, @floatFromInt((n + 1) * (n + 2)));
     const whitney_scale = @as(f64, @floatFromInt(factorial(k) * factorial(k)));
@@ -419,8 +304,8 @@ fn localWhitneyMassWithMetric(
     simplex_volume: f64,
     metric_inverse: [n][n]f64,
     metric_volume_scale: f64,
-) [choose(n + 1, k + 1)][choose(n + 1, k + 1)]f64 {
-    const local_faces = localFaces(n, k);
+) [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64 {
+    const local_faces = weak_form.localFaces(n, k);
     var local_mass: [local_faces.len][local_faces.len]f64 = undefined;
     const lambda_integral_scale = simplex_volume * metric_volume_scale /
         @as(f64, @floatFromInt((n + 1) * (n + 2)));

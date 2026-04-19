@@ -2,6 +2,27 @@
 
 <!-- Append entries with /decide. Format: ## YYYY-MM-DD: <title> -->
 
+## 2026-04-19: Separate FEEC weak-form scatter from Whitney local kernels
+
+**Decision:** Introduce `operators.weak_form.assemble` as the shared
+local-to-global assembly verb for FEEC weak operators, and express Whitney mass
+assembly through kernel types that provide per-top-simplex local matrices.
+
+**Alternatives considered:**
+1. Keep `assemble_whitney_mass*` as monolithic routines: rejected because that
+   keeps the only real FEEC weak-form path trapped in one special case, with
+   topology/orientation scatter interleaved with Whitney-specific local
+   integrals.
+2. Move the generic scatter logic into `Mesh`: rejected because assembled weak
+   operators are not topology-owned data. The mesh owns simplices and incidence;
+   operator-family assembly owns local kernels and global matrix construction.
+
+**Rationale:** The structural concept here is not "Whitney mass with helpers"
+but a reusable local-kernel/global-scatter seam for FEEC weak operators.
+Putting the scatter logic behind one `assemble` verb keeps future FEEC weak
+operators from re-implementing orientation and simplex-index plumbing, while
+keeping family-specific mathematics in the kernel layer where it belongs.
+
 ## 2026-04-18: Separate true de Rham projection from sampled continuous-form seeding
 
 **Decision:** Keep `operators.bridges.DeRhamProjection` as the exact
