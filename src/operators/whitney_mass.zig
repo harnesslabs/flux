@@ -19,6 +19,7 @@ const std = @import("std");
 const testing = std.testing;
 const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
+const weak_form = @import("weak_form.zig");
 
 pub fn assemble_whitney_mass(
     comptime k: comptime_int,
@@ -764,5 +765,77 @@ test "Whitney 2-form mass matrix is symmetric positive definite on tetrahedral m
 
         try testing.expectApproxEqRel(dot_axy, dot_xay, 1e-12);
         try testing.expect(xtmx > 0.0);
+    }
+}
+
+test "generic weak-form assembly matches Whitney mass on 2D edges" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
+    defer mesh.deinit(allocator);
+
+    var reference = try assemble_whitney_mass(1, allocator, &mesh);
+    defer reference.deinit(allocator);
+
+    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh2D, 1).init(&mesh));
+    defer assembled.deinit(allocator);
+
+    try expectEqualSparseMatrix(reference, assembled);
+}
+
+test "generic weak-form assembly matches Whitney mass on 3D faces" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var reference = try assemble_whitney_mass(2, allocator, &mesh);
+    defer reference.deinit(allocator);
+
+    var assembled = try weak_form.assemble(2, allocator, &mesh, WhitneyMassKernel(Mesh3D, 2).init(&mesh));
+    defer assembled.deinit(allocator);
+
+    try expectEqualSparseMatrix(reference, assembled);
+}
+
+test "generic weak-form Whitney assembly preserves symmetry" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh3D, 1).init(&mesh));
+    defer assembled.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0xDEC_3D_03);
+    const x = try allocator.alloc(f64, assembled.n_cols);
+    defer allocator.free(x);
+    const y = try allocator.alloc(f64, assembled.n_cols);
+    defer allocator.free(y);
+    const ax = try allocator.alloc(f64, assembled.n_rows);
+    defer allocator.free(ax);
+    const ay = try allocator.alloc(f64, assembled.n_rows);
+    defer allocator.free(ay);
+
+    for (0..100) |_| {
+        for (x) |*v| v.* = rng.random().float(f64) * 2.0 - 1.0;
+        for (y) |*v| v.* = rng.random().float(f64) * 2.0 - 1.0;
+
+        sparse.spmv(assembled, x, ax);
+        sparse.spmv(assembled, y, ay);
+
+        var dot_axy: f64 = 0.0;
+        var dot_xay: f64 = 0.0;
+        for (ax, y) |axi, yi| dot_axy += axi * yi;
+        for (x, ay) |xi, ayi| dot_xay += xi * ayi;
+
+        try testing.expectApproxEqRel(dot_axy, dot_xay, 1e-12);
+    }
+}
+
+fn expectEqualSparseMatrix(expected: sparse.CsrMatrix(f64), actual: sparse.CsrMatrix(f64)) !void {
+    try testing.expectEqual(expected.n_rows, actual.n_rows);
+    try testing.expectEqual(expected.n_cols, actual.n_cols);
+    try testing.expectEqualSlices(u32, expected.row_ptr, actual.row_ptr);
+    try testing.expectEqualSlices(u32, expected.col_idx, actual.col_idx);
+    for (expected.values, actual.values) |expected_value, actual_value| {
+        try testing.expectApproxEqRel(expected_value, actual_value, 1e-12);
     }
 }
