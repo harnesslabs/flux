@@ -729,7 +729,7 @@ fn benchLaplacian0(ctx: *BenchmarkContext) void {
 
 /// Δ₀: reference composed path without stored assembly.
 fn benchLaplacian0Composed(ctx: *BenchmarkContext) void {
-    var result = flux.operators.laplacian.laplacian_composed(ctx.allocator, ctx.c0) catch unreachable;
+    var result = flux.operators.dec.laplacian.laplacian_composed(ctx.allocator, ctx.c0) catch unreachable;
     result.deinit(ctx.allocator);
 }
 

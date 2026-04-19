@@ -2,6 +2,27 @@
 
 <!-- Append entries with /decide. Format: ## YYYY-MM-DD: <title> -->
 
+## 2026-04-19: Operators use strict family-first Laplacian paths
+
+**Decision:** Supersede the earlier same-day dual-path Laplacian export.
+Public API exposure is now strict family-first:
+`operators.dec.laplacian` and `operators.feec.laplacian`. Do not also expose
+the same family split through `operators.laplacian.dec` /
+`operators.laplacian.feec`.
+
+**Alternatives considered:**
+1. Keep both family-first and noun-first directions: rejected because that
+   violates the project's "one obvious way" rule and duplicates the same API
+   distinction with no added capability.
+2. Keep only noun-first `operators.laplacian.{dec,feec}`: rejected because the
+   current architectural milestone is about explicit operator families, so the
+   family qualifier should come first in the public taxonomy.
+
+**Rationale:** Users may still mix DEC and FEEC operators through one shared
+`OperatorContext`, but the public naming should make the family partition
+primary and unambiguous. One `OperatorContext` plus one family-first API path is
+clearer than duplicating the same surface in two directions.
+
 ## 2026-04-19: Laplacian module exposes DEC and FEEC families under one shared noun
 
 **Decision:** Keep `operators.laplacian` as the shared public noun, but split

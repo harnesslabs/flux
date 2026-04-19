@@ -5,10 +5,10 @@
 //! - `laplacian.dec` owns strong operator application, `Δ = dδ + δd`
 //! - `laplacian.feec` owns weak-form stiffness assembly, `Sₖ`
 //!
-//! This module re-exports both so callers can use either
-//! `flux.operators.laplacian.dec` / `flux.operators.laplacian.feec`
-//! or the family-first paths `flux.operators.dec.laplacian` /
-//! `flux.operators.feec.laplacian`.
+//! Public callers should use the strict family-first paths
+//! `flux.operators.dec.laplacian` and `flux.operators.feec.laplacian`.
+//! This file remains the internal shared noun and re-export seam for the
+//! underlying implementation modules.
 
 const std = @import("std");
 const testing = std.testing;

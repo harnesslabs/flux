@@ -81,7 +81,6 @@ pub const operators = struct {
     pub const compose = @import("operators/compose.zig");
     pub const exterior_derivative = @import("operators/exterior_derivative.zig");
     pub const hodge_star = @import("operators/hodge_star.zig");
-    pub const laplacian = laplacian_mod;
     pub const observers = @import("operators/observers.zig");
     pub const poisson = @import("operators/poisson.zig");
     pub const weak_form = @import("operators/weak_form.zig");
@@ -109,8 +108,7 @@ test "public API exposes explicit DEC and FEEC operator families" {
     try testing.expect(@hasDecl(@This().operators, "context"));
     try testing.expect(@hasDecl(@This().operators.dec, "laplacian"));
     try testing.expect(@hasDecl(@This().operators.feec, "laplacian"));
-    try testing.expect(@hasDecl(@This().operators.laplacian, "dec"));
-    try testing.expect(@hasDecl(@This().operators.laplacian, "feec"));
+    try testing.expect(!@hasDecl(@This().operators, "laplacian"));
 }
 
 test "public API exposes evolution as the execution root module" {
