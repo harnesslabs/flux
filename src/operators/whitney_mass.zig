@@ -21,7 +21,12 @@ const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const weak_form = @import("weak_form.zig");
 
-pub fn WhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type {
+pub const MetricMode = enum {
+    flat,
+    riemannian,
+};
+
+pub fn WhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int, comptime mode: MetricMode) type {
     comptime {
         if (k <= 0 or k >= MeshType.topological_dimension) {
             @compileError("Whitney mass is only defined for interior degrees 0 < k < n");
@@ -29,42 +34,7 @@ pub fn WhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type
         if (MeshType.topological_dimension > 3) {
             @compileError("Whitney mass assembly is currently implemented for topological_dimension <= 3");
         }
-    }
-
-    return struct {
-        const Self = @This();
-        const n = MeshType.topological_dimension;
-
-        pub const degree = k;
-        pub const MeshT = MeshType;
-        pub const LocalMatrix = [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64;
-
-        mesh: *const MeshType,
-
-        pub fn init(mesh: *const MeshType) Self {
-            return .{ .mesh = mesh };
-        }
-
-        pub fn localMatrix(self: Self, top_simplex_index: usize) LocalMatrix {
-            const top_simplex_vertices = self.mesh.simplices(n).items(.vertices);
-            const top_simplex_volumes = self.mesh.simplices(n).items(.volume);
-            const coords = self.mesh.vertices.slice().items(.coords);
-            const top_vertices = top_simplex_vertices[top_simplex_index];
-
-            var top_coords: [n + 1][MeshType.embedding_dimension]f64 = undefined;
-            for (0..n + 1) |local_vertex_idx| {
-                top_coords[local_vertex_idx] = coords[top_vertices[local_vertex_idx]];
-            }
-
-            const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
-            return localWhitneyMass(MeshType.embedding_dimension, n, k, gradients, top_simplex_volumes[top_simplex_index]);
-        }
-    };
-}
-
-fn RiemannianWhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type {
-    comptime {
-        if (MeshType.embedding_dimension != MeshType.topological_dimension) {
+        if (mode == .riemannian and MeshType.embedding_dimension != MeshType.topological_dimension) {
             @compileError("metric-aware Whitney mass currently requires embedding_dimension == topological_dimension");
         }
     }
@@ -75,13 +45,25 @@ fn RiemannianWhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int
 
         pub const degree = k;
         pub const MeshT = MeshType;
+        pub const metric_mode = mode;
         pub const LocalMatrix = [weak_form.localFaceCount(n, k)][weak_form.localFaceCount(n, k)]f64;
 
         mesh: *const MeshType,
-        top_simplex_metric_tensors: []const [n][n]f64,
+        top_simplex_metric_tensors: switch (mode) {
+            .flat => void,
+            .riemannian => []const [n][n]f64,
+        },
 
-        pub fn init(mesh: *const MeshType, top_simplex_metric_tensors: []const [n][n]f64) Self {
-            std.debug.assert(top_simplex_metric_tensors.len == mesh.num_cells(n));
+        pub fn init(
+            mesh: *const MeshType,
+            top_simplex_metric_tensors: switch (mode) {
+                .flat => void,
+                .riemannian => []const [n][n]f64,
+            },
+        ) Self {
+            if (mode == .riemannian) {
+                std.debug.assert(top_simplex_metric_tensors.len == mesh.num_cells(n));
+            }
             return .{
                 .mesh = mesh,
                 .top_simplex_metric_tensors = top_simplex_metric_tensors,
@@ -100,18 +82,29 @@ fn RiemannianWhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int
             }
 
             const gradients = barycentricGradients(MeshType.embedding_dimension, n, top_coords);
-            const metric_tensor = self.top_simplex_metric_tensors[top_simplex_index];
-            const metric_inverse = invertSmallMatrix(n, metric_tensor);
-            const metric_volume_scale = @sqrt(smallMatrixDeterminant(n, metric_tensor));
-            return localWhitneyMassWithMetric(
-                MeshType.embedding_dimension,
-                n,
-                k,
-                gradients,
-                top_simplex_volumes[top_simplex_index],
-                metric_inverse,
-                metric_volume_scale,
-            );
+            return switch (mode) {
+                .flat => localWhitneyMass(
+                    MeshType.embedding_dimension,
+                    n,
+                    k,
+                    gradients,
+                    top_simplex_volumes[top_simplex_index],
+                ),
+                .riemannian => blk: {
+                    const metric_tensor = self.top_simplex_metric_tensors[top_simplex_index];
+                    const metric_inverse = invertSmallMatrix(n, metric_tensor);
+                    const metric_volume_scale = @sqrt(smallMatrixDeterminant(n, metric_tensor));
+                    break :blk localWhitneyMassWithMetric(
+                        MeshType.embedding_dimension,
+                        n,
+                        k,
+                        gradients,
+                        top_simplex_volumes[top_simplex_index],
+                        metric_inverse,
+                        metric_volume_scale,
+                    );
+                },
+            };
         }
     };
 }
@@ -121,19 +114,7 @@ pub fn assemble_whitney_mass(
     allocator: std.mem.Allocator,
     mesh: anytype,
 ) !sparse.CsrMatrix(f64) {
-    const MeshType = @TypeOf(mesh.*);
-    const n = MeshType.topological_dimension;
-
-    comptime {
-        if (k <= 0 or k >= n) {
-            @compileError("Whitney mass is only defined for interior degrees 0 < k < n");
-        }
-        if (n > 3) {
-            @compileError("Whitney mass assembly is currently implemented for topological_dimension <= 3");
-        }
-    }
-
-    return weak_form.assemble(k, allocator, mesh, WhitneyMassKernel(MeshType, k).init(mesh));
+    return assemble_whitney_mass_generic(k, allocator, mesh, .flat, {});
 }
 
 pub fn assemble_whitney_mass_with_metric(
@@ -142,26 +123,25 @@ pub fn assemble_whitney_mass_with_metric(
     mesh: anytype,
     top_simplex_metric_tensors: []const [@TypeOf(mesh.*).topological_dimension][@TypeOf(mesh.*).topological_dimension]f64,
 ) !sparse.CsrMatrix(f64) {
+    return assemble_whitney_mass_generic(k, allocator, mesh, .riemannian, top_simplex_metric_tensors);
+}
+
+fn assemble_whitney_mass_generic(
+    comptime k: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+    comptime mode: MetricMode,
+    top_simplex_metric_tensors: switch (mode) {
+        .flat => void,
+        .riemannian => []const [@TypeOf(mesh.*).topological_dimension][@TypeOf(mesh.*).topological_dimension]f64,
+    },
+) !sparse.CsrMatrix(f64) {
     const MeshType = @TypeOf(mesh.*);
-    const n = MeshType.topological_dimension;
-
-    comptime {
-        if (MeshType.embedding_dimension != n) {
-            @compileError("metric-aware Whitney mass currently requires embedding_dimension == topological_dimension");
-        }
-        if (k <= 0 or k >= n) {
-            @compileError("Whitney mass is only defined for interior degrees 0 < k < n");
-        }
-        if (n > 3) {
-            @compileError("Whitney mass assembly is currently implemented for topological_dimension <= 3");
-        }
-    }
-
     return weak_form.assemble(
         k,
         allocator,
         mesh,
-        RiemannianWhitneyMassKernel(MeshType, k).init(mesh, top_simplex_metric_tensors),
+        WhitneyMassKernel(MeshType, k, mode).init(mesh, top_simplex_metric_tensors),
     );
 }
 
@@ -676,7 +656,7 @@ test "generic weak-form assembly matches Whitney mass on 2D edges" {
     var reference = try assemble_whitney_mass(1, allocator, &mesh);
     defer reference.deinit(allocator);
 
-    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh2D, 1).init(&mesh));
+    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh2D, 1, .flat).init(&mesh, {}));
     defer assembled.deinit(allocator);
 
     try expectEqualSparseMatrix(reference, assembled);
@@ -690,7 +670,7 @@ test "generic weak-form assembly matches Whitney mass on 3D faces" {
     var reference = try assemble_whitney_mass(2, allocator, &mesh);
     defer reference.deinit(allocator);
 
-    var assembled = try weak_form.assemble(2, allocator, &mesh, WhitneyMassKernel(Mesh3D, 2).init(&mesh));
+    var assembled = try weak_form.assemble(2, allocator, &mesh, WhitneyMassKernel(Mesh3D, 2, .flat).init(&mesh, {}));
     defer assembled.deinit(allocator);
 
     try expectEqualSparseMatrix(reference, assembled);
@@ -701,7 +681,7 @@ test "generic weak-form Whitney assembly preserves symmetry" {
     var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh3D, 1).init(&mesh));
+    var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh3D, 1, .flat).init(&mesh, {}));
     defer assembled.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_3D_03);
