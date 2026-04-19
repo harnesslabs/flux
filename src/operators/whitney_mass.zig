@@ -113,36 +113,29 @@ pub fn assemble_whitney_mass(
     comptime k: comptime_int,
     allocator: std.mem.Allocator,
     mesh: anytype,
-) !sparse.CsrMatrix(f64) {
-    return assemble_whitney_mass_generic(k, allocator, mesh, .flat, {});
-}
-
-pub fn assemble_whitney_mass_with_metric(
-    comptime k: comptime_int,
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-    top_simplex_metric_tensors: []const [@TypeOf(mesh.*).topological_dimension][@TypeOf(mesh.*).topological_dimension]f64,
-) !sparse.CsrMatrix(f64) {
-    return assemble_whitney_mass_generic(k, allocator, mesh, .riemannian, top_simplex_metric_tensors);
-}
-
-fn assemble_whitney_mass_generic(
-    comptime k: comptime_int,
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-    comptime mode: MetricMode,
-    top_simplex_metric_tensors: switch (mode) {
-        .flat => void,
-        .riemannian => []const [@TypeOf(mesh.*).topological_dimension][@TypeOf(mesh.*).topological_dimension]f64,
-    },
+    metric_data: anytype,
 ) !sparse.CsrMatrix(f64) {
     const MeshType = @TypeOf(mesh.*);
+    const mode: MetricMode = comptime whitneyMassMetricMode(MeshType, @TypeOf(metric_data));
     return weak_form.assemble(
         k,
         allocator,
         mesh,
-        WhitneyMassKernel(MeshType, k, mode).init(mesh, top_simplex_metric_tensors),
+        WhitneyMassKernel(MeshType, k, mode).init(mesh, metric_data),
     );
+}
+
+fn whitneyMassMetricMode(comptime MeshType: type, comptime MetricArgType: type) MetricMode {
+    if (MetricArgType == void) {
+        return .flat;
+    }
+    if (MetricArgType == []const [MeshType.topological_dimension][MeshType.topological_dimension]f64) {
+        return .riemannian;
+    }
+    @compileError(std.fmt.comptimePrint(
+        "assemble_whitney_mass expects metric data to be void or []const [{d}][{d}]f64",
+        .{ MeshType.topological_dimension, MeshType.topological_dimension },
+    ));
 }
 
 pub fn assemble_whitney_preconditioner(
@@ -507,7 +500,7 @@ test "Whitney mass matrix is square with n_edges dimension" {
     var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass(1, allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     try testing.expectEqual(mesh.num_edges(), mass.n_rows);
@@ -519,7 +512,7 @@ test "Whitney mass matrix is symmetric" {
     var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass(1, allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     // Check M(i,j) = M(j,i) by comparing Ax with Aᵀx for random x.
@@ -560,7 +553,7 @@ test "Whitney mass matrix is positive definite (xᵀMx > 0 for random x)" {
     var mesh = try Mesh2D.plane(allocator, 3, 3, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass(1, allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     var rng = std.Random.DefaultPrng.init(0xDEC_AA55_01);
@@ -587,7 +580,7 @@ test "Whitney mass matrix has nonzero diagonal and at least one entry per row" {
     var mesh = try Mesh2D.plane(allocator, 2, 2, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass(1, allocator, &mesh);
+    var mass = try assemble_whitney_mass(1, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     // Every edge appears in at least one face, so every row has entries.
@@ -613,7 +606,7 @@ test "Whitney 2-form mass matrix is symmetric positive definite on tetrahedral m
     var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var mass = try assemble_whitney_mass(2, allocator, &mesh);
+    var mass = try assemble_whitney_mass(2, allocator, &mesh, {});
     defer mass.deinit(allocator);
 
     try testing.expectEqual(mesh.num_faces(), mass.n_rows);
@@ -653,7 +646,7 @@ test "generic weak-form assembly matches Whitney mass on 2D edges" {
     var mesh = try Mesh2D.plane(allocator, 4, 3, 2.0, 1.5);
     defer mesh.deinit(allocator);
 
-    var reference = try assemble_whitney_mass(1, allocator, &mesh);
+    var reference = try assemble_whitney_mass(1, allocator, &mesh, {});
     defer reference.deinit(allocator);
 
     var assembled = try weak_form.assemble(1, allocator, &mesh, WhitneyMassKernel(Mesh2D, 1, .flat).init(&mesh, {}));
@@ -667,7 +660,7 @@ test "generic weak-form assembly matches Whitney mass on 3D faces" {
     var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 1, 1.0, 1.0, 1.0);
     defer mesh.deinit(allocator);
 
-    var reference = try assemble_whitney_mass(2, allocator, &mesh);
+    var reference = try assemble_whitney_mass(2, allocator, &mesh, {});
     defer reference.deinit(allocator);
 
     var assembled = try weak_form.assemble(2, allocator, &mesh, WhitneyMassKernel(Mesh3D, 2, .flat).init(&mesh, {}));
