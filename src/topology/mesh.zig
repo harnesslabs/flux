@@ -1055,6 +1055,36 @@ pub fn Mesh(comptime mesh_embedding_dimension: usize, comptime mesh_topological_
             return partial;
         }
 
+        /// Construct a Cartesian mesh using one dimension-generic noun.
+        ///
+        /// For `Mesh(2, 2)`, this forwards to `plane(...)`.
+        /// For `Mesh(3, 3)`, this forwards to `uniform_tetrahedral_grid(...)`.
+        pub fn cartesian(
+            allocator: std.mem.Allocator,
+            counts: [topological_dimension]u32,
+            extents: [embedding_dimension]f64,
+        ) !Self {
+            comptime {
+                if (embedding_dimension != topological_dimension) {
+                    @compileError("cartesian is only available when embedding and topological dimension match");
+                }
+            }
+
+            return switch (topological_dimension) {
+                2 => try Self.plane(allocator, counts[0], counts[1], extents[0], extents[1]),
+                3 => try Self.uniform_tetrahedral_grid(
+                    allocator,
+                    counts[0],
+                    counts[1],
+                    counts[2],
+                    extents[0],
+                    extents[1],
+                    extents[2],
+                ),
+                else => @compileError("cartesian is only implemented for 2D and 3D meshes"),
+            };
+        }
+
         // ───────────────────────────────────────────────────────────────────
         // Index helpers (grid-specific)
         // ───────────────────────────────────────────────────────────────────

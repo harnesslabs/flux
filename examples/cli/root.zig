@@ -1,5 +1,5 @@
 const std = @import("std");
-const commands = @import("example_commands");
+const commands = @import("cli_commands");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -18,10 +18,6 @@ pub fn run(allocator: std.mem.Allocator, argv: []const [:0]const u8) !void {
     }
 
     const cmd = argv[1];
-    if (eql(cmd, "list")) {
-        listCommands();
-        return;
-    }
     if (eql(cmd, "--help") or eql(cmd, "-h") or eql(cmd, "help")) {
         printUsage();
         return;
@@ -38,40 +34,18 @@ pub fn run(allocator: std.mem.Allocator, argv: []const [:0]const u8) !void {
     std.process.exit(2);
 }
 
-pub fn printUsage() void {
+fn printUsage() void {
     std.debug.print(
         \\
-        \\  flux — discrete exterior calculus simulation suite
-        \\
-        \\  usage: flux <subcommand> [options]
-        \\         flux list
-        \\         flux <subcommand> --help
+        \\  flux-new-cli <subcommand> [options]
         \\
         \\  subcommands:
         \\
     , .{});
     inline for (commands.subcommands) |sub| {
-        std.debug.print("    {s:<20}  {s}\n", .{ sub.name, sub.summary });
+        std.debug.print("    {s:<16}  {s}\n", .{ sub.name, sub.summary });
     }
-    std.debug.print(
-        \\
-        \\  ask a family for its full flag list:
-        \\    flux maxwell --dim 2 --help
-        \\    flux euler --dim 3 --help
-        \\    flux diffusion --help
-        \\
-        \\  examples:
-        \\    zig build run -- diffusion --surface plane --grid 32 --frames 4
-        \\    zig build run -- maxwell --dim 2 --demo cavity --frames 50
-        \\    zig build run -- euler --dim 3 --steps 100 --frames 5
-        \\
-    , .{});
-}
-
-fn listCommands() void {
-    inline for (commands.subcommands) |sub| {
-        std.debug.print("{s}\n", .{sub.name});
-    }
+    std.debug.print("\n", .{});
 }
 
 inline fn eql(a: []const u8, b: []const u8) bool {

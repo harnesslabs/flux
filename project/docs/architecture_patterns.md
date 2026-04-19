@@ -129,7 +129,7 @@ type-level factory such as:
 
 - `Mesh(2, 2)`
 - `Cochain(MeshType, k, Duality)`
-- `Evolution(StateType, MethodType, AuxType)`
+- `Evolution(SystemType, MethodType)`
 
 may still be the right implementation tool and the right public noun.
 
@@ -173,9 +173,9 @@ If an execution method has no independent runtime identity, keep it as a type.
 
 Weak:
 
-- runtime `Stepper` object stores `state`
+- runtime `Stepper` object stores `system`
 - runtime `Stepper` object stores `dt`
-- `Evolution` also stores `state` or run counters
+- `Evolution` also stores `system` or run counters
 
 Stronger:
 

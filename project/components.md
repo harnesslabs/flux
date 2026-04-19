@@ -36,15 +36,21 @@ composition. Each operator is an independent, testable unit.
 contracts on user-defined types so alternative mesh implementations (mesh views,
 imported meshes, n-dimensional meshes) are guaranteed compatible with the operator stack.
 
+### evolution
+**Domain label:** `domain/operators` (shares label with spatial operators)
+**Owns:** `src/evolution/`
+**Dependencies:** none (generic — parameterized on system types at comptime)
+**Description:** Execution mechanics. `Evolution` owns timestep policy, run
+state, configured listeners, and method-local options. Reference studies remain
+separate helpers layered around execution rather than built into the core type.
+
 ### integrators
 **Domain label:** `domain/operators` (shares label with spatial operators)
 **Owns:** `src/integrators/`
-**Dependencies:** none (generic — parameterized on system types at comptime)
-**Description:** Execution and time-integration patterns: `Evolution` owns
-runtime time management and listeners, while integrator methods such as
-leapfrog and forward Euler are parameterized at comptime on state/system types.
-Concrete physics modules provide the update functions; the execution layer
-configures and applies them without wrapper-only runtime steppers.
+**Dependencies:** none (generic — parameterized on system capabilities at comptime)
+**Description:** Time-integration method families such as leapfrog and forward
+Euler. These are orchestration patterns that specialize on system-side
+contracts rather than owning runtime state themselves.
 
 ### math
 **Domain label:** `domain/build` (no dedicated label yet)
@@ -62,11 +68,12 @@ writes `.vtu` files.
 
 ### examples
 **Domain label:** `domain/em`
-**Owns:** `examples/maxwell/`, `examples/euler/`, `examples/diffusion/`, `examples/common/`, `examples/commands.zig`, `examples/app.zig`, `examples/acceptance.zig`
+**Owns:** `examples/maxwell/`, `examples/euler/`, `examples/diffusion/`, `examples/cli/`, `examples/common/`
 **Dependencies:** flux library (via package import)
 **Description:** End-to-end physics examples and their shared CLI/output
-infrastructure. Maxwell and Euler are dimension-dispatched from one module per
-physics family; diffusion dispatches plane versus sphere from one module.
+infrastructure. Each family exports one system noun in `system.zig` and a thin
+scenario/config surface in `root.zig`. `examples/cli/` is the canonical
+example CLI.
 
 ### cli
 **Domain label:** `domain/build`
@@ -113,6 +120,7 @@ flowchart TD
         forms
         operators
         io
+        evolution
         integrators
         concepts
     end

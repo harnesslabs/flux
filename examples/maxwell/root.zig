@@ -1,256 +1,361 @@
 const std = @import("std");
 const flux = @import("flux");
 const common = @import("examples_common");
-const runtime = @import("runtime.zig");
-const reference = @import("reference.zig");
+const system_mod = @import("system.zig");
 
-const flux_io = flux.io;
-const evolution_mod = flux.evolution;
+pub const system_api = system_mod;
 
-const Demo = enum { dipole, cavity };
+const SnapshotCadence = union(enum) {
+    disabled,
+    interval: u32,
+    frames: u32,
+};
 
-const Config2D = struct {
-    demo: Demo = .dipole,
+pub fn CavityConfig(comptime dim: u8) type {
+    return struct {
+        steps: u32 = 1000,
+        counts: [dim]u32 = defaultCounts(dim),
+        extents: [dim]f64 = @splat(1.0),
+        courant: f64 = 0.1,
+        time_step_override: ?f64 = null,
+        output_dir: ?[]const u8 = null,
+        snapshot_cadence: SnapshotCadence = defaultSnapshotCadence(dim),
+        reference: bool = false,
+        boundary: system_mod.BoundaryCondition = .pec,
+
+        pub fn timeStep(self: @This()) f64 {
+            if (self.time_step_override) |value| return value;
+            return self.courant * minSpacing(dim, self.counts, self.extents);
+        }
+
+        pub fn snapshotInterval(self: @This()) ?u32 {
+            if (self.output_dir == null) return null;
+            return switch (self.snapshot_cadence) {
+                .disabled => null,
+                .interval => |value| value,
+                .frames => |value| @max(@as(u32, 1), common.framesToInterval(self.steps, value)),
+            };
+        }
+
+        pub fn cavityOptions(self: @This()) system_mod.CavityOptions(dim) {
+            return .{
+                .extents = self.extents,
+                .time_step = self.timeStep(),
+                .boundary = self.boundary,
+            };
+        }
+
+        pub fn measurementProvider(self: @This()) system_mod.CavityMeasurementProvider(dim) {
+            return .{
+                .extents = self.extents,
+                .time_step = self.timeStep(),
+            };
+        }
+
+        pub fn snapshotBaseName(self: @This()) []const u8 {
+            return if (self.reference) "cavity_reference" else "cavity";
+        }
+    };
+}
+
+pub const DipoleConfig2D = struct {
     steps: u32 = 1000,
-    grid: u32 = 32,
-    domain: f64 = 1.0,
+    counts: [2]u32 = .{ 32, 32 },
+    extents: [2]f64 = .{ 1.0, 1.0 },
     courant: f64 = 0.1,
-    frequency: f64 = 0.0,
+    time_step_override: ?f64 = null,
+    frequency_hz: f64 = 0.0,
     amplitude: f64 = 1.0,
-    output_dir: []const u8 = "output",
-    frames: u32 = 100,
+    output_dir: ?[]const u8 = null,
+    snapshot_cadence: SnapshotCadence = .{ .frames = 100 },
+    boundary: system_mod.BoundaryCondition = .pec,
 
-    pub fn spacing(self: Config2D) f64 {
-        return self.domain / @as(f64, @floatFromInt(self.grid));
+    pub fn timeStep(self: @This()) f64 {
+        if (self.time_step_override) |value| return value;
+        return self.courant * minSpacing(2, self.counts, self.extents);
     }
 
-    pub fn dt(self: Config2D) f64 {
-        return self.courant * self.spacing();
+    pub fn sourceFrequency(self: @This()) f64 {
+        if (self.frequency_hz != 0.0) return self.frequency_hz;
+        return 1.0 / (2.0 * self.extents[0]);
     }
 
-    pub fn sourceFrequency(self: Config2D) f64 {
-        if (self.frequency != 0.0) return self.frequency;
-        return 1.0 / (2.0 * self.domain);
+    pub fn snapshotInterval(self: @This()) ?u32 {
+        if (self.output_dir == null) return null;
+        return switch (self.snapshot_cadence) {
+            .disabled => null,
+            .interval => |value| value,
+            .frames => |value| @max(@as(u32, 1), common.framesToInterval(self.steps, value)),
+        };
+    }
+
+    pub fn dipoleOptions(self: @This()) system_mod.DipoleOptions(2) {
+        return .{
+            .center = .{ 0.5 * self.extents[0], 0.5 * self.extents[1] },
+            .frequency_hz = self.sourceFrequency(),
+            .amplitude = self.amplitude,
+            .boundary = self.boundary,
+        };
     }
 };
 
-const RunResult2D = struct {
-    elapsed_s: f64,
+pub fn RunResult(comptime Summary: type) type {
+    return struct {
+        elapsed_s: f64,
+        snapshot_count: u32,
+        summary: Summary,
+    };
+}
+
+pub const CavitySummary = struct {
     energy_final: f64,
-    snapshot_count: u32,
+    electric_l2_final: ?f64 = null,
+    magnetic_l2_final: ?f64 = null,
 };
 
-const Maxwell2DRenderer = struct {
-    state: *const runtime.MaxwellState2D,
+pub fn runDipole(
+    allocator: std.mem.Allocator,
+    config: DipoleConfig2D,
+    writer: *std.Io.Writer,
+) !RunResult(CavitySummary) {
+    const Mesh = flux.topology.Mesh(2, 2);
+    const Maxwell = system_mod.Maxwell(2, Mesh);
 
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        try flux_io.write_fields(allocator, writer, self.state.mesh.*, self.state.E.values, self.state.B.values);
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
+    defer mesh.deinit(allocator);
+
+    var system = try Maxwell.dipole(allocator, &mesh, config.dipoleOptions());
+    defer system.deinit(allocator);
+
+    const result = if (config.snapshotInterval()) |interval| blk: {
+        var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+            .dt(config.timeStep())
+            .steps(config.steps)
+            .listen(flux.listeners.Progress(writer))
+            .listen(
+                flux.listeners.Snapshots(*Maxwell)
+                    .field(.electric)
+                    .field(.magnetic)
+                    .measurement(.energy)
+                    .directory(config.output_dir.?)
+                    .baseName("dipole")
+                    .everySteps(interval),
+            )
+            .init(allocator, &system);
+        defer evolution.deinit();
+
+        const run_result = try evolution.run();
+        break :blk RunResult(CavitySummary){
+            .elapsed_s = run_result.elapsed_s,
+            .snapshot_count = snapshotCount(config.steps, interval),
+            .summary = .{
+                .energy_final = try system.measurement(allocator, .energy),
+            },
+        };
+    } else blk: {
+        var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+            .dt(config.timeStep())
+            .steps(config.steps)
+            .listen(flux.listeners.Progress(writer))
+            .init(allocator, &system);
+        defer evolution.deinit();
+
+        const run_result = try evolution.run();
+        break :blk RunResult(CavitySummary){
+            .elapsed_s = run_result.elapsed_s,
+            .snapshot_count = 0,
+            .summary = .{
+                .energy_final = try system.measurement(allocator, .energy),
+            },
+        };
+    };
+    return result;
+}
+
+pub fn runCavity(
+    comptime dim: u8,
+    allocator: std.mem.Allocator,
+    config: CavityConfig(dim),
+    writer: *std.Io.Writer,
+) !RunResult(CavitySummary) {
+    const Mesh = flux.topology.Mesh(dim, dim);
+    const Maxwell = system_mod.Maxwell(dim, Mesh);
+
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
+    defer mesh.deinit(allocator);
+
+    var system = try Maxwell.cavity(allocator, &mesh, config.cavityOptions());
+    defer system.deinit(allocator);
+
+    return if (config.reference)
+        try runCavityMode(true, allocator, config, writer, Maxwell, &system)
+    else
+        try runCavityMode(false, allocator, config, writer, Maxwell, &system);
+}
+
+fn runCavityMode(
+    comptime with_reference: bool,
+    allocator: std.mem.Allocator,
+    config: anytype,
+    writer: *std.Io.Writer,
+    comptime Maxwell: type,
+    system: *Maxwell,
+) !RunResult(CavitySummary) {
+    const provider = if (with_reference) config.measurementProvider() else {};
+    const result = if (config.snapshotInterval()) |interval| blk: {
+        if (with_reference) {
+            var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+                .dt(config.timeStep())
+                .steps(config.steps)
+                .listen(flux.listeners.Progress(writer))
+                .listen(
+                    flux.listeners.Snapshots(*Maxwell)
+                        .measureWith(provider)
+                        .field(.electric)
+                        .field(.magnetic)
+                        .measurement(.energy)
+                        .measurement(.electric_l2)
+                        .measurement(.magnetic_l2)
+                        .directory(config.output_dir.?)
+                        .baseName(config.snapshotBaseName())
+                        .everySteps(interval),
+                )
+                .init(allocator, system);
+            defer evolution.deinit();
+
+            const run_result = try evolution.run();
+            break :blk RunResult(CavitySummary){
+                .elapsed_s = run_result.elapsed_s,
+                .snapshot_count = snapshotCount(config.steps, interval),
+                .summary = try cavitySummary(true, allocator, system, evolution.currentTime(), provider),
+            };
+        } else {
+            var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+                .dt(config.timeStep())
+                .steps(config.steps)
+                .listen(flux.listeners.Progress(writer))
+                .listen(
+                    flux.listeners.Snapshots(*Maxwell)
+                        .field(.electric)
+                        .field(.magnetic)
+                        .measurement(.energy)
+                        .directory(config.output_dir.?)
+                        .baseName(config.snapshotBaseName())
+                        .everySteps(interval),
+                )
+                .init(allocator, system);
+            defer evolution.deinit();
+
+            const run_result = try evolution.run();
+            break :blk RunResult(CavitySummary){
+                .elapsed_s = run_result.elapsed_s,
+                .snapshot_count = snapshotCount(config.steps, interval),
+                .summary = try cavitySummary(false, allocator, system, evolution.currentTime(), provider),
+            };
+        }
+    } else blk: {
+        var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+            .dt(config.timeStep())
+            .steps(config.steps)
+            .listen(flux.listeners.Progress(writer))
+            .init(allocator, system);
+        defer evolution.deinit();
+
+        const run_result = try evolution.run();
+        break :blk RunResult(CavitySummary){
+            .elapsed_s = run_result.elapsed_s,
+            .snapshot_count = 0,
+            .summary = try cavitySummary(with_reference, allocator, system, evolution.currentTime(), provider),
+        };
+    };
+    return result;
+}
+
+fn cavitySummary(
+    comptime with_reference: bool,
+    allocator: std.mem.Allocator,
+    system: anytype,
+    time: f64,
+    provider: anytype,
+) !CavitySummary {
+    if (with_reference) {
+        return .{
+            .energy_final = try provider.measurement(allocator, system, .energy, time),
+            .electric_l2_final = try provider.measurement(allocator, system, .electric_l2, time),
+            .magnetic_l2_final = try provider.measurement(allocator, system, .magnetic_l2, time),
+        };
     }
-};
-
-fn simulate2D(allocator: std.mem.Allocator, state: *runtime.MaxwellState2D, source: ?runtime.PointDipole(runtime.Mesh2D), config: Config2D, base_name: []const u8, writer: anytype) !RunResult2D {
-    const dt = config.dt();
-    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState2D, runtime.DrivenLeapfrog2DMethod, void).config()
-        .dt(dt)
-        .methodOptions(.{ .source = source })
-        .init(allocator, state, {});
-    defer evolution.deinit();
-
-    const loop_result = try common.runEvolutionLoop(
-        allocator,
-        &evolution,
-        .{
-            .steps = config.steps,
-            .final_time = dt * @as(f64, @floatFromInt(config.steps)),
-            .frames = config.frames,
-            .output_dir = config.output_dir,
-            .output_base_name = base_name,
-            .progress_writer = writer,
-        },
-        Maxwell2DRenderer{ .state = state },
-    );
 
     return .{
-        .elapsed_s = loop_result.elapsed_s,
-        .energy_final = try runtime.electromagnetic_energy(allocator, state),
-        .snapshot_count = loop_result.snapshot_count,
+        .energy_final = try system.measurement(allocator, .energy),
     };
 }
 
-fn run2D(allocator: std.mem.Allocator, config: Config2D, writer: anytype) !RunResult2D {
-    const h = config.spacing();
-    const dt = config.dt();
-    var mesh = try runtime.Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain);
-    defer mesh.deinit(allocator);
-    var state = try runtime.MaxwellState2D.init(allocator, &mesh);
-    defer state.deinit(allocator);
-
-    switch (config.demo) {
-        .dipole => {
-            const frequency = config.sourceFrequency();
-            try writer.writeAll("\n  ── Dipole Simulation ───────────────────────\n\n");
-            try writer.print("  domain    [0, {d:.2}]²\n  grid      {d}×{d} ({d} triangles)\n  spacing   h = {d:.6}\n  timestep  dt = {d:.6} (Courant {d:.2})\n  source    f = {d:.4} Hz, A = {d:.2}\n\n", .{
-                config.domain, config.grid, config.grid, 2 * @as(u64, config.grid) * config.grid, h, dt, config.courant, frequency, config.amplitude,
-            });
-            const center = [2]f64{ config.domain / 2.0, config.domain / 2.0 };
-            const dipole = runtime.PointDipole(runtime.Mesh2D).init(&mesh, frequency, config.amplitude, center);
-            return simulate2D(allocator, &state, dipole, config, "dipole", writer);
-        },
-        .cavity => {
-            try writer.writeAll("\n  ── TE₁₀ Cavity Resonance ──────────────────\n\n");
-            try writer.print("  domain    [0, {d:.2}]²\n  grid      {d}×{d} ({d} triangles)\n  spacing   h = {d:.6}\n  timestep  dt = {d:.6} (Courant {d:.2})\n\n", .{
-                config.domain, config.grid, config.grid, 2 * @as(u64, config.grid) * config.grid, h, dt, config.courant,
-            });
-            reference.project_te10_b(&mesh, state.B.values, -dt / 2.0, config.domain);
-            return simulate2D(allocator, &state, null, config, "cavity", writer);
-        },
-    }
+fn defaultCounts(comptime dim: u8) [dim]u32 {
+    return switch (dim) {
+        2 => .{ 32, 32 },
+        3 => .{ 2, 2, 2 },
+        else => @compileError("maxwell examples only support dimensions 2 and 3"),
+    };
 }
 
-const Config3D = struct {
-    steps: u32 = 1000,
-    nx: u32 = 2,
-    ny: u32 = 2,
-    nz: u32 = 2,
-    width: f64 = 1.0,
-    height: f64 = 1.0,
-    depth: f64 = 1.0,
-    dt: f64 = 0.01,
-    output_dir: ?[]const u8 = null,
-    output_interval: u32 = 0,
-
-    fn gridSpacingMin(self: Config3D) f64 {
-        return @min(self.width / @as(f64, @floatFromInt(self.nx)), @min(self.height / @as(f64, @floatFromInt(self.ny)), self.depth / @as(f64, @floatFromInt(self.nz))));
-    }
-};
-
-const RunResult3D = struct {
-    elapsed_s: f64,
-    snapshot_count: u32,
-};
-
-const Maxwell3DRenderer = struct {
-    state: *const runtime.MaxwellState3D,
-
-    pub fn render(self: @This(), allocator: std.mem.Allocator, writer: anytype) !void {
-        try reference.writeSnapshot(allocator, writer, self.state);
-    }
-};
-
-fn makeCavityMesh(allocator: std.mem.Allocator, config: Config3D) !runtime.Mesh3D {
-    return runtime.Mesh3D.uniform_tetrahedral_grid(allocator, config.nx, config.ny, config.nz, config.width, config.height, config.depth);
+fn defaultSnapshotCadence(comptime dim: u8) SnapshotCadence {
+    return switch (dim) {
+        2 => .{ .frames = 100 },
+        3 => .disabled,
+        else => @compileError("maxwell examples only support dimensions 2 and 3"),
+    };
 }
 
-fn run3D(allocator: std.mem.Allocator, config: Config3D, writer: anytype) !RunResult3D {
-    var mesh = try makeCavityMesh(allocator, config);
+fn minSpacing(comptime dim: u8, counts: [dim]u32, extents: [dim]f64) f64 {
+    var spacing = extents[0] / @as(f64, @floatFromInt(counts[0]));
+    inline for (1..dim) |axis| {
+        spacing = @min(spacing, extents[axis] / @as(f64, @floatFromInt(counts[axis])));
+    }
+    return spacing;
+}
+
+fn snapshotCount(steps: u32, interval: u32) u32 {
+    std.debug.assert(interval > 0);
+    const trailing: u32 = if (steps % interval == 0) 0 else 1;
+    return 1 + (steps / interval) + trailing;
+}
+
+fn magneticDivergenceL2(allocator: std.mem.Allocator, system: anytype) !f64 {
+    var divergence = try (try system.state.operators.exteriorDerivative(flux.forms.Primal, 2)).apply(allocator, system.state.B);
+    defer divergence.deinit(allocator);
+    return std.math.sqrt(divergence.norm_squared());
+}
+
+test "Maxwell 3D cavity preserves ∇·B = 0 at every step" {
+    const allocator = std.testing.allocator;
+    const Mesh = flux.topology.Mesh(3, 3);
+    const Maxwell = system_mod.Maxwell(3, Mesh);
+    const config = CavityConfig(3){
+        .steps = 10,
+        .counts = .{ 2, 2, 2 },
+        .time_step_override = 0.0025,
+    };
+
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
     defer mesh.deinit(allocator);
-    var state = try runtime.MaxwellState3D.init(allocator, &mesh);
-    defer state.deinit(allocator);
-    try reference.seedTm110Mode(allocator, &state, config.dt, config.width, config.height);
 
-    const omega = reference.tm110AngularFrequency(config.width, config.height);
-    try writer.print("\n  ── TM₁₁₀ Cavity Resonance (3D) ─────────────\n\n  domain    [0, {d:.2}] × [0, {d:.2}] × [0, {d:.2}]\n  grid      {d}×{d}×{d} ({d} tetrahedra)\n  spacing   h_min = {d:.6}\n  timestep  dt = {d:.6}\n  mode      TM₁₁₀  (ω = {d:.6})\n\n", .{
-        config.width, config.height, config.depth, config.nx, config.ny, config.nz, mesh.num_tets(), config.gridSpacingMin(), config.dt, omega,
-    });
+    var system = try Maxwell.cavity(allocator, &mesh, config.cavityOptions());
+    defer system.deinit(allocator);
 
-    var evolution = try evolution_mod.Evolution(*runtime.MaxwellState3D, runtime.Leapfrog3DMethod, void).config()
-        .dt(config.dt)
-        .init(allocator, &state, {});
+    var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+        .dt(config.timeStep())
+        .steps(config.steps)
+        .init(allocator, &system);
     defer evolution.deinit();
 
-    const loop_result = try common.runEvolutionLoop(
-        allocator,
-        &evolution,
-        .{
-            .steps = config.steps,
-            .final_time = config.dt * @as(f64, @floatFromInt(config.steps)),
-            .frames = 0,
-            .output_dir = config.output_dir orelse "",
-            .output_base_name = "maxwell_3d",
-            .plan_override = if (config.output_dir != null and config.output_interval > 0)
-                common.Plan.fromInterval(config.steps, config.output_interval, .{})
-            else
-                common.Plan.disabled(),
-            .progress_writer = writer,
-        },
-        Maxwell3DRenderer{ .state = &state },
-    );
-
-    _ = try reference.divergenceNorm3D(allocator, &state);
-    return .{ .elapsed_s = loop_result.elapsed_s, .snapshot_count = loop_result.snapshot_count };
-}
-
-pub fn Mesh(comptime dim: u8) type {
-    return switch (dim) {
-        2 => runtime.Mesh2D,
-        3 => runtime.Mesh3D,
-        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
-    };
-}
-
-pub fn Config(comptime dim: u8) type {
-    return switch (dim) {
-        2 => Config2D,
-        3 => Config3D,
-        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
-    };
-}
-
-pub fn RunResult(comptime dim: u8) type {
-    return switch (dim) {
-        2 => RunResult2D,
-        3 => RunResult3D,
-        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
-    };
-}
-
-pub fn State(comptime dim: u8) type {
-    return switch (dim) {
-        2 => runtime.MaxwellState2D,
-        3 => runtime.MaxwellState3D,
-        else => @compileError("Maxwell examples only support topological dimensions 2 and 3"),
-    };
-}
-
-pub fn run(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim), writer: anytype) !RunResult(dim) {
-    return switch (dim) {
-        2 => try run2D(allocator, config, writer),
-        3 => try run3D(allocator, config, writer),
-        else => unreachable,
-    };
-}
-
-pub fn makeMesh(comptime dim: u8, allocator: std.mem.Allocator, config: Config(dim)) !Mesh(dim) {
-    return switch (dim) {
-        2 => try runtime.Mesh2D.plane(allocator, config.grid, config.grid, config.domain, config.domain),
-        3 => try makeCavityMesh(allocator, config),
-        else => unreachable,
-    };
-}
-
-pub fn step(comptime dim: u8, allocator: std.mem.Allocator, state: *State(dim), dt: f64) !void {
-    switch (dim) {
-        2 => {
-            try runtime.leapfrog_step(allocator, state, dt);
-            runtime.apply_pec_boundary(state);
-        },
-        3 => try runtime.leapfrog_step_3d(allocator, state, dt),
-        else => unreachable,
+    for (0..config.steps) |_| {
+        try evolution.step();
+        const divergence = try magneticDivergenceL2(allocator, &system);
+        try std.testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
     }
-}
-
-pub fn seedReferenceMode(comptime dim: u8, allocator: std.mem.Allocator, state: *State(dim), dt: f64, width: f64, height: f64) !void {
-    switch (dim) {
-        2 => reference.project_te10_b(state.mesh, state.B.values, -dt / 2.0, width),
-        3 => try reference.seedTm110Mode(allocator, state, dt, width, height),
-        else => unreachable,
-    }
-}
-
-pub fn divergenceNorm(allocator: std.mem.Allocator, state: *const State(3)) !f64 {
-    return reference.divergenceNorm3D(allocator, state);
 }
 
 test {
-    _ = @import("tests.zig");
+    @import("std").testing.refAllDeclsRecursive(@This());
 }

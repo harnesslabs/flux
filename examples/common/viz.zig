@@ -96,7 +96,7 @@ test "writeProjectedTetFields writes projected cell arrays" {
     const allocator = std.testing.allocator;
     const Mesh3D = flux.topology.Mesh(3, 3);
 
-    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 1, 1, 1, 1.0, 1.0, 1.0);
+    var mesh = try Mesh3D.cartesian(allocator, .{ 1, 1, 1 }, .{ 1.0, 1.0, 1.0 });
     defer mesh.deinit(allocator);
 
     const edge_values = try allocator.alloc(f64, mesh.num_edges());

@@ -2,6 +2,71 @@
 
 <!-- Append entries with /decide. Format: ## YYYY-MM-DD: <title> -->
 
+## 2026-04-18: Separate true de Rham projection from sampled continuous-form seeding
+
+**Decision:** Keep `operators.bridges.DeRhamProjection` as the exact
+Whitney-form-to-cochain map, and move the example-facing continuous-form seeding
+path out of the library into the example support layer.
+
+**Alternatives considered:**
+1. Keep `DeRhamProjection.project(...)` and document that it is only a midpoint
+   rule: rejected because the public noun would still make a false mathematical
+   claim and silently encourage users to treat a sampled approximation as the
+   de Rham map.
+2. Implement exact continuous-form de Rham projection immediately for all
+   current analytic examples: rejected for now because the current example
+   surface only provides point evaluation, not simplex-integration contracts,
+   so doing this honestly would require a larger new abstraction than this PR
+   should absorb.
+
+**Rationale:** The exactness guarantee already holds for Whitney FEEC forms,
+where coefficient extraction is the correct de Rham map. The problematic path
+was only the example seeding helper from smooth fields. Keeping that helper in
+the example layer, rather than exporting it from `operators.bridges`, preserves
+an honest library bridge surface without pretending the current point-sampling
+rule is a generic FEEC operator.
+
+## 2026-04-18: Restore the lowest-order de Rham map to the core bridge layer
+
+**Decision:** Supersede the earlier stopgap above. `operators.bridges.DeRhamProjection`
+now owns the continuous-form-to-cochain path for current lowest-order Whitney
+spaces by evaluating the actual simplex DOFs: vertex values for 0-forms, edge
+integrals for 1-forms, and face integrals for 2-forms.
+
+**Alternatives considered:**
+1. Keep the continuous-form path in `examples/common`: rejected because this is
+   still a core FEEC/DEC bridge responsibility, not example glue.
+2. Wait for higher-order FEEC support before adding any continuous-form bridge:
+   rejected because the current examples already need a correct lowest-order path,
+   and the lowest-order Whitney DOFs are structurally well-defined now.
+
+**Rationale:** The problem was not that the bridge belonged in the library; it
+was that midpoint/centroid sampling was the wrong operator. The honest lowest-order
+bridge is already visible from the mathematics: de Rham coefficients are simplex
+DOFs. Implementing those DOFs now gives the examples a correct core-library path
+without inventing a parallel sampled API, while leaving higher-order FEEC DOFs
+for the later FEEC-space milestone.
+
+## 2026-04-18: Remove forwarding DEC/FEEC context wrappers in favor of one operator owner
+
+**Decision:** Delete the public forwarding wrappers in
+`operators/dec_context.zig` and `operators/feec_context.zig`, and expose only
+one public owner noun: `operators.context.OperatorContext`.
+
+**Alternatives considered:**
+1. Keep the wrapper contexts as family-restricted handles: rejected because they
+   only re-store an allocator and a pointer to the base context, then forward
+   calls without adding a stronger invariant or a separate ownership boundary.
+2. Alias the base owner back through the old `dec.context` / `feec.context`
+   paths: rejected because that would preserve the old parallel surface even
+   after the wrappers themselves were gone.
+
+**Rationale:** The real owned object is one per-mesh assembled-operator cache.
+DEC/FEEC separation still matters at the operator-family namespace level, but
+not as extra runtime handle types. Removing the forwarding wrappers aligns the
+public surface with `architecture_patterns.md`: one honest noun for ownership,
+family-qualified verbs and modules for the mathematical split.
+
 ## 2026-03-29: TimeStepStrategy concept uses structural signature checking
 
 **Decision:** `TimeStepStrategy(S)` validates `S.step` via `@typeInfo` — checking parameter
@@ -379,6 +444,40 @@ namespace makes the constructor catalog explicit and reusable, while thin mesh
 forwards preserve the simplest typed entrypoint for current consumers. This
 keeps the API aligned with the project's "one obvious way" preference without
 forcing a larger constructor-surface rewrite into the same PR.
+
+## 2026-04-17: Execution uses method families, config-attached listeners, and system measurements
+
+**Decision:** Promote `evolution` to a root module under `src/evolution/` and
+make the primary public execution shape:
+
+- `Evolution(System, MethodFamily)`
+- `.config().dt(...).steps(...).listen(...).init(...)`
+- `.run()`
+
+`Evolution` now specializes method families internally, listeners attach during
+configuration, and systems expose scalar observables through `Measurement`
+rather than introducing a separate execution-side diagnostic noun. Maxwell is
+the first example family converted to this shape.
+
+**Alternatives considered:**
+1. Keep `src/integrators/evolution.zig` and treat it as a logical root only:
+   rejected because execution is now a first-class noun distinct from the
+   method-family layer.
+2. Continue passing pre-specialized method types such as `Leapfrog(System)` at
+   call sites: rejected because it forces users to spell the system twice.
+3. Keep listener attachment in the shared example runner: rejected because
+   listeners are execution attachments, not runner-local scaffolding.
+4. Introduce both `Diagnostic` and `Measurement` as public observable nouns:
+   rejected for now because one `Measurement` surface is enough for canonical
+   observables such as energy, while comparison/probe APIs are still unsettled.
+
+**Rationale:** This keeps the execution language small and structural.
+`System` owns problem runtime and optional measurement capabilities. Method
+families stay thin and validate system-side contracts at comptime. `Evolution`
+owns time, run length, listeners, and method-local options without regrowing a
+runtime stepper wrapper. The converted Maxwell example now reads like the API
+we want to teach, while Euler and diffusion remain on a temporary bridge path
+until their own cleanup passes land.
 
 **Rationale:** The real question in issue #48 is empirical: does smaller
 incidence storage make boundary-operator application faster on large meshes?
@@ -917,3 +1016,43 @@ type-level algorithms plus optional configuration. Putting method-specific
 setup behind `Evolution.Config.init(...)` preserves a single construction
 surface while still allowing backward Euler seeding today and adaptive-method
 configuration later.
+
+## 2026-04-17: `System` is the runtime PDE noun; reference studies are separate from `Evolution`
+
+**Decision:** Refine the same-day execution cleanup further:
+
+- replace the top-level execution noun `State` with `System`
+- remove `AuxType` and embedded exact/reference support from `Evolution`
+- move exact-solution comparison into a separate `ReferenceStudy`
+
+The preferred public execution shape is now:
+
+- `Evolution(System, Method).config().dt(...).init(...)`
+
+and steady problems should use `System` directly without constructing an
+`Evolution`.
+
+**Alternatives considered:**
+1. Keep `State` as the top-level runtime noun: rejected because the practical
+   runtime owner in this codebase includes mesh, operators, boundary data,
+   assembled solve runtimes, and caches. `System` describes that broader owned
+   PDE instance more honestly.
+2. Keep `AuxType` on `Evolution` for exact/reference fields: rejected because
+   analytic comparison is not intrinsic to execution. It is a higher-order
+   study that should compose with an evolution rather than live inside every
+   `Evolution(...)` instantiation.
+3. Force steady-state workflows through `Evolution(System, SteadyState)`:
+   rejected because it makes execution look mandatory. Static and elliptic
+   workflows should operate directly on `System`.
+
+**Rationale:** The diffusion examples made the ownership bug obvious. Their
+assembled linear-system runtimes are part of the owned PDE instance, so they
+belong on the diffusion system itself, not in method options. Once that was
+clear, the old `AuxType` looked equally misplaced: exact/reference comparisons
+are analysis scaffolding, not execution state. This split gives a cleaner top-
+level language:
+
+- `System` owns the runtime PDE instance
+- `Method` updates a system in time
+- `Evolution` manages execution over a system
+- `ReferenceStudy` compares an evolution against known data when needed

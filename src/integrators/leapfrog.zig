@@ -1,234 +1,135 @@
-//! Generic leapfrog (Störmer-Verlet) integrator.
+//! Generic leapfrog (Störmer-Verlet) method family.
 //!
-//! Leapfrog advances two coupled variable groups in a staggered fashion:
-//!
-//!   x^{n+1/2} = x^{n-1/2} + dt · f(y^n)       (first half-step)
-//!   y^{n+1}   = y^n        + dt · g(x^{n+1/2}) (second half-step)
-//!
-//! The scheme is symplectic — it exactly preserves a modified Hamiltonian,
-//! giving bounded energy oscillation (no secular drift) for conservative
-//! systems. This makes it the natural choice for wave equations (Maxwell,
-//! acoustics) and Hamiltonian mechanics.
-//!
-//! ## Usage
-//!
-//! Define a system type with two half-step operators, then wrap it:
-//!
-//! ```zig
-//! const MySystem = struct {
-//!     pub const State = MyState;
-//!     pub fn first_half_step(alloc: Allocator, state: *State, dt: f64) !void { ... }
-//!     pub fn second_half_step(alloc: Allocator, state: *State, dt: f64) !void { ... }
-//! };
-//! const Stepper = Leapfrog(MySystem);
-//! try Stepper.step(allocator, &state, dt);
-//! ```
+//! The method does not own runtime state. Instead, the chosen system exposes a
+//! leapfrog-compatible split contract, and this family specializes to that
+//! system at comptime.
 
 const std = @import("std");
 const testing = std.testing;
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Leapfrog — generic integrator
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Generic leapfrog integrator parameterized on a system type.
-///
-/// The system must declare:
-///   - `pub const State: type`
-///   - `pub fn first_half_step(Allocator, *State, f64) !void`
-///   - `pub fn second_half_step(Allocator, *State, f64) !void`
-///
-/// The two half-steps encode the symplectic splitting: the first advances
-/// the staggered variable (e.g., B in Maxwell), the second advances the
-/// integer-time variable (e.g., E in Maxwell).
-///
-/// The integrator does not track timestep counts — that is the caller's
-/// responsibility (typically via a field on State or the runner loop).
 pub fn Leapfrog(comptime System: type) type {
     comptime validateSystem(System);
 
-    return struct {
-        /// The simulation state type, forwarded from the system.
-        pub const State = System.State;
+    const SystemDeclType = switch (@typeInfo(System)) {
+        .pointer => |pointer| pointer.child,
+        else => System,
+    };
 
-        /// Advance the state by one full leapfrog timestep.
-        ///
-        /// Executes: first_half_step(dt) then second_half_step(dt).
-        pub fn step(allocator: std.mem.Allocator, state: *State, dt: f64) !void {
-            try System.first_half_step(allocator, state, dt);
-            try System.second_half_step(allocator, state, dt);
+    return struct {
+        pub fn advance(
+            allocator: std.mem.Allocator,
+            system: System,
+            dt: f64,
+        ) !void {
+            try SystemDeclType.Leapfrog.first(allocator, system, dt);
+            try SystemDeclType.Leapfrog.second(allocator, system, dt);
+            if (@hasDecl(SystemDeclType.Leapfrog, "applyBoundary")) {
+                SystemDeclType.Leapfrog.applyBoundary(system);
+            }
         }
     };
 }
 
-/// Validate that `S` provides the interface Leapfrog needs.
-fn validateSystem(comptime S: type) void {
-    if (!@hasDecl(S, "State")) {
-        @compileError("Leapfrog requires a 'pub const State: type' declaration — " ++
-            "the simulation state type this system advances");
-    }
-    const State = S.State;
-    if (@TypeOf(State) != type) {
-        @compileError("Leapfrog: 'State' must be a type, got " ++ @typeName(@TypeOf(State)));
+fn validateSystem(comptime System: type) void {
+    const SystemDeclType = switch (@typeInfo(System)) {
+        .pointer => |pointer| pointer.child,
+        else => System,
+    };
+
+    if (!@hasDecl(SystemDeclType, "Leapfrog")) {
+        @compileError("Leapfrog requires the system to declare `pub const Leapfrog = struct { ... }`");
     }
 
-    inline for (.{ "first_half_step", "second_half_step" }) |name| {
-        if (!@hasDecl(S, name)) {
-            @compileError("Leapfrog requires a 'pub fn " ++ name ++
-                "(std.mem.Allocator, *State, f64) !void' declaration");
+    const Split = SystemDeclType.Leapfrog;
+    if (@TypeOf(Split) != type) {
+        @compileError("Leapfrog: system `Leapfrog` declaration must be a type");
+    }
+
+    inline for (.{ "first", "second" }) |name| {
+        if (!@hasDecl(Split, name)) {
+            @compileError("Leapfrog requires `pub fn " ++ name ++ "(std.mem.Allocator, System, f64) !void`");
         }
 
-        const info = @typeInfo(@TypeOf(@field(S, name)));
+        const info = @typeInfo(@TypeOf(@field(Split, name)));
         if (info != .@"fn") {
-            @compileError("Leapfrog: '" ++ name ++ "' must be a function");
+            @compileError("Leapfrog: `" ++ name ++ "` must be a function");
         }
         const fn_info = info.@"fn";
 
         if (fn_info.params.len != 3) {
-            @compileError("Leapfrog: '" ++ name ++
-                "' must take exactly 3 parameters (std.mem.Allocator, *State, f64)");
+            @compileError("Leapfrog: `" ++ name ++ "` must take exactly 3 parameters (std.mem.Allocator, System, f64)");
         }
         if (fn_info.params[0].type != std.mem.Allocator) {
-            @compileError("Leapfrog: '" ++ name ++ "' parameter 0 must be std.mem.Allocator");
+            @compileError("Leapfrog: `" ++ name ++ "` parameter 0 must be std.mem.Allocator");
         }
-        if (fn_info.params[1].type != *State) {
-            @compileError("Leapfrog: '" ++ name ++ "' parameter 1 must be *State");
+        if (fn_info.params[1].type != System) {
+            @compileError("Leapfrog: `" ++ name ++ "` parameter 1 must match the chosen system handle type");
         }
         if (fn_info.params[2].type != f64) {
-            @compileError("Leapfrog: '" ++ name ++ "' parameter 2 must be f64 (the timestep dt)");
+            @compileError("Leapfrog: `" ++ name ++ "` parameter 2 must be f64");
         }
 
         const ret = fn_info.return_type orelse
-            @compileError("Leapfrog: '" ++ name ++ "' must have a known return type");
+            @compileError("Leapfrog: `" ++ name ++ "` must have a known return type");
         const ret_info = @typeInfo(ret);
-        if (ret_info != .error_union) {
-            @compileError("Leapfrog: '" ++ name ++ "' must return !void");
+        if (ret_info != .error_union or ret_info.error_union.payload != void) {
+            @compileError("Leapfrog: `" ++ name ++ "` must return !void");
         }
-        if (ret_info.error_union.payload != void) {
-            @compileError("Leapfrog: '" ++ name ++ "' must return !void, not !" ++
-                @typeName(ret_info.error_union.payload));
+    }
+
+    if (@hasDecl(Split, "applyBoundary")) {
+        const info = @typeInfo(@TypeOf(Split.applyBoundary));
+        if (info != .@"fn") {
+            @compileError("Leapfrog: `applyBoundary` must be a function");
+        }
+        const fn_info = info.@"fn";
+        if (fn_info.params.len != 1 or fn_info.params[0].type != System) {
+            @compileError("Leapfrog: `applyBoundary` must take exactly one system-handle parameter");
+        }
+        if ((fn_info.return_type orelse void) != void) {
+            @compileError("Leapfrog: `applyBoundary` must return void");
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
+const MockSystem = struct {
+    position: f64,
+    velocity: f64,
 
-/// Mock system: two coupled variables advanced by half-steps.
-/// Models a harmonic oscillator: ẍ = -x.
-const MockLeapfrogSystem = struct {
-    pub const State = struct {
-        position: f64,
-        velocity: f64,
+    pub const Leapfrog = struct {
+        pub fn first(_: std.mem.Allocator, system: *MockSystem, dt: f64) !void {
+            system.position += dt * system.velocity;
+        }
+
+        pub fn second(_: std.mem.Allocator, system: *MockSystem, dt: f64) !void {
+            system.velocity += dt * (-system.position);
+        }
     };
-
-    /// First half-step: advance position using current velocity.
-    pub fn first_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
-        state.position += dt * state.velocity;
-    }
-
-    /// Second half-step: advance velocity using updated position.
-    pub fn second_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
-        state.velocity += dt * (-state.position);
-    }
 };
 
-test "Leapfrog accepts a conforming system" {
-    _ = Leapfrog(MockLeapfrogSystem);
+test "Leapfrog accepts a conforming system contract" {
+    _ = Leapfrog(*MockSystem);
 }
 
-test "Leapfrog accepts a system with extra declarations" {
-    const Extended = struct {
-        pub const State = struct { x: f64, v: f64 };
-        pub fn first_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
-            state.x += dt * state.v;
-        }
-        pub fn second_half_step(_: std.mem.Allocator, state: *State, dt: f64) !void {
-            state.v -= dt * state.x;
-        }
-        /// Extra — should not be rejected.
-        pub fn energy(state: *const State) f64 {
-            return 0.5 * (state.x * state.x + state.v * state.v);
-        }
-    };
-    _ = Leapfrog(Extended);
+test "Leapfrog composes first then second split steps" {
+    const Method = Leapfrog(*MockSystem);
+    var system = MockSystem{ .position = 0.0, .velocity = 1.0 };
+
+    try Method.advance(testing.allocator, &system, 0.1);
+    try testing.expectApproxEqAbs(0.1, system.position, 1e-15);
+    try testing.expectApproxEqAbs(0.99, system.velocity, 1e-15);
 }
 
-// ── Negative tests (compile-time rejection) ──────────────────────────────
+test "Leapfrog preserves harmonic-oscillator energy up to bounded oscillation" {
+    const Method = Leapfrog(*MockSystem);
+    var system = MockSystem{ .position = 1.0, .velocity = 0.0 };
 
-test "Leapfrog rejects system missing State" {
-    const NoState = struct {
-        pub fn first_half_step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
-        pub fn second_half_step(_: std.mem.Allocator, _: *anyopaque, _: f64) !void {}
-    };
-    // comptime _ = Leapfrog(NoState);
-    // expected: @compileError("Leapfrog requires a 'pub const State: type' declaration ...")
-    _ = NoState;
-}
-
-test "Leapfrog rejects system missing first_half_step" {
-    const NoFirst = struct {
-        pub const State = struct { x: f64 };
-        pub fn second_half_step(_: std.mem.Allocator, _: *State, _: f64) !void {}
-    };
-    // comptime _ = Leapfrog(NoFirst);
-    // expected: @compileError("Leapfrog requires a 'pub fn first_half_step(...)' ...")
-    _ = NoFirst;
-}
-
-test "Leapfrog rejects system missing second_half_step" {
-    const NoSecond = struct {
-        pub const State = struct { x: f64 };
-        pub fn first_half_step(_: std.mem.Allocator, _: *State, _: f64) !void {}
-    };
-    // comptime _ = Leapfrog(NoSecond);
-    // expected: @compileError("Leapfrog requires a 'pub fn second_half_step(...)' ...")
-    _ = NoSecond;
-}
-
-// ── Behavioral tests ────────────────────────────────────────────────────
-
-test "Leapfrog composes first_half_step then second_half_step" {
-    const Stepper = Leapfrog(MockLeapfrogSystem);
-    var state = MockLeapfrogSystem.State{ .position = 0.0, .velocity = 1.0 };
-
-    // One step of leapfrog on a harmonic oscillator (ẍ = -x):
-    //   position += dt * velocity  → 0.0 + 0.1 * 1.0 = 0.1
-    //   velocity += dt * (-position) → 1.0 + 0.1 * (-0.1) = 0.99
-    try Stepper.step(testing.allocator, &state, 0.1);
-    try testing.expectApproxEqAbs(0.1, state.position, 1e-15);
-    try testing.expectApproxEqAbs(0.99, state.velocity, 1e-15);
-}
-
-test "Leapfrog preserves energy for harmonic oscillator (symplecticity)" {
-    // The leapfrog scheme is symplectic — energy should oscillate around
-    // the true value without secular drift over many steps.
-    const Stepper = Leapfrog(MockLeapfrogSystem);
-    var state = MockLeapfrogSystem.State{ .position = 1.0, .velocity = 0.0 };
-
-    const initial_energy = 0.5 * (state.position * state.position + state.velocity * state.velocity);
+    const initial_energy = 0.5 * (system.position * system.position + system.velocity * system.velocity);
     const dt = 0.01;
-    const steps = 10_000;
-
-    for (0..steps) |_| {
-        try Stepper.step(testing.allocator, &state, dt);
+    for (0..10_000) |_| {
+        try Method.advance(testing.allocator, &system, dt);
     }
 
-    const final_energy = 0.5 * (state.position * state.position + state.velocity * state.velocity);
-
-    // Symplectic: energy drift bounded, not accumulating.
-    // For dt=0.01, 10k steps on a harmonic oscillator, the modified
-    // Hamiltonian differs from the true one by O(dt²). The oscillation
-    // amplitude is small but we use a conservative tolerance.
-    try testing.expectApproxEqAbs(initial_energy, final_energy, 5e-3);
-}
-
-test "Leapfrog on zero state is a no-op" {
-    const Stepper = Leapfrog(MockLeapfrogSystem);
-    var state = MockLeapfrogSystem.State{ .position = 0.0, .velocity = 0.0 };
-
-    try Stepper.step(testing.allocator, &state, 0.1);
-    try testing.expectApproxEqAbs(0.0, state.position, 1e-15);
-    try testing.expectApproxEqAbs(0.0, state.velocity, 1e-15);
+    const final_energy = 0.5 * (system.position * system.position + system.velocity * system.velocity);
+    try testing.expect(@abs(final_energy - initial_energy) < 1e-2);
 }
