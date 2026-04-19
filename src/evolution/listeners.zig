@@ -209,6 +209,7 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
             var buffer: [4096]u8 = undefined;
             var file_writer = file.writer(&buffer);
             try event.system.writeFields(event.allocator, &file_writer.interface, self.fields[0..self.field_count]);
+            try file_writer.interface.flush();
         }
 
         fn captureMeasurements(self: *Self, event: anytype) !void {
@@ -228,9 +229,9 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
                 try file.seekFromEnd(0);
             }
 
-            var buffer: [4096]u8 = undefined;
-            var file_writer = file.writer(&buffer);
-            const writer = &file_writer.interface;
+            var row_buffer: [1024]u8 = undefined;
+            var stream = std.io.fixedBufferStream(&row_buffer);
+            const writer = stream.writer();
             if (!self.csv_initialized) {
                 try writer.writeAll("step,time");
                 for (self.measurements[0..self.measurement_count]) |measurement_value| {
@@ -238,6 +239,8 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
                     try writer.print(",{s}", .{@tagName(selected_measurement)});
                 }
                 try writer.writeByte('\n');
+                try file.writeAll(stream.getWritten());
+                stream.reset();
                 self.csv_initialized = true;
             }
 
@@ -256,6 +259,7 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
                 try writer.print(",{d:.16}", .{value});
             }
             try writer.writeByte('\n');
+            try file.writeAll(stream.getWritten());
         }
     };
 }
@@ -320,4 +324,65 @@ test "Snapshots.measureWith composes measurements from an attached provider" {
         .measurement(.doubled);
     _ = Listener;
     try testing.expectEqual(@as(usize, 2), listener.measurement_count);
+}
+
+test "SnapshotListener flushes buffered field and measurement output" {
+    const System = struct {
+        pub const Field = enum { value };
+        pub const Measurement = enum { value };
+
+        value: f64,
+
+        pub fn writeFields(self: *const @This(), _: std.mem.Allocator, writer: anytype, fields: []const Field) !void {
+            _ = fields;
+            try writer.print("<field>{d:.3}</field>\n", .{self.value});
+        }
+
+        pub fn measurement(self: *const @This(), _: std.mem.Allocator, which: Measurement) !f64 {
+            return switch (which) {
+                .value => self.value,
+            };
+        }
+    };
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const output_dir = "snapshots";
+    try tmp.dir.makePath(output_dir);
+
+    var listener = Snapshots(*const System)
+        .directory(output_dir)
+        .baseName("system")
+        .field(.value)
+        .measurement(.value);
+
+    const system = System{ .value = 1.25 };
+    const event = .{
+        .allocator = testing.allocator,
+        .system = &system,
+        .step_index = @as(u32, 3),
+        .step_goal = @as(u32, 4),
+        .time = 0.75,
+        .final_time = 1.0,
+    };
+
+    var original_cwd = try std.fs.cwd().openDir(".", .{});
+    defer original_cwd.close();
+    try tmp.dir.setAsCwd();
+    defer original_cwd.setAsCwd() catch {};
+
+    try listener.onStep(event);
+
+    const field_path = output_dir ++ "/system_00003.vtu";
+    const measurement_path = output_dir ++ "/system_measurements.csv";
+
+    const field_contents = try tmp.dir.readFileAlloc(testing.allocator, field_path, 1024);
+    defer testing.allocator.free(field_contents);
+    try testing.expect(std.mem.indexOf(u8, field_contents, "<field>1.250</field>") != null);
+
+    const measurement_contents = try tmp.dir.readFileAlloc(testing.allocator, measurement_path, 1024);
+    defer testing.allocator.free(measurement_contents);
+    try testing.expect(std.mem.indexOf(u8, measurement_contents, "step,time,value") != null);
+    try testing.expect(std.mem.indexOf(u8, measurement_contents, "3,0.750000000000,1.2500000000000000") != null);
 }
