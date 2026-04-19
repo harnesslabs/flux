@@ -2,6 +2,51 @@
 
 <!-- Append entries with /decide. Format: ## YYYY-MM-DD: <title> -->
 
+## 2026-04-19: Operators use strict family-first Laplacian paths
+
+**Decision:** Supersede the earlier same-day dual-path Laplacian export.
+Public API exposure is now strict family-first:
+`operators.dec.laplacian` and `operators.feec.laplacian`. Do not also expose
+the same family split through `operators.laplacian.dec` /
+`operators.laplacian.feec`.
+
+**Alternatives considered:**
+1. Keep both family-first and noun-first directions: rejected because that
+   violates the project's "one obvious way" rule and duplicates the same API
+   distinction with no added capability.
+2. Keep only noun-first `operators.laplacian.{dec,feec}`: rejected because the
+   current architectural milestone is about explicit operator families, so the
+   family qualifier should come first in the public taxonomy.
+
+**Rationale:** Users may still mix DEC and FEEC operators through one shared
+`OperatorContext`, but the public naming should make the family partition
+primary and unambiguous. One `OperatorContext` plus one family-first API path is
+clearer than duplicating the same surface in two directions.
+
+## 2026-04-19: Laplacian module exposes DEC and FEEC families under one shared noun
+
+**Decision:** Keep `operators.laplacian` as the shared public noun, but split
+its implementation and namespaced surface explicitly into
+`operators.laplacian.dec` for strong DEC application and
+`operators.laplacian.feec` for FEEC weak-form stiffness assembly. Mirror the
+same split through the family-first API at `operators.dec.laplacian` and
+`operators.feec.laplacian`.
+
+**Alternatives considered:**
+1. Keep one flat `operators/laplacian.zig` surface with mixed strong and weak
+   helpers: rejected because the current file hides the DEC/FEEC distinction in
+   exactly the place where users and maintainers need the mathematical split to
+   stay legible.
+2. Introduce separate top-level public nouns for the two variants: rejected
+   because the underlying structural concept is still "the Laplace-de Rham
+   operator". The family distinction is a qualifier on how we expose and
+   assemble it, not a reason to mint unrelated nouns.
+
+**Rationale:** This preserves one stable mathematical noun while making the
+family split explicit at the module boundary. The DEC path owns strong operator
+application; the FEEC path owns stiffness assembly. That matches the existing
+family-language guidance without multiplying top-level concepts.
+
 ## 2026-04-19: Separate FEEC weak-form scatter from Whitney local kernels
 
 **Decision:** Introduce `operators.weak_form.assemble` as the shared

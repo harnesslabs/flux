@@ -77,6 +77,7 @@ pub fn solve_one_form_dirichlet(
     boundary_values: []const f64,
     config: SolveConfig,
 ) !SolveResult {
+    _ = MeshType;
     const mesh = operator_context.mesh;
     std.debug.assert(forcing_values.len == mesh.num_edges());
     std.debug.assert(boundary_values.len == mesh.num_edges());
@@ -84,13 +85,21 @@ pub fn solve_one_form_dirichlet(
     const boundary_mask = try mesh.boundary_mask(allocator, 1);
     defer allocator.free(boundary_mask);
 
-    var full_matrix = try assemble_one_form_matrix(MeshType, allocator, operator_context);
+    const laplacian = try operator_context.laplacian(1);
+    std.debug.assert(laplacian.stiffness.n_rows != 0);
+    const mass = mesh.whitney_mass(1);
+
+    const full_rhs = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(full_rhs);
+    sparse.spmv(mass, forcing_values, full_rhs);
+
+    var full_matrix = try cloneMatrix(allocator, laplacian.stiffness);
     defer full_matrix.deinit(allocator);
 
     return solve_dirichlet_reduced_system(
         allocator,
         full_matrix,
-        forcing_values,
+        full_rhs,
         boundary_mask,
         boundary_values,
         config,
@@ -128,37 +137,17 @@ fn solve_dirichlet_reduced_system(
     };
 }
 
-fn assemble_one_form_matrix(
-    comptime MeshType: type,
+fn cloneMatrix(
     allocator: std.mem.Allocator,
-    operator_context: anytype,
+    matrix: sparse.CsrMatrix(f64),
 ) !sparse.CsrMatrix(f64) {
-    const OneForm = cochain.Cochain(MeshType, 1, cochain.Primal);
-    const edge_count = operator_context.mesh.num_edges();
+    var result = try sparse.CsrMatrix(f64).init(allocator, matrix.n_rows, matrix.n_cols, matrix.nnz());
+    errdefer result.deinit(allocator);
 
-    const laplacian = try operator_context.laplacian(1);
-
-    var basis = try OneForm.init(allocator, operator_context.mesh);
-    defer basis.deinit(allocator);
-
-    var triplets = sparse.TripletAssembler(f64).init(edge_count, edge_count);
-    defer triplets.deinit(allocator);
-
-    for (0..edge_count) |col_idx_usize| {
-        const col_idx: u32 = @intCast(col_idx_usize);
-        @memset(basis.values, 0.0);
-        basis.values[col_idx] = 1.0;
-
-        var image = try laplacian.apply(allocator, basis);
-        defer image.deinit(allocator);
-
-        for (image.values, 0..) |value, row_idx_usize| {
-            if (@abs(value) <= 1e-14) continue;
-            try triplets.addEntry(allocator, @intCast(row_idx_usize), col_idx, value);
-        }
-    }
-
-    return triplets.build(allocator);
+    @memcpy(result.row_ptr, matrix.row_ptr);
+    @memcpy(result.col_idx, matrix.col_idx);
+    @memcpy(result.values, matrix.values);
+    return result;
 }
 
 fn exact_solution_2d(coords: [2]f64) f64 {

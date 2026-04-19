@@ -1,237 +1,28 @@
-//! Discrete Laplace-de Rham operator Δ = dδ + δd.
+//! Discrete Laplace-de Rham operator surfaces.
 //!
-//! The Hodge Laplacian on primal k-cochains decomposes into two terms:
-//!   - δd (curl-curl): ★⁻¹_k · Dᵀ_k · ★_{k+1} · D_k
-//!   - dδ (grad-div):  D_{k-1} · ★⁻¹_{k-1} · Dᵀ_{k-1} · ★_k
+//! The shared noun here is still `laplacian`, but the operator family split is
+//! explicit:
+//! - `laplacian.dec` owns strong operator application, `Δ = dδ + δd`
+//! - `laplacian.feec` owns weak-form stiffness assembly, `Sₖ`
 //!
-//! where D_k = boundary(k+1) is the exterior derivative matrix and Dᵀ is
-//! its transpose — the matrix representation of the codifferential's
-//! topological part.
-//!
-//! For a 2D simplicial mesh:
-//!   Δ₀ = ★₀⁻¹ D₀ᵀ ★₁ D₀                           (δd only)
-//!   Δ₁ = D₀ ★₀⁻¹ D₀ᵀ ★₁ + ★₁⁻¹ D₁ᵀ ★₂ D₁         (both terms)
-//!   Δ₂ = D₁ ★₁⁻¹ D₁ᵀ ★₂                            (dδ only)
-//!
-//! Uses the unsigned convention: Δ₀ is positive-semidefinite, meaning
-//! ⟨Δ₀ω, ω⟩_★₀ ≥ 0 for all ω.
-//!
-//! All three Laplacians are well-defined on meshes with barycentric dual
-//! geometry, where every edge has nonzero dual length.
+//! Public callers should use the strict family-first paths
+//! `flux.operators.dec.laplacian` and `flux.operators.feec.laplacian`.
+//! This file remains the internal shared noun and re-export seam for the
+//! underlying implementation modules.
 
 const std = @import("std");
 const testing = std.testing;
 const cochain = @import("../forms/cochain.zig");
 const topology = @import("../topology/mesh.zig");
-const exterior_derivative = @import("exterior_derivative.zig");
-const hodge_star = @import("hodge_star.zig");
 const sparse = @import("../math/sparse.zig");
 const context = @import("context.zig");
+pub const dec = @import("laplacian/dec.zig");
+pub const feec = @import("laplacian/feec.zig");
 
-fn validatePrimalCochainInput(comptime InputType: type) void {
-    if (!@hasDecl(InputType, "duality")) {
-        @compileError("laplacian requires a Cochain type");
-    }
-    if (InputType.duality != cochain.Primal) {
-        @compileError("laplacian expects a primal cochain");
-    }
-}
-
-/// Stored Laplacian operator specialized to a primal k-cochain type.
-///
-/// For k=0, the assembled form keeps the sparse stiffness matrix
-/// S = D₀ᵀ M₁ D₀ and the diagonal ★₀⁻¹ scaling separate so application is
-/// one SpMV plus pointwise scaling.
-pub fn AssembledLaplacian(comptime InputType: type) type {
-    comptime validatePrimalCochainInput(InputType);
-
-    return struct {
-        const Self = @This();
-        const MeshType = InputType.MeshT;
-        const k = InputType.degree;
-
-        mesh: *const MeshType,
-        stiffness: sparse.CsrMatrix(f64),
-        left_scaling: []f64,
-
-        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-            allocator.free(self.left_scaling);
-            self.stiffness.deinit(allocator);
-        }
-
-        pub fn apply(self: Self, allocator: std.mem.Allocator, input: InputType) !InputType {
-            std.debug.assert(input.mesh == self.mesh);
-
-            var output = try InputType.init(allocator, input.mesh);
-            errdefer output.deinit(allocator);
-
-            switch (k) {
-                0 => {
-                    sparse.spmv(self.stiffness, input.values, output.values);
-                    for (output.values, self.left_scaling) |*out, scale| {
-                        out.* *= scale;
-                    }
-                    return output;
-                },
-                else => {
-                    output.deinit(allocator);
-                    return laplacian_composed(allocator, input);
-                },
-            }
-        }
-    };
-}
-
-/// Assemble a stored Laplacian operator for a fixed mesh and primal degree.
-pub fn assemble_for_degree(
-    comptime MeshType: type,
-    comptime k: comptime_int,
-    allocator: std.mem.Allocator,
-    mesh: *const MeshType,
-) !AssembledLaplacian(cochain.Cochain(MeshType, k, cochain.Primal)) {
-    var stiffness = switch (k) {
-        0 => try assemble_zero_form_stiffness(allocator, mesh),
-        else => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
-    };
-    errdefer stiffness.deinit(allocator);
-
-    const left_scaling = switch (k) {
-        0 => try assemble_zero_form_star_inverse_diag(allocator, mesh),
-        else => try allocator.alloc(f64, 0),
-    };
-    errdefer allocator.free(left_scaling);
-
-    return .{
-        .mesh = mesh,
-        .stiffness = stiffness,
-        .left_scaling = left_scaling,
-    };
-}
-
-fn assemble_zero_form_stiffness(
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-) !sparse.CsrMatrix(f64) {
-    const d0 = mesh.boundary(1);
-    const m1 = mesh.whitney_mass(1);
-
-    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
-    defer assembler.deinit(allocator);
-
-    for (0..m1.n_rows) |edge_i| {
-        const incidence_i = d0.row(@intCast(edge_i));
-        const mass_row = m1.row(@intCast(edge_i));
-
-        for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
-            const incidence_j = d0.row(edge_j);
-
-            for (incidence_i.cols, 0..) |vertex_i, entry_i| {
-                const sign_i = incidence_i.sign(entry_i);
-                const left = @as(f64, @floatFromInt(sign_i)) * mass_ij;
-                for (incidence_j.cols, 0..) |vertex_j, entry_j| {
-                    const sign_j = incidence_j.sign(entry_j);
-                    const contribution = left * @as(f64, @floatFromInt(sign_j));
-                    try assembler.addEntry(allocator, vertex_i, vertex_j, contribution);
-                }
-            }
-        }
-    }
-
-    return assembler.build(allocator);
-}
-
-fn assemble_zero_form_star_inverse_diag(
-    allocator: std.mem.Allocator,
-    mesh: anytype,
-) ![]f64 {
-    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
-    const diagonal = try allocator.alloc(f64, dual_volumes.len);
-    errdefer allocator.free(diagonal);
-
-    for (diagonal, dual_volumes) |*out, dual_volume| {
-        std.debug.assert(dual_volume != 0.0);
-        out.* = 1.0 / dual_volume;
-    }
-
-    return diagonal;
-}
-
-pub fn laplacian_composed(
-    allocator: std.mem.Allocator,
-    input: anytype,
-) !@TypeOf(input) {
-    const InputType = @TypeOf(input);
-    comptime validatePrimalCochainInput(InputType);
-
-    const MeshType = InputType.MeshT;
-    const k = InputType.degree;
-    const topological_dimension = MeshType.topological_dimension;
-
-    var result = try InputType.init(allocator, input.mesh);
-    errdefer result.deinit(allocator);
-
-    // Pre-compute workspace size: one allocation for all temporary vectors.
-    // Term 1 (δd, k < topological_dimension) needs bk1.n_cols elements.
-    // Term 2 (dδ, k > 0) needs 2 × bk.n_cols elements.
-    const bk1_cols = if (k < topological_dimension) input.mesh.boundary(k + 1).n_cols else 0;
-    const bk_cols = if (k > 0) input.mesh.boundary(k).n_cols else 0;
-    const workspace_len = bk1_cols + 2 * bk_cols;
-
-    const workspace = try allocator.alloc(f64, workspace_len);
-    defer allocator.free(workspace);
-
-    // ── Term 1 (δd): ★⁻¹_k · D_kᵀ · ★_{k+1} · D_k · ω ─────────────
-    // Exists when k < topological_dimension, so that d_k is defined.
-    if (k < topological_dimension) {
-        // d_k ω = boundary(k+1) · ω
-        var d_omega = try exterior_derivative.exterior_derivative(allocator, input);
-        defer d_omega.deinit(allocator);
-
-        // ★_{k+1} (d_k ω)
-        var star_d = try hodge_star.hodge_star(allocator, d_omega);
-        defer star_d.deinit(allocator);
-
-        // D_kᵀ · (★_{k+1} d_k ω) — transpose sparse matrix–vector product
-        const bk1 = input.mesh.boundary(k + 1);
-        const temp = workspace[0..bk1_cols];
-        @memset(temp, 0);
-        bk1.transpose_multiply(star_d.values, temp);
-
-        // ★⁻¹_k · temp → result
-        try hodge_star.apply_inverse_raw(allocator, MeshType, k, input.mesh, temp, result.values);
-    }
-
-    // ── Term 2 (dδ): D_{k-1} · ★⁻¹_{k-1} · D_{k-1}ᵀ · ★_k · ω ────
-    // Exists when k > 0, so that δ_k is defined.
-    if (k > 0) {
-        // ★_k ω
-        var star_omega = try hodge_star.hodge_star(allocator, input);
-        defer star_omega.deinit(allocator);
-
-        // D_{k-1}ᵀ · (★_k ω) — transpose multiply
-        const bk = input.mesh.boundary(k);
-        const temp_km1 = workspace[bk1_cols .. bk1_cols + bk_cols];
-        @memset(temp_km1, 0);
-        bk.transpose_multiply(star_omega.values, temp_km1);
-
-        // ★⁻¹_{k-1} · temp
-        const codiff_vals = workspace[bk1_cols + bk_cols ..];
-        try hodge_star.apply_inverse_raw(allocator, MeshType, k - 1, input.mesh, temp_km1, codiff_vals);
-
-        // D_{k-1} · codiff_vals → accumulate into result
-        for (0..bk.n_rows) |row_idx| {
-            const r = bk.row(@intCast(row_idx));
-            var sum: f64 = 0;
-            for (r.cols, 0..) |col, entry_idx| {
-                const sign = r.sign(entry_idx);
-                sum += @as(f64, @floatFromInt(sign)) * codiff_vals[col];
-            }
-            result.values[row_idx] += sum;
-        }
-    }
-
-    return result;
-}
+pub const AssembledLaplacian = dec.AssembledLaplacian;
+pub const assemble_for_degree = dec.assemble_for_degree;
+pub const laplacian_composed = dec.laplacian_composed;
+pub const assemble_stiffness = feec.assemble_stiffness;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests
@@ -239,6 +30,7 @@ pub fn laplacian_composed(
 
 const Mesh2D = topology.Mesh(2, 2);
 const MeshSurface = topology.Mesh(3, 2);
+const Mesh3D = topology.Mesh(3, 3);
 const PrimalC0 = cochain.Cochain(Mesh2D, 0, cochain.Primal);
 
 test "Δ₀ of constant 0-form is zero" {
@@ -494,11 +286,88 @@ test "assembled Δ₀ on Mesh(3, 2) matches intrinsic 2D Δ₀ on an isometric e
     }
 }
 
+test "assembled FEEC stiffness satisfies S₀ω = M₀(Δ₀ω) on embedded surface meshes" {
+    const allocator = testing.allocator;
+    const ScalarForm = cochain.Cochain(MeshSurface, 0, cochain.Primal);
+
+    var mesh = try MeshSurface.sphere(allocator, 1.0, 1);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(MeshSurface).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    var omega = try ScalarForm.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x51_0F_AA);
+    for (omega.values) |*value| {
+        value.* = rng.random().float(f64) * 2.0 - 1.0;
+    }
+
+    var strong = try (try operator_context.laplacian(0)).apply(allocator, omega);
+    defer strong.deinit(allocator);
+
+    var stiffness = try assemble_stiffness(0, allocator, &mesh);
+    defer stiffness.deinit(allocator);
+
+    const expected = try allocator.alloc(f64, omega.values.len);
+    defer allocator.free(expected);
+    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+    for (expected, strong.values, dual_volumes) |*out, value, dual_volume| {
+        out.* = dual_volume * value;
+    }
+
+    const actual = try allocator.alloc(f64, omega.values.len);
+    defer allocator.free(actual);
+    sparse.spmv(stiffness, omega.values, actual);
+
+    for (actual, expected) |lhs, rhs| {
+        try testing.expectApproxEqAbs(rhs, lhs, 1e-11);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Δ₁ tests
 // ═══════════════════════════════════════════════════════════════════════════
 
 const PrimalC1 = cochain.Cochain(Mesh2D, 1, cochain.Primal);
+
+test "assembled FEEC stiffness satisfies S₁ω = M₁(Δ₁ω) on tetrahedral meshes" {
+    const allocator = testing.allocator;
+    const OneForm = cochain.Cochain(Mesh3D, 1, cochain.Primal);
+
+    var mesh = try Mesh3D.uniform_tetrahedral_grid(allocator, 2, 2, 2, 1.0, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const operator_context = try context.OperatorContext(Mesh3D).init(allocator, &mesh);
+    defer operator_context.deinit();
+
+    var omega = try OneForm.init(allocator, &mesh);
+    defer omega.deinit(allocator);
+
+    var rng = std.Random.DefaultPrng.init(0x51_1F_AA);
+    for (omega.values) |*value| {
+        value.* = rng.random().float(f64) * 2.0 - 1.0;
+    }
+
+    var strong = try (try operator_context.laplacian(1)).apply(allocator, omega);
+    defer strong.deinit(allocator);
+
+    var stiffness = try assemble_stiffness(1, allocator, &mesh);
+    defer stiffness.deinit(allocator);
+
+    const expected = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(expected);
+    sparse.spmv(mesh.whitney_mass(1), strong.values, expected);
+
+    const actual = try allocator.alloc(f64, mesh.num_edges());
+    defer allocator.free(actual);
+    sparse.spmv(stiffness, omega.values, actual);
+
+    for (actual, expected) |lhs, rhs| {
+        try testing.expectApproxEqAbs(rhs, lhs, 1e-10);
+    }
+}
 
 test "Δ₁ of exact 1-form d₀f has dδ component zero" {
     // For ω = d₀f (an exact 1-form), the dδ term of Δ₁ vanishes because
