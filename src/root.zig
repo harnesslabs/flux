@@ -70,6 +70,7 @@ pub const operators = struct {
         pub const codifferential = @import("operators/codifferential.zig");
         pub const hodge_star = @import("operators/hodge_star.zig");
         pub const laplacian = @import("operators/laplacian.zig");
+        pub const weak_form = @import("operators/weak_form.zig");
         pub const whitney_mass = @import("operators/whitney_mass.zig");
     };
     pub const bridges = @import("operators/bridges.zig");
@@ -81,6 +82,7 @@ pub const operators = struct {
     pub const laplacian = @import("operators/laplacian.zig");
     pub const observers = @import("operators/observers.zig");
     pub const poisson = @import("operators/poisson.zig");
+    pub const weak_form = @import("operators/weak_form.zig");
     pub const whitney_mass = @import("operators/whitney_mass.zig");
     pub const wedge_product = @import("operators/wedge_product.zig");
 };

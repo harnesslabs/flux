@@ -21,6 +21,21 @@ const topology = @import("../topology/mesh.zig");
 const sparse = @import("../math/sparse.zig");
 const weak_form = @import("weak_form.zig");
 
+pub fn WhitneyMassKernel(comptime MeshType: type, comptime k: comptime_int) type {
+    return struct {
+        const Self = @This();
+
+        pub const degree = k;
+        pub const MeshT = MeshType;
+
+        mesh: *const MeshType,
+
+        pub fn init(mesh: *const MeshType) Self {
+            return .{ .mesh = mesh };
+        }
+    };
+}
+
 pub fn assemble_whitney_mass(
     comptime k: comptime_int,
     allocator: std.mem.Allocator,
