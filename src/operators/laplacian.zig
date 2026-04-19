@@ -39,9 +39,11 @@ fn validatePrimalCochainInput(comptime InputType: type) void {
 
 /// Stored Laplacian operator specialized to a primal k-cochain type.
 ///
-/// For k=0, the assembled form keeps the sparse stiffness matrix
-/// S = D₀ᵀ M₁ D₀ and the diagonal ★₀⁻¹ scaling separate so application is
-/// one SpMV plus pointwise scaling.
+/// For supported FEEC weak-form cases, the assembled form keeps the sparse
+/// stiffness matrix `S_k` alongside any extra scaling needed for strong-form
+/// application. Today that means:
+/// - `k = 0`: `S₀ = D₀ᵀ M₁ D₀` and diagonal `★₀⁻¹`
+/// - `k = 1` on tetrahedral meshes: `S₁ = M₁ Δ₁`
 pub fn AssembledLaplacian(comptime InputType: type) type {
     comptime validatePrimalCochainInput(InputType);
 
@@ -89,9 +91,10 @@ pub fn assemble_for_degree(
     allocator: std.mem.Allocator,
     mesh: *const MeshType,
 ) !AssembledLaplacian(cochain.Cochain(MeshType, k, cochain.Primal)) {
-    var stiffness = switch (k) {
-        0 => try assemble_zero_form_stiffness(allocator, mesh),
-        else => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
+    const stiffness_supported = comptime supportsExplicitStiffness(MeshType, k);
+    var stiffness = switch (stiffness_supported) {
+        true => try assemble_stiffness(k, allocator, mesh),
+        false => try sparse.CsrMatrix(f64).init(allocator, 0, 0, 0),
     };
     errdefer stiffness.deinit(allocator);
 
@@ -113,28 +116,82 @@ pub fn assemble_stiffness(
     allocator: std.mem.Allocator,
     mesh: anytype,
 ) !sparse.CsrMatrix(f64) {
-    _ = allocator;
-    _ = mesh;
-    _ = k;
-    @panic("not yet implemented");
+    const MeshType = @TypeOf(mesh.*);
+    const n = MeshType.topological_dimension;
+
+    comptime {
+        if (k < 0 or k > n) {
+            @compileError(std.fmt.comptimePrint(
+                "no Laplacian degree {d} on a {d}-dimensional mesh",
+                .{ k, n },
+            ));
+        }
+    }
+
+    return switch (k) {
+        0 => assemble_zero_form_stiffness(allocator, mesh),
+        1 => switch (n) {
+            3 => assemble_one_form_stiffness(allocator, mesh),
+            else => @compileError("explicit FEEC stiffness assembly currently supports degree 1 only on tetrahedral meshes"),
+        },
+        else => @compileError("explicit FEEC stiffness assembly is not implemented for this degree"),
+    };
+}
+
+fn supportsExplicitStiffness(comptime MeshType: type, comptime k: comptime_int) bool {
+    return switch (k) {
+        0 => true,
+        1 => MeshType.topological_dimension == 3,
+        else => false,
+    };
 }
 
 fn assemble_zero_form_stiffness(
     allocator: std.mem.Allocator,
     mesh: anytype,
 ) !sparse.CsrMatrix(f64) {
-    const d0 = mesh.boundary(1);
-    const m1 = mesh.whitney_mass(1);
+    return assemble_d_term_stiffness(0, allocator, mesh);
+}
 
-    var assembler = sparse.TripletAssembler(f64).init(mesh.num_vertices(), mesh.num_vertices());
+fn assemble_one_form_stiffness(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    var curl_curl = try assemble_d_term_stiffness(1, allocator, mesh);
+    errdefer curl_curl.deinit(allocator);
+
+    var grad_div = try assemble_one_form_grad_div_stiffness(allocator, mesh);
+    errdefer grad_div.deinit(allocator);
+
+    var assembler = sparse.TripletAssembler(f64).init(mesh.num_edges(), mesh.num_edges());
     defer assembler.deinit(allocator);
 
-    for (0..m1.n_rows) |edge_i| {
-        const incidence_i = d0.row(@intCast(edge_i));
-        const mass_row = m1.row(@intCast(edge_i));
+    try appendMatrixTriplets(&assembler, allocator, curl_curl);
+    try appendMatrixTriplets(&assembler, allocator, grad_div);
 
-        for (mass_row.cols, mass_row.vals) |edge_j, mass_ij| {
-            const incidence_j = d0.row(edge_j);
+    curl_curl.deinit(allocator);
+    grad_div.deinit(allocator);
+    return assembler.build(allocator);
+}
+
+fn assemble_d_term_stiffness(
+    comptime k: comptime_int,
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    const derivative = mesh.boundary(k + 1);
+    const mass = mesh.whitney_mass(k + 1);
+    const dof_count = mesh.num_cells(k);
+
+    var assembler = sparse.TripletAssembler(f64).init(dof_count, dof_count);
+    defer assembler.deinit(allocator);
+
+    for (0..mass.n_rows) |cell_i| {
+        const incidence_i = derivative.row(@intCast(cell_i));
+        const mass_row = mass.row(@intCast(cell_i));
+
+        for (mass_row.cols, mass_row.vals) |cell_j, mass_ij| {
+            const incidence_j = derivative.row(cell_j);
 
             for (incidence_i.cols, 0..) |vertex_i, entry_i| {
                 const sign_i = incidence_i.sign(entry_i);
@@ -149,6 +206,123 @@ fn assemble_zero_form_stiffness(
     }
 
     return assembler.build(allocator);
+}
+
+fn assemble_one_form_grad_div_stiffness(
+    allocator: std.mem.Allocator,
+    mesh: anytype,
+) !sparse.CsrMatrix(f64) {
+    const edge_boundary = mesh.boundary(1);
+    const mass = mesh.whitney_mass(1);
+    const dual_volumes = mesh.vertices.slice().items(.dual_volume);
+    const edge_count = mesh.num_edges();
+    const vertex_count = mesh.num_vertices();
+
+    const incidence_counts = try allocator.alloc(u32, vertex_count);
+    defer allocator.free(incidence_counts);
+    @memset(incidence_counts, 0);
+
+    for (0..edge_count) |edge_idx| {
+        const row = edge_boundary.row(@intCast(edge_idx));
+        for (row.cols) |vertex_idx| {
+            incidence_counts[vertex_idx] += 1;
+        }
+    }
+
+    const vertex_offsets = try allocator.alloc(u32, @as(usize, vertex_count) + 1);
+    defer allocator.free(vertex_offsets);
+    vertex_offsets[0] = 0;
+    for (0..vertex_count) |vertex_idx| {
+        vertex_offsets[vertex_idx + 1] = vertex_offsets[vertex_idx] + incidence_counts[vertex_idx];
+    }
+
+    const total_incidence = vertex_offsets[vertex_count];
+    const incident_edges = try allocator.alloc(u32, total_incidence);
+    defer allocator.free(incident_edges);
+    const incident_signs = try allocator.alloc(i8, total_incidence);
+    defer allocator.free(incident_signs);
+
+    const fill_offsets = try allocator.dupe(u32, vertex_offsets[0..vertex_count]);
+    defer allocator.free(fill_offsets);
+
+    for (0..edge_count) |edge_idx| {
+        const row = edge_boundary.row(@intCast(edge_idx));
+        for (row.cols, 0..) |vertex_idx, local_idx| {
+            const write_idx = fill_offsets[vertex_idx];
+            incident_edges[write_idx] = @intCast(edge_idx);
+            incident_signs[write_idx] = row.sign(local_idx);
+            fill_offsets[vertex_idx] += 1;
+        }
+    }
+
+    var assembler = sparse.TripletAssembler(f64).init(edge_count, edge_count);
+    defer assembler.deinit(allocator);
+
+    var edge_weights = std.AutoHashMap(u32, f64).init(allocator);
+    defer edge_weights.deinit();
+    var nonzero_entries = std.ArrayListUnmanaged(struct {
+        edge_idx: u32,
+        weight: f64,
+    }){};
+    defer nonzero_entries.deinit(allocator);
+
+    for (0..vertex_count) |vertex_idx| {
+        edge_weights.clearRetainingCapacity();
+        nonzero_entries.clearRetainingCapacity();
+
+        const inv_dual_volume = 1.0 / dual_volumes[vertex_idx];
+        std.debug.assert(dual_volumes[vertex_idx] != 0.0);
+
+        const start = vertex_offsets[vertex_idx];
+        const end = vertex_offsets[vertex_idx + 1];
+        for (start..end) |entry_idx| {
+            const incident_edge = incident_edges[entry_idx];
+            const sign: f64 = @floatFromInt(incident_signs[entry_idx]);
+            const mass_row = mass.row(incident_edge);
+            for (mass_row.cols, mass_row.vals) |edge_j, mass_value| {
+                const gop = try edge_weights.getOrPut(edge_j);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = 0.0;
+                }
+                gop.value_ptr.* += sign * mass_value;
+            }
+        }
+
+        var iterator = edge_weights.iterator();
+        while (iterator.next()) |entry| {
+            try nonzero_entries.append(allocator, .{
+                .edge_idx = entry.key_ptr.*,
+                .weight = entry.value_ptr.*,
+            });
+        }
+
+        for (nonzero_entries.items) |left| {
+            const scaled_left = inv_dual_volume * left.weight;
+            for (nonzero_entries.items) |right| {
+                try assembler.addEntry(
+                    allocator,
+                    left.edge_idx,
+                    right.edge_idx,
+                    scaled_left * right.weight,
+                );
+            }
+        }
+    }
+
+    return assembler.build(allocator);
+}
+
+fn appendMatrixTriplets(
+    assembler: *sparse.TripletAssembler(f64),
+    allocator: std.mem.Allocator,
+    matrix: sparse.CsrMatrix(f64),
+) !void {
+    for (0..matrix.n_rows) |row_idx| {
+        const row = matrix.row(@intCast(row_idx));
+        for (row.cols, row.vals) |col_idx, value| {
+            try assembler.addEntry(allocator, @intCast(row_idx), col_idx, value);
+        }
+    }
 }
 
 fn assemble_zero_form_star_inverse_diag(
@@ -510,7 +684,7 @@ test "assembled FEEC stiffness satisfies S₀ω = M₀(Δ₀ω) on embedded surf
     const allocator = testing.allocator;
     const ScalarForm = cochain.Cochain(MeshSurface, 0, cochain.Primal);
 
-    var mesh = try MeshSurface.plane(allocator, 5, 4, 2.0, 1.5);
+    var mesh = try MeshSurface.sphere(allocator, 1.0, 1);
     defer mesh.deinit(allocator);
 
     const operator_context = try context.OperatorContext(MeshSurface).init(allocator, &mesh);
