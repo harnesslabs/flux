@@ -2,6 +2,71 @@
 
 <!-- Append entries with /decide. Format: ## YYYY-MM-DD: <title> -->
 
+## 2026-04-18: Separate true de Rham projection from sampled continuous-form seeding
+
+**Decision:** Keep `operators.bridges.DeRhamProjection` as the exact
+Whitney-form-to-cochain map, and move the example-facing continuous-form seeding
+path out of the library into the example support layer.
+
+**Alternatives considered:**
+1. Keep `DeRhamProjection.project(...)` and document that it is only a midpoint
+   rule: rejected because the public noun would still make a false mathematical
+   claim and silently encourage users to treat a sampled approximation as the
+   de Rham map.
+2. Implement exact continuous-form de Rham projection immediately for all
+   current analytic examples: rejected for now because the current example
+   surface only provides point evaluation, not simplex-integration contracts,
+   so doing this honestly would require a larger new abstraction than this PR
+   should absorb.
+
+**Rationale:** The exactness guarantee already holds for Whitney FEEC forms,
+where coefficient extraction is the correct de Rham map. The problematic path
+was only the example seeding helper from smooth fields. Keeping that helper in
+the example layer, rather than exporting it from `operators.bridges`, preserves
+an honest library bridge surface without pretending the current point-sampling
+rule is a generic FEEC operator.
+
+## 2026-04-18: Restore the lowest-order de Rham map to the core bridge layer
+
+**Decision:** Supersede the earlier stopgap above. `operators.bridges.DeRhamProjection`
+now owns the continuous-form-to-cochain path for current lowest-order Whitney
+spaces by evaluating the actual simplex DOFs: vertex values for 0-forms, edge
+integrals for 1-forms, and face integrals for 2-forms.
+
+**Alternatives considered:**
+1. Keep the continuous-form path in `examples/common`: rejected because this is
+   still a core FEEC/DEC bridge responsibility, not example glue.
+2. Wait for higher-order FEEC support before adding any continuous-form bridge:
+   rejected because the current examples already need a correct lowest-order path,
+   and the lowest-order Whitney DOFs are structurally well-defined now.
+
+**Rationale:** The problem was not that the bridge belonged in the library; it
+was that midpoint/centroid sampling was the wrong operator. The honest lowest-order
+bridge is already visible from the mathematics: de Rham coefficients are simplex
+DOFs. Implementing those DOFs now gives the examples a correct core-library path
+without inventing a parallel sampled API, while leaving higher-order FEEC DOFs
+for the later FEEC-space milestone.
+
+## 2026-04-18: Remove forwarding DEC/FEEC context wrappers in favor of one operator owner
+
+**Decision:** Delete the public forwarding wrappers in
+`operators/dec_context.zig` and `operators/feec_context.zig`, and expose only
+one public owner noun: `operators.context.OperatorContext`.
+
+**Alternatives considered:**
+1. Keep the wrapper contexts as family-restricted handles: rejected because they
+   only re-store an allocator and a pointer to the base context, then forward
+   calls without adding a stronger invariant or a separate ownership boundary.
+2. Alias the base owner back through the old `dec.context` / `feec.context`
+   paths: rejected because that would preserve the old parallel surface even
+   after the wrappers themselves were gone.
+
+**Rationale:** The real owned object is one per-mesh assembled-operator cache.
+DEC/FEEC separation still matters at the operator-family namespace level, but
+not as extra runtime handle types. Removing the forwarding wrappers aligns the
+public surface with `architecture_patterns.md`: one honest noun for ownership,
+family-qualified verbs and modules for the mathematical split.
+
 ## 2026-03-29: TimeStepStrategy concept uses structural signature checking
 
 **Decision:** `TimeStepStrategy(S)` validates `S.step` via `@typeInfo` — checking parameter

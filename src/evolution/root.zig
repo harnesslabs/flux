@@ -200,6 +200,7 @@ pub fn Evolution(
         };
 
         pub const Event = struct {
+            allocator: std.mem.Allocator,
             system: SystemType,
             step_index: u32,
             step_goal: u32,
@@ -294,6 +295,7 @@ pub fn Evolution(
                 }
 
                 pub fn step(self: *Self) !void {
+                    std.debug.assert(self.step_count < self.total_steps);
                     try advanceMethod(MethodType, self.allocator, self.system, self.time_step, self.method_options);
                     self.step_count += 1;
                     self.current_time += self.time_step;
@@ -319,63 +321,44 @@ pub fn Evolution(
                     return self.total_steps;
                 }
 
+                fn remainingSteps(self: *const Self) u32 {
+                    std.debug.assert(self.step_count <= self.total_steps);
+                    return self.total_steps - self.step_count;
+                }
+
                 fn finalTime(self: *const Self) f64 {
-                    return self.current_time + self.time_step * @as(f64, @floatFromInt(self.total_steps));
+                    return self.current_time + self.time_step * @as(f64, @floatFromInt(self.remainingSteps()));
+                }
+
+                fn event(self: *const Self, final_time: f64) Event {
+                    return .{
+                        .allocator = self.allocator,
+                        .system = self.system,
+                        .step_index = self.step_count,
+                        .step_goal = self.total_steps,
+                        .time = self.current_time,
+                        .final_time = final_time,
+                    };
                 }
 
                 fn runInternal(self: *Self, extra_listeners_ptr: anytype) !RunResult {
                     const final_time = self.finalTime();
+                    const remaining_steps = self.remainingSteps();
                     var configured_listeners = self.listeners_value;
 
-                    try invokeListeners("onRunBegin", &configured_listeners, Event{
-                        .system = self.system,
-                        .step_index = self.step_count,
-                        .step_goal = self.total_steps,
-                        .time = self.current_time,
-                        .final_time = final_time,
-                    });
-                    try invokeListeners("onRunBegin", extra_listeners_ptr, Event{
-                        .system = self.system,
-                        .step_index = self.step_count,
-                        .step_goal = self.total_steps,
-                        .time = self.current_time,
-                        .final_time = final_time,
-                    });
+                    try invokeListeners("onRunBegin", &configured_listeners, self.event(final_time));
+                    try invokeListeners("onRunBegin", extra_listeners_ptr, self.event(final_time));
 
                     const start_ns = std.time.nanoTimestamp();
-                    for (0..self.total_steps) |_| {
+                    for (0..remaining_steps) |_| {
                         try self.step();
-                        try invokeListeners("onStep", &configured_listeners, Event{
-                            .system = self.system,
-                            .step_index = self.step_count,
-                            .step_goal = self.total_steps,
-                            .time = self.current_time,
-                            .final_time = final_time,
-                        });
-                        try invokeListeners("onStep", extra_listeners_ptr, Event{
-                            .system = self.system,
-                            .step_index = self.step_count,
-                            .step_goal = self.total_steps,
-                            .time = self.current_time,
-                            .final_time = final_time,
-                        });
+                        try invokeListeners("onStep", &configured_listeners, self.event(final_time));
+                        try invokeListeners("onStep", extra_listeners_ptr, self.event(final_time));
                     }
                     const elapsed_ns = std.time.nanoTimestamp() - start_ns;
 
-                    try invokeListeners("onRunEnd", &configured_listeners, Event{
-                        .system = self.system,
-                        .step_index = self.step_count,
-                        .step_goal = self.total_steps,
-                        .time = self.current_time,
-                        .final_time = final_time,
-                    });
-                    try invokeListeners("onRunEnd", extra_listeners_ptr, Event{
-                        .system = self.system,
-                        .step_index = self.step_count,
-                        .step_goal = self.total_steps,
-                        .time = self.current_time,
-                        .final_time = final_time,
-                    });
+                    try invokeListeners("onRunEnd", &configured_listeners, self.event(final_time));
+                    try invokeListeners("onRunEnd", extra_listeners_ptr, self.event(final_time));
 
                     self.listeners_value = configured_listeners;
 
@@ -540,6 +523,27 @@ test "Evolution run notifies configured listeners at begin, each step, and end" 
     try testing.expectEqual(@as(u32, 1), listener.end_count);
     try testing.expectEqual(@as(u32, 2), listener.last_step_index);
     try testing.expectApproxEqAbs(1.0, listener.last_time, 1e-15);
+}
+
+test "Evolution run stops at the configured total after manual stepping" {
+    const allocator = testing.allocator;
+    var system = [_]f64{0.0};
+
+    var evolution = try Evolution([]f64, MockMethod).config()
+        .dt(0.5)
+        .steps(2)
+        .init(allocator, system[0..]);
+    defer evolution.deinit();
+
+    try evolution.step();
+    try testing.expectEqual(@as(u32, 1), evolution.stepCount());
+    try testing.expectApproxEqAbs(0.5, evolution.currentTime(), 1e-15);
+
+    _ = try evolution.run();
+
+    try testing.expectEqual(@as(u32, 2), evolution.stepCount());
+    try testing.expectApproxEqAbs(1.0, evolution.currentTime(), 1e-15);
+    try testing.expectApproxEqAbs(3.0, system[0], 1e-15);
 }
 
 test "Evolution runWith keeps compatibility for external listeners" {

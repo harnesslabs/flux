@@ -1,8 +1,11 @@
 //! Explicit DEC/FEEC bridge operators.
 //!
 //! `WhitneyInterpolation` lifts simplicial cochain storage into a Whitney FEEC
-//! space view, and `DeRhamProjection` returns FEEC form coefficients back to
-//! simplicial storage.
+//! space view, and `DeRhamProjection` returns Whitney-form coefficients back to
+//! simplicial storage. For current lowest-order Whitney spaces, the same bridge
+//! also provides the de Rham map from a continuous form into simplicial
+//! coefficients by evaluating the simplex DOFs associated with vertices, edges,
+//! and faces.
 
 const std = @import("std");
 const testing = std.testing;
@@ -63,74 +66,154 @@ pub fn DeRhamProjection(comptime SpaceType: type) type {
         }
 
         pub fn projectInto(self: Self, coefficients: *Storage, continuous_form: anytype) void {
-            std.debug.assert(coefficients.mesh == self.space.mesh);
-            switch (SpaceType.degree) {
-                0 => projectWhitneyZero(self.space.mesh, coefficients.values, continuous_form),
-                1 => projectWhitneyOne(self.space.mesh, coefficients.values, continuous_form),
-                2 => projectWhitneyTwo(self.space.mesh, coefficients.values, continuous_form),
-                else => @compileError("DeRhamProjection.project currently supports only degrees 0, 1, and 2"),
+            comptime {
+                if (SpaceType.family != feec.Whitney) {
+                    @compileError("DeRhamProjection.projectInto currently supports only Whitney spaces");
+                }
+                if (Storage.duality != cochain.Primal) {
+                    @compileError("DeRhamProjection.projectInto currently supports only primal cochains");
+                }
             }
+
+            std.debug.assert(coefficients.mesh == self.space.mesh);
+            projectByPrimalSimplexPairing(SpaceType.degree, self.space.mesh, coefficients.values, continuous_form);
         }
     };
 }
 
-fn projectWhitneyZero(mesh: anytype, values: []f64, continuous_form: anytype) void {
+fn projectByPrimalSimplexPairing(
+    comptime simplex_degree: comptime_int,
+    mesh: anytype,
+    values: []f64,
+    continuous_form: anytype,
+) void {
     const coords = mesh.vertices.slice().items(.coords);
-    for (values, coords) |*value, point| {
-        value.* = scalarValue(continuous_form.evaluate(point));
-    }
-}
-
-fn projectWhitneyOne(mesh: anytype, values: []f64, continuous_form: anytype) void {
-    const edge_vertices = mesh.simplices(1).items(.vertices);
-    const coords = mesh.vertices.slice().items(.coords);
-    for (values, edge_vertices) |*value, edge| {
-        const p0 = coords[edge[0]];
-        const p1 = coords[edge[1]];
-        var midpoint: @TypeOf(p0) = undefined;
-        var tangent: @TypeOf(p0) = undefined;
-        inline for (0..p0.len) |axis| {
-            midpoint[axis] = 0.5 * (p0[axis] + p1[axis]);
-            tangent[axis] = p1[axis] - p0[axis];
-        }
-        value.* = dot(continuous_form.evaluate(midpoint), tangent);
-    }
-}
-
-fn projectWhitneyTwo(mesh: anytype, values: []f64, continuous_form: anytype) void {
-    const face_vertices = mesh.simplices(2).items(.vertices);
-    const coords = mesh.vertices.slice().items(.coords);
-    const face_areas = mesh.simplices(2).items(.volume);
-
-    switch (@TypeOf(mesh.*).topological_dimension) {
+    switch (simplex_degree) {
+        0 => {
+            for (values, coords) |*value, point| {
+                value.* = pairWithPrimalSimplex(0, continuous_form, .{point});
+            }
+        },
+        1 => {
+            const simplex_vertices = mesh.simplices(1).items(.vertices);
+            for (values, simplex_vertices) |*value, simplex| {
+                value.* = pairWithPrimalSimplex(1, continuous_form, .{
+                    coords[simplex[0]],
+                    coords[simplex[1]],
+                });
+            }
+        },
         2 => {
-            for (values, face_vertices, face_areas) |*value, face, area| {
-                const centroid = triangleCentroid(coords[face[0]], coords[face[1]], coords[face[2]]);
-                value.* = scalarValue(continuous_form.evaluate(centroid)) * area;
+            const simplex_vertices = mesh.simplices(2).items(.vertices);
+            for (values, simplex_vertices) |*value, simplex| {
+                value.* = pairWithPrimalSimplex(2, continuous_form, .{
+                    coords[simplex[0]],
+                    coords[simplex[1]],
+                    coords[simplex[2]],
+                });
             }
         },
-        3 => {
-            for (values, face_vertices) |*value, face| {
-                const p0 = coords[face[0]];
-                const p1 = coords[face[1]];
-                const p2 = coords[face[2]];
-                const centroid = triangleCentroid(p0, p1, p2);
-                value.* = dot(continuous_form.evaluate(centroid), triangleAreaVector(p0, p1, p2));
-            }
-        },
-        else => @compileError("DeRhamProjection.project degree-2 currently supports only 2D and 3D meshes"),
+        else => @compileError("DeRhamProjection.projectInto currently supports only degrees 0, 1, and 2"),
     }
 }
 
-fn triangleCentroid(p0: anytype, p1: @TypeOf(p0), p2: @TypeOf(p0)) @TypeOf(p0) {
-    var centroid: @TypeOf(p0) = undefined;
-    inline for (0..p0.len) |axis| {
-        centroid[axis] = (p0[axis] + p1[axis] + p2[axis]) / 3.0;
+fn pairWithPrimalSimplex(
+    comptime simplex_degree: comptime_int,
+    continuous_form: anytype,
+    simplex_vertices: anytype,
+) f64 {
+    const ContinuousForm = @TypeOf(continuous_form);
+
+    switch (simplex_degree) {
+        0 => {
+            const point = simplex_vertices[0];
+            if (@hasDecl(ContinuousForm, "pointValue")) return continuous_form.pointValue(point);
+            if (@hasDecl(ContinuousForm, "evaluate")) return continuous_form.evaluate(point);
+            @compileError("continuous 0-form must declare `pointValue(point)` or `evaluate(point)`");
+        },
+        1 => {
+            const p0 = simplex_vertices[0];
+            const p1 = simplex_vertices[1];
+            if (@hasDecl(ContinuousForm, "integrateEdge")) return continuous_form.integrateEdge(p0, p1);
+            if (!@hasDecl(ContinuousForm, "evaluate")) {
+                @compileError("continuous 1-form must declare `integrateEdge(p0, p1)` or `evaluate(point)`");
+            }
+
+            const nodes = [_]f64{
+                0.5 * (1.0 - std.math.sqrt(3.0 / 5.0)),
+                0.5,
+                0.5 * (1.0 + std.math.sqrt(3.0 / 5.0)),
+            };
+            const weights = [_]f64{ 5.0 / 18.0, 8.0 / 18.0, 5.0 / 18.0 };
+
+            var tangent: @TypeOf(p0) = undefined;
+            inline for (0..p0.len) |axis| {
+                tangent[axis] = p1[axis] - p0[axis];
+            }
+
+            var sum: f64 = 0.0;
+            for (nodes, weights) |node, weight| {
+                var point: @TypeOf(p0) = undefined;
+                inline for (0..p0.len) |axis| {
+                    point[axis] = (1.0 - node) * p0[axis] + node * p1[axis];
+                }
+                sum += weight * innerProduct(continuous_form.evaluate(point), tangent);
+            }
+            return sum;
+        },
+        2 => {
+            const p0 = simplex_vertices[0];
+            const p1 = simplex_vertices[1];
+            const p2 = simplex_vertices[2];
+            if (@hasDecl(ContinuousForm, "integrateFace")) return continuous_form.integrateFace(p0, p1, p2);
+            if (!@hasDecl(ContinuousForm, "evaluate")) {
+                @compileError("continuous 2-form must declare `integrateFace(p0, p1, p2)` or `evaluate(point)`");
+            }
+
+            const barycentric_nodes = [_][3]f64{
+                .{ 2.0 / 3.0, 1.0 / 6.0, 1.0 / 6.0 },
+                .{ 1.0 / 6.0, 2.0 / 3.0, 1.0 / 6.0 },
+                .{ 1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0 },
+            };
+
+            if (p0.len == 2) {
+                const signed_area_twice =
+                    (p1[0] - p0[0]) * (p2[1] - p0[1]) -
+                    (p1[1] - p0[1]) * (p2[0] - p0[0]);
+
+                var sum: f64 = 0.0;
+                for (barycentric_nodes) |lambda| {
+                    const point = [2]f64{
+                        lambda[0] * p0[0] + lambda[1] * p1[0] + lambda[2] * p2[0],
+                        lambda[0] * p0[1] + lambda[1] * p1[1] + lambda[2] * p2[1],
+                    };
+                    sum += continuous_form.evaluate(point);
+                }
+                return (signed_area_twice / 6.0) * sum;
+            }
+
+            if (p0.len == 3) {
+                const oriented_area_pseudovector_twice = triangleAreaPseudovectorTwice3(p0, p1, p2);
+
+                var sum: f64 = 0.0;
+                for (barycentric_nodes) |lambda| {
+                    const point = [3]f64{
+                        lambda[0] * p0[0] + lambda[1] * p1[0] + lambda[2] * p2[0],
+                        lambda[0] * p0[1] + lambda[1] * p1[1] + lambda[2] * p2[1],
+                        lambda[0] * p0[2] + lambda[1] * p1[2] + lambda[2] * p2[2],
+                    };
+                    sum += innerProduct(continuous_form.evaluate(point), oriented_area_pseudovector_twice);
+                }
+                return sum / 6.0;
+            }
+
+            @compileError("DeRhamProjection.projectInto degree-2 quadrature currently supports only 2D and 3D embeddings");
+        },
+        else => @compileError("DeRhamProjection.projectInto currently supports only degrees 0, 1, and 2"),
     }
-    return centroid;
 }
 
-fn triangleAreaVector(p0: [3]f64, p1: [3]f64, p2: [3]f64) [3]f64 {
+fn triangleAreaPseudovectorTwice3(p0: [3]f64, p1: [3]f64, p2: [3]f64) [3]f64 {
     const edge_a = [3]f64{
         p1[0] - p0[0],
         p1[1] - p0[1],
@@ -142,22 +225,18 @@ fn triangleAreaVector(p0: [3]f64, p1: [3]f64, p2: [3]f64) [3]f64 {
         p2[2] - p0[2],
     };
     return .{
-        0.5 * (edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1]),
-        0.5 * (edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2]),
-        0.5 * (edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0]),
+        edge_a[1] * edge_b[2] - edge_a[2] * edge_b[1],
+        edge_a[2] * edge_b[0] - edge_a[0] * edge_b[2],
+        edge_a[0] * edge_b[1] - edge_a[1] * edge_b[0],
     };
 }
 
-fn dot(lhs: anytype, rhs: @TypeOf(lhs)) f64 {
+fn innerProduct(lhs: anytype, rhs: @TypeOf(lhs)) f64 {
     var sum: f64 = 0.0;
     inline for (0..lhs.len) |axis| {
         sum += lhs[axis] * rhs[axis];
     }
     return sum;
-}
-
-fn scalarValue(value: anytype) f64 {
-    return value;
 }
 
 const Mesh2D = topology.Mesh(2, 2);
@@ -201,7 +280,7 @@ test "de Rham projection preserves coefficients for Whitney forms" {
     try testing.expectEqualSlices(f64, coefficients.values, projected.values);
 }
 
-test "de Rham projection samples a constant one-form onto primal 1-cochains" {
+test "de Rham projection maps a continuous constant one-form onto primal 1-cochains" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
@@ -225,11 +304,44 @@ test "de Rham projection samples a constant one-form onto primal 1-cochains" {
         const p0 = coords[edge[0]];
         const p1 = coords[edge[1]];
         const tangent = [2]f64{ p1[0] - p0[0], p1[1] - p0[1] };
-        try testing.expectEqual(dot([2]f64{ 2.0, -1.0 }, tangent), value);
+        try testing.expectApproxEqAbs(innerProduct([2]f64{ 2.0, -1.0 }, tangent), value, 1e-12);
     }
 }
 
-test "de Rham projection samples a constant two-form onto primal 2-cochains in 2D" {
+test "de Rham projection uses continuous edge DOFs when provided" {
+    const allocator = testing.allocator;
+    var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
+    defer mesh.deinit(allocator);
+
+    const Space1 = feec.WhitneySpace(Mesh2D, 1);
+    const project = DeRhamProjection(Space1).init(Space1.init(&mesh));
+
+    const ExactQuadraticOneForm = struct {
+        pub fn evaluate(_: @This(), point: [2]f64) [2]f64 {
+            return .{ point[0] * point[0], 0.0 };
+        }
+
+        pub fn integrateEdge(_: @This(), p0: [2]f64, p1: [2]f64) f64 {
+            const dx = p1[0] - p0[0];
+            return dx * (p0[0] * p0[0] + p0[0] * dx + (dx * dx) / 3.0);
+        }
+    };
+
+    var projected = try project.project(allocator, ExactQuadraticOneForm{});
+    defer projected.deinit(allocator);
+
+    const edge_vertices = mesh.simplices(1).items(.vertices);
+    const coords = mesh.vertices.slice().items(.coords);
+    for (projected.values, edge_vertices) |value, edge| {
+        const p0 = coords[edge[0]];
+        const p1 = coords[edge[1]];
+        const dx = p1[0] - p0[0];
+        const exact = dx * (p0[0] * p0[0] + p0[0] * dx + (dx * dx) / 3.0);
+        try testing.expectApproxEqAbs(exact, value, 1e-12);
+    }
+}
+
+test "de Rham projection maps a continuous constant two-form onto primal 2-cochains" {
     const allocator = testing.allocator;
     var mesh = try Mesh2D.plane(allocator, 1, 1, 1.0, 1.0);
     defer mesh.deinit(allocator);
@@ -248,6 +360,6 @@ test "de Rham projection samples a constant two-form onto primal 2-cochains in 2
     defer projected.deinit(allocator);
 
     for (projected.values) |value| {
-        try testing.expectEqual(@as(f64, 1.0), value);
+        try testing.expectApproxEqAbs(1.0, value, 1e-12);
     }
 }

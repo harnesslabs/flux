@@ -321,6 +321,41 @@ fn snapshotCount(steps: u32, interval: u32) u32 {
     return 1 + (steps / interval) + trailing;
 }
 
+fn magneticDivergenceL2(allocator: std.mem.Allocator, system: anytype) !f64 {
+    var divergence = try (try system.state.operators.exteriorDerivative(flux.forms.Primal, 2)).apply(allocator, system.state.B);
+    defer divergence.deinit(allocator);
+    return std.math.sqrt(divergence.norm_squared());
+}
+
+test "Maxwell 3D cavity preserves ∇·B = 0 at every step" {
+    const allocator = std.testing.allocator;
+    const Mesh = flux.topology.Mesh(3, 3);
+    const Maxwell = system_mod.Maxwell(3, Mesh);
+    const config = CavityConfig(3){
+        .steps = 10,
+        .counts = .{ 2, 2, 2 },
+        .time_step_override = 0.0025,
+    };
+
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
+    defer mesh.deinit(allocator);
+
+    var system = try Maxwell.cavity(allocator, &mesh, config.cavityOptions());
+    defer system.deinit(allocator);
+
+    var evolution = try flux.evolution.Evolution(*Maxwell, flux.integrators.Leapfrog).config()
+        .dt(config.timeStep())
+        .steps(config.steps)
+        .init(allocator, &system);
+    defer evolution.deinit();
+
+    for (0..config.steps) |_| {
+        try evolution.step();
+        const divergence = try magneticDivergenceL2(allocator, &system);
+        try std.testing.expectApproxEqAbs(@as(f64, 0.0), divergence, 1e-12);
+    }
+}
+
 test {
     @import("std").testing.refAllDeclsRecursive(@This());
 }

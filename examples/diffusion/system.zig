@@ -3,7 +3,7 @@ const flux = @import("flux");
 
 const bridges = flux.operators.bridges;
 const cochain = flux.forms;
-const feec_context_mod = flux.operators.feec.context;
+const operator_context_mod = flux.operators.context;
 const linear_system = flux.math.linear_system;
 const sparse = flux.math.sparse;
 
@@ -73,7 +73,9 @@ pub fn Diffusion(comptime surface_kind: SurfaceKind, comptime MeshType: type) ty
                 if (surface_kind != .plane) @compileError("plane constructor only applies to plane diffusion");
             }
             var system = try Self.init(allocator, mesh, time_step);
-            projectScalarInto(&system.temperature, PlaneExactMode{ .time = 0.0 });
+            const Space = flux.forms.feec.WhitneySpace(MeshType, 0);
+            const project = bridges.DeRhamProjection(Space).init(Space.init(system.temperature.mesh));
+            project.projectInto(&system.temperature, PlaneExactMode{ .time = 0.0 });
             return system;
         }
 
@@ -86,7 +88,9 @@ pub fn Diffusion(comptime surface_kind: SurfaceKind, comptime MeshType: type) ty
                 if (surface_kind != .sphere) @compileError("sphere constructor only applies to surface diffusion");
             }
             var system = try Self.init(allocator, mesh, time_step);
-            projectScalarInto(&system.temperature, SphereExactMode{ .time = 0.0 });
+            const Space = flux.forms.feec.WhitneySpace(MeshType, 0);
+            const project = bridges.DeRhamProjection(Space).init(Space.init(system.temperature.mesh));
+            project.projectInto(&system.temperature, SphereExactMode{ .time = 0.0 });
             return system;
         }
 
@@ -138,7 +142,7 @@ pub fn Diffusion(comptime surface_kind: SurfaceKind, comptime MeshType: type) ty
 
 fn PlaneRuntime(comptime MeshType: type) type {
     return struct {
-        operator_context: *feec_context_mod.OperatorContext(MeshType),
+        operator_context: *operator_context_mod.OperatorContext(MeshType),
         linear_system: linear_system.LinearSystem,
 
         pub fn init(
@@ -146,7 +150,7 @@ fn PlaneRuntime(comptime MeshType: type) type {
             mesh: *const MeshType,
             time_step: f64,
         ) !@This() {
-            const operator_context = try feec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
+            const operator_context = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
             errdefer operator_context.deinit();
 
             const laplacian = try operator_context.laplacian(0);
@@ -193,7 +197,7 @@ fn PlaneRuntime(comptime MeshType: type) type {
 
 fn SphereRuntime(comptime MeshType: type) type {
     return struct {
-        operator_context: *feec_context_mod.OperatorContext(MeshType),
+        operator_context: *operator_context_mod.OperatorContext(MeshType),
         linear_system: linear_system.LinearSystem,
         masses: []f64,
 
@@ -202,7 +206,7 @@ fn SphereRuntime(comptime MeshType: type) type {
             mesh: *const MeshType,
             time_step: f64,
         ) !@This() {
-            const operator_context = try feec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
+            const operator_context = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
             errdefer operator_context.deinit();
             const stiffness = (try operator_context.laplacian(0)).stiffness;
 
@@ -246,7 +250,6 @@ fn SphereRuntime(comptime MeshType: type) type {
 }
 
 pub fn ReferenceMeasurementProvider(comptime surface_kind: SurfaceKind, comptime MeshType: type) type {
-    _ = MeshType;
     return struct {
         pub const Measurement = enum { l2_error };
 
@@ -256,9 +259,13 @@ pub fn ReferenceMeasurementProvider(comptime surface_kind: SurfaceKind, comptime
             defer exact.deinit(allocator);
 
             if (surface_kind == .plane) {
-                projectScalarInto(&exact, PlaneExactMode{ .time = time });
+                const Space = flux.forms.feec.WhitneySpace(MeshType, 0);
+                const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                project.projectInto(&exact, PlaneExactMode{ .time = time });
             } else {
-                projectScalarInto(&exact, SphereExactMode{ .time = time });
+                const Space = flux.forms.feec.WhitneySpace(MeshType, 0);
+                const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                project.projectInto(&exact, SphereExactMode{ .time = time });
             }
             return weightedL2Error(surface_kind, system.mesh, system.temperature.values, exact.values);
         }
@@ -283,13 +290,6 @@ const SphereExactMode = struct {
         return std.math.exp(-2.0 * self.time) * point[2];
     }
 };
-
-fn projectScalarInto(target: anytype, continuous_form: anytype) void {
-    const CochainType = @TypeOf(target.*);
-    const Space = flux.forms.feec.WhitneySpace(CochainType.MeshT, 0);
-    const projector = bridges.DeRhamProjection(Space).init(Space.init(target.mesh));
-    projector.projectInto(target, continuous_form);
-}
 
 fn weightedL2Error(
     comptime surface_kind: SurfaceKind,

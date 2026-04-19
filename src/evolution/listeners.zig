@@ -208,7 +208,7 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
 
             var buffer: [4096]u8 = undefined;
             var file_writer = file.writer(&buffer);
-            try event.system.writeFields(std.heap.page_allocator, &file_writer.interface, self.fields[0..self.field_count]);
+            try event.system.writeFields(event.allocator, &file_writer.interface, self.fields[0..self.field_count]);
         }
 
         fn captureMeasurements(self: *Self, event: anytype) !void {
@@ -245,10 +245,10 @@ pub fn SnapshotListenerWithProvider(comptime SystemType: type, comptime Provider
             for (self.measurements[0..self.measurement_count]) |measurement_value| {
                 const selected_measurement = @as(Measurement, measurement_value);
                 const value = if (ProviderType == void)
-                    try event.system.measurement(std.heap.page_allocator, selected_measurement)
+                    try event.system.measurement(event.allocator, selected_measurement)
                 else
                     try self.measurement_provider.measurement(
-                        std.heap.page_allocator,
+                        event.allocator,
                         event.system,
                         selected_measurement,
                         event.time,

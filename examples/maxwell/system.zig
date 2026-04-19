@@ -4,8 +4,7 @@ const common = @import("examples_common");
 
 const cochain = flux.forms;
 const bridges = flux.operators.bridges;
-const dec_context_mod = flux.operators.dec.context;
-const feec_context_mod = flux.operators.feec.context;
+const operator_context_mod = flux.operators.context;
 
 pub const BoundaryCondition = enum {
     pec,
@@ -25,8 +24,7 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
             B: TwoForm,
             J: OneForm,
             mesh: *const MeshType,
-            dec_operators: *dec_context_mod.OperatorContext(MeshType),
-            feec_operators: *feec_context_mod.OperatorContext(MeshType),
+            operators: *operator_context_mod.OperatorContext(MeshType),
             timestep: u64,
 
             pub fn init(allocator: std.mem.Allocator, mesh: *const MeshType) !StateSelf {
@@ -39,27 +37,22 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
                 var current = try OneForm.init(allocator, mesh);
                 errdefer current.deinit(allocator);
 
-                const dec_operators = try dec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
-                errdefer dec_operators.deinit();
-
-                const feec_operators = try feec_context_mod.OperatorContext(MeshType).init(allocator, mesh);
-                errdefer feec_operators.deinit();
-                try primeOperators(MeshType, dec_operators, feec_operators);
+                const operators = try operator_context_mod.OperatorContext(MeshType).init(allocator, mesh);
+                errdefer operators.deinit();
+                try primeOperators(MeshType, operators);
 
                 return .{
                     .E = electric,
                     .B = magnetic,
                     .J = current,
                     .mesh = mesh,
-                    .dec_operators = dec_operators,
-                    .feec_operators = feec_operators,
+                    .operators = operators,
                     .timestep = 0,
                 };
             }
 
             pub fn deinit(self: *StateSelf, allocator: std.mem.Allocator) void {
-                self.feec_operators.deinit();
-                self.dec_operators.deinit();
+                self.operators.deinit();
                 self.J.deinit(allocator);
                 self.B.deinit(allocator);
                 self.E.deinit(allocator);
@@ -101,7 +94,7 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
         };
 
         fn faradayStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-            var derivative = try (try state.dec_operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
+            var derivative = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, state.E);
             defer derivative.deinit(allocator);
             derivative.scale(dt);
             state.B.sub(derivative);
@@ -114,12 +107,12 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
         }
 
         fn ampereStep(allocator: std.mem.Allocator, state: anytype, dt: f64) !void {
-            var star_b = try (try state.feec_operators.hodgeStar(2)).apply(allocator, state.B);
+            var star_b = try (try state.operators.hodgeStar(2)).apply(allocator, state.B);
             defer star_b.deinit(allocator);
 
             switch (MeshType.topological_dimension) {
                 2 => {
-                    var d_star_b = try (try state.dec_operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_b);
+                    var d_star_b = try (try state.operators.exteriorDerivative(cochain.Dual, 0)).apply(allocator, star_b);
                     defer d_star_b.deinit(allocator);
 
                     const edge_volumes = state.mesh.simplices(1).items(.volume);
@@ -130,10 +123,10 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
                     }
                 },
                 3 => {
-                    var derivative = try (try state.dec_operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
+                    var derivative = try (try state.operators.exteriorDerivative(cochain.Dual, 1)).apply(allocator, star_b);
                     defer derivative.deinit(allocator);
 
-                    var curl_b = try (try state.feec_operators.hodgeStarInverse(1)).apply(allocator, derivative);
+                    var curl_b = try (try state.operators.hodgeStarInverse(1)).apply(allocator, derivative);
                     defer curl_b.deinit(allocator);
 
                     for (state.E.values, curl_b.values, state.J.values) |*electric, curl_value, current| {
@@ -246,21 +239,20 @@ pub fn Maxwell(comptime dim: u8, comptime MeshType: type) type {
 
 fn primeOperators(
     comptime MeshType: type,
-    dec_operators: *dec_context_mod.OperatorContext(MeshType),
-    feec_operators: *feec_context_mod.OperatorContext(MeshType),
+    operators: *operator_context_mod.OperatorContext(MeshType),
 ) !void {
-    _ = try dec_operators.exteriorDerivative(cochain.Primal, 1);
-    _ = try feec_operators.hodgeStar(2);
+    _ = try operators.exteriorDerivative(cochain.Primal, 1);
+    _ = try operators.hodgeStar(2);
 
     switch (MeshType.topological_dimension) {
         2 => {
-            _ = try dec_operators.exteriorDerivative(cochain.Dual, 0);
-            _ = try feec_operators.hodgeStar(1);
+            _ = try operators.exteriorDerivative(cochain.Dual, 0);
+            _ = try operators.hodgeStar(1);
         },
         3 => {
-            _ = try dec_operators.exteriorDerivative(cochain.Primal, 2);
-            _ = try dec_operators.exteriorDerivative(cochain.Dual, 1);
-            _ = try feec_operators.hodgeStarInverse(1);
+            _ = try operators.exteriorDerivative(cochain.Primal, 2);
+            _ = try operators.exteriorDerivative(cochain.Dual, 1);
+            _ = try operators.hodgeStarInverse(1);
         },
         else => unreachable,
     }
@@ -268,9 +260,9 @@ fn primeOperators(
 
 fn electromagneticEnergy(allocator: std.mem.Allocator, state: anytype) !f64 {
     const magnetic_degree = @TypeOf(state.B).degree;
-    var star_e = try (try state.feec_operators.hodgeStar(1)).apply(allocator, state.E);
+    var star_e = try (try state.operators.hodgeStar(1)).apply(allocator, state.E);
     defer star_e.deinit(allocator);
-    var star_b = try (try state.feec_operators.hodgeStar(magnetic_degree)).apply(allocator, state.B);
+    var star_b = try (try state.operators.hodgeStar(magnetic_degree)).apply(allocator, state.B);
     defer star_b.deinit(allocator);
 
     var electric_energy: f64 = 0.0;
@@ -404,34 +396,50 @@ pub fn CavityMeasurementProvider(comptime dim: u8) type {
             var exact = try @TypeOf(system.state.E).init(allocator, system.state.mesh);
             defer exact.deinit(allocator);
             switch (dim) {
-                2 => projectFormInto(1, &exact, TeMode(2, .electric, .{ 1, 0 }){
-                    .time = time,
-                    .extents = self.extents,
-                }),
-                3 => projectFormInto(1, &exact, TmMode(3, .electric, .{ 1, 1, 0 }){
-                    .time = time,
-                    .extents = self.extents,
-                }),
+                2 => {
+                    const Space = flux.forms.feec.WhitneySpace(@TypeOf(exact).MeshT, 1);
+                    const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                    project.projectInto(&exact, TeMode(2, .electric, .{ 1, 0 }){
+                        .time = time,
+                        .extents = self.extents,
+                    });
+                },
+                3 => {
+                    const Space = flux.forms.feec.WhitneySpace(@TypeOf(exact).MeshT, 1);
+                    const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                    project.projectInto(&exact, TmMode(3, .electric, .{ 1, 1, 0 }){
+                        .time = time,
+                        .extents = self.extents,
+                    });
+                },
                 else => unreachable,
             }
-            return relativeFormError(allocator, system.state.E, exact, system.state.feec_operators, 1);
+            return relativeFormError(allocator, system.state.E, exact, system.state.operators, 1);
         }
 
         fn magneticL2(self: @This(), allocator: std.mem.Allocator, system: anytype, time: f64) !f64 {
             var exact = try @TypeOf(system.state.B).init(allocator, system.state.mesh);
             defer exact.deinit(allocator);
             switch (dim) {
-                2 => projectFormInto(2, &exact, TeMode(2, .magnetic, .{ 1, 0 }){
-                    .time = time - 0.5 * self.time_step,
-                    .extents = self.extents,
-                }),
-                3 => projectFormInto(2, &exact, TmMode(3, .magnetic, .{ 1, 1, 0 }){
-                    .time = time - 0.5 * self.time_step,
-                    .extents = self.extents,
-                }),
+                2 => {
+                    const Space = flux.forms.feec.WhitneySpace(@TypeOf(exact).MeshT, 2);
+                    const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                    project.projectInto(&exact, TeMode(2, .magnetic, .{ 1, 0 }){
+                        .time = time - 0.5 * self.time_step,
+                        .extents = self.extents,
+                    });
+                },
+                3 => {
+                    const Space = flux.forms.feec.WhitneySpace(@TypeOf(exact).MeshT, 2);
+                    const project = bridges.DeRhamProjection(Space).init(Space.init(exact.mesh));
+                    project.projectInto(&exact, TmMode(3, .magnetic, .{ 1, 1, 0 }){
+                        .time = time - 0.5 * self.time_step,
+                        .extents = self.extents,
+                    });
+                },
                 else => unreachable,
             }
-            return relativeFormError(allocator, system.state.B, exact, system.state.feec_operators, 2);
+            return relativeFormError(allocator, system.state.B, exact, system.state.operators, 2);
         }
     };
 }
@@ -557,7 +565,9 @@ fn initializeCavityState(
     extents: [dim]f64,
 ) !void {
     if (dim == 2) {
-        projectFormInto(2, &state.B, TeMode(2, .magnetic, .{ 1, 0 }){
+        const Space = flux.forms.feec.WhitneySpace(@TypeOf(state.B).MeshT, 2);
+        const project = bridges.DeRhamProjection(Space).init(Space.init(state.B.mesh));
+        project.projectInto(&state.B, TeMode(2, .magnetic, .{ 1, 0 }){
             .time = -time_step / 2.0,
             .extents = extents,
         });
@@ -567,20 +577,17 @@ fn initializeCavityState(
     var potential = try @TypeOf(state.*).OneForm.init(allocator, state.mesh);
     defer potential.deinit(allocator);
     @memset(state.E.values, 0.0);
-    projectFormInto(1, &potential, TmMode(3, .potential, .{ 1, 1, 0 }){
-        .time = -time_step / 2.0,
-        .extents = extents,
-    });
-    var exact_flux = try (try state.dec_operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, potential);
+    {
+        const Space = flux.forms.feec.WhitneySpace(@TypeOf(potential).MeshT, 1);
+        const project = bridges.DeRhamProjection(Space).init(Space.init(potential.mesh));
+        project.projectInto(&potential, TmMode(3, .potential, .{ 1, 1, 0 }){
+            .time = -time_step / 2.0,
+            .extents = extents,
+        });
+    }
+    var exact_flux = try (try state.operators.exteriorDerivative(cochain.Primal, 1)).apply(allocator, potential);
     defer exact_flux.deinit(allocator);
     @memcpy(state.B.values, exact_flux.values);
-}
-
-fn projectFormInto(comptime degree: comptime_int, target: anytype, continuous_form: anytype) void {
-    const CochainType = @TypeOf(target.*);
-    const Space = flux.forms.feec.WhitneySpace(CochainType.MeshT, degree);
-    const project = bridges.DeRhamProjection(Space).init(Space.init(target.mesh));
-    project.projectInto(target, continuous_form);
 }
 
 test {

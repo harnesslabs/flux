@@ -194,6 +194,56 @@ fn snapshotCount(steps: u32, interval: u32) u32 {
     return 1 + (steps / interval) + trailing;
 }
 
+fn planeConvergenceConfig(count: u32) PlaneConfig {
+    return .{
+        .steps = count * count,
+        .counts = .{ count, count },
+        .time_step_override = 0.1 / (@as(f64, @floatFromInt(count)) * @as(f64, @floatFromInt(count))),
+    };
+}
+
+test "plane diffusion reaches second-order spatial convergence under refinement" {
+    const allocator = std.testing.allocator;
+    var coarse_writer = std.Io.Writer.Allocating.init(allocator);
+    defer coarse_writer.deinit();
+    var fine_writer = std.Io.Writer.Allocating.init(allocator);
+    defer fine_writer.deinit();
+    var finer_writer = std.Io.Writer.Allocating.init(allocator);
+    defer finer_writer.deinit();
+
+    const coarse = try runPlane(allocator, planeConvergenceConfig(8), &coarse_writer.writer);
+    const fine = try runPlane(allocator, planeConvergenceConfig(16), &fine_writer.writer);
+    const finer = try runPlane(allocator, planeConvergenceConfig(32), &finer_writer.writer);
+
+    const errors = [_]f64{
+        coarse.summary.l2_error_final,
+        fine.summary.l2_error_final,
+        finer.summary.l2_error_final,
+    };
+    const rates = try flux.evolution.reference.empiricalRates(allocator, &errors, 2.0);
+    defer allocator.free(rates);
+
+    try std.testing.expect(fine.summary.l2_error_final < coarse.summary.l2_error_final);
+    try std.testing.expect(finer.summary.l2_error_final < fine.summary.l2_error_final);
+    for (rates) |rate| {
+        try std.testing.expect(rate > 1.75);
+    }
+}
+
+test "sphere diffusion error decreases under refinement" {
+    const allocator = std.testing.allocator;
+    var coarse_writer = std.Io.Writer.Allocating.init(allocator);
+    defer coarse_writer.deinit();
+    var fine_writer = std.Io.Writer.Allocating.init(allocator);
+    defer fine_writer.deinit();
+
+    const coarse = try runSphere(allocator, .{ .refinement = 1 }, &coarse_writer.writer);
+    const fine = try runSphere(allocator, .{ .refinement = 2 }, &fine_writer.writer);
+
+    try std.testing.expect(fine.summary.l2_error_final < coarse.summary.l2_error_final);
+    try std.testing.expect(fine.summary.l2_error_final < 5e-3);
+}
+
 test {
     std.testing.refAllDeclsRecursive(@This());
 }

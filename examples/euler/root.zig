@@ -213,6 +213,65 @@ fn snapshotCount(steps: u32, interval: u32) u32 {
     return 1 + (steps / interval) + trailing;
 }
 
+test "Euler 2D dipole conserves circulation over a short run" {
+    const allocator = std.testing.allocator;
+    const Mesh = flux.topology.Mesh(2, 2);
+    const Euler = system_mod.Euler(2, Mesh);
+    const config = Config(2){
+        .steps = 10,
+        .counts = .{ 16, 16 },
+    };
+
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
+    defer mesh.deinit(allocator);
+
+    var system = try Euler.dipole(allocator, &mesh);
+    defer system.deinit(allocator);
+
+    const initial = try measureInvariant(2, allocator, &system);
+
+    var evolution = try flux.evolution.Evolution(*Euler, Euler.Explicit).config()
+        .dt(config.timeStep())
+        .steps(config.steps)
+        .init(allocator, &system);
+    defer evolution.deinit();
+
+    _ = try evolution.run();
+
+    const final = try measureInvariant(2, allocator, &system);
+    try std.testing.expectApproxEqAbs(initial, final, 1e-12);
+}
+
+test "Euler 3D reference mode conserves helicity over a short run" {
+    const allocator = std.testing.allocator;
+    const Mesh = flux.topology.Mesh(3, 3);
+    const Euler = system_mod.Euler(3, Mesh);
+    const config = Config(3){
+        .steps = 10,
+        .counts = .{ 2, 2, 2 },
+        .time_step_override = 0.01,
+    };
+
+    var mesh = try Mesh.cartesian(allocator, config.counts, config.extents);
+    defer mesh.deinit(allocator);
+
+    var system = try Euler.reference(allocator, &mesh);
+    defer system.deinit(allocator);
+
+    const initial = try measureInvariant(3, allocator, &system);
+
+    var evolution = try flux.evolution.Evolution(*Euler, Euler.Explicit).config()
+        .dt(config.timeStep())
+        .steps(config.steps)
+        .init(allocator, &system);
+    defer evolution.deinit();
+
+    _ = try evolution.run();
+
+    const final = try measureInvariant(3, allocator, &system);
+    try std.testing.expectApproxEqAbs(initial, final, 1e-12);
+}
+
 test {
     std.testing.refAllDeclsRecursive(@This());
 }
